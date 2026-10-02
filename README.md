@@ -24,6 +24,8 @@ remain on the roadmap.
 [Watch / download the 37-second video](docs/assets/demo.mp4) ·
 [Give alpha feedback](https://github.com/Lephiziel/findrail/issues/3)
 
+[Try the synthetic Turkish and English search evaluation](docs/search-evaluation.md).
+
 Recorded from the running web interface using the fictional demo documents.
 The video shows search, PDF page 2 and an automatic refresh after a note edit.
 The GIF is a short preview; use the MP4 for the full recording and larger text.
