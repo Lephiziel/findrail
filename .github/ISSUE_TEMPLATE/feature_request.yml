@@ -1,0 +1,15 @@
+name: Feature or connector proposal
+description: Describe a retrieval task Findrail should solve
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: User task
+      description: What information are you trying to find, and where is it stored?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal and alternatives
+      description: Explain the result and any existing tools you tried.

@@ -1,0 +1,175 @@
+openapi: 3.1.0
+info:
+  title: Findrail local search API
+  version: 0.0.0-dev
+  description: >-
+    Implemented read-only development API. The server binds to loopback, checks
+    Host and browser Origin, and has no remote authentication mode. It returns
+    indexed text and original local paths; clients must treat them as private data.
+servers:
+  - url: http://127.0.0.1:7766
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Check that the HTTP process is responding
+      responses:
+        '200':
+          description: HTTP process is available; not a full index integrity check
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/search:
+    get:
+      operationId: search
+      summary: Search literal terms joined with AND semantics
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Must contain letters or numbers; punctuation separates terms
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+        - name: source
+          in: query
+          description: Optional exact source ID; an unknown ID yields no matches
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Ranked matches and total match count
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Unavailable'
+  /api/v1/sources:
+    get:
+      operationId: listSources
+      summary: List explicitly indexed sources and freshness
+      responses:
+        '200':
+          description: Source inventory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sources]
+                properties:
+                  sources:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Source'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Unavailable'
+components:
+  responses:
+    BadRequest:
+      description: Invalid query or result limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Non-local Host or a browser Origin that differs from the request Host
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: Index operation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    SearchResponse:
+      type: object
+      required: [query, total, results]
+      properties:
+        query:
+          type: string
+        total:
+          type: integer
+          minimum: 0
+        results:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SearchResult'
+    SearchResult:
+      type: object
+      required: [id, title, uri, path, source_id, source_name, source_kind, snippet, score]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        uri:
+          type: string
+          description: Original location, not an HTTP document download endpoint
+        path:
+          type: string
+          description: Relative original path using forward slashes
+        source_id:
+          type: string
+        source_name:
+          type: string
+        source_kind:
+          type: string
+        snippet:
+          type: string
+          description: Plain-text excerpt; square brackets mark matching terms
+        score:
+          type: number
+          description: Negative SQLite BM25 value; higher ranks first, not a probability
+    Source:
+      type: object
+      required: [id, kind, name, root, documents, last_indexed_at]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          const: filesystem
+        name:
+          type: string
+        root:
+          type: string
+          description: Canonical absolute local directory
+        documents:
+          type: integer
+          minimum: 0
+        last_indexed_at:
+          type: string
+          format: date-time

@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a reproducible problem with Findrail
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version and OS
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Use synthetic documents. Remove tokens, private paths, and personal content.
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Expected and observed behaviour
+    validations:
+      required: true
