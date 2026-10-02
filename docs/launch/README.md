@@ -8,8 +8,8 @@ remembered word, inspecting the match and recovering its original location.
 
 - [Release archives](https://github.com/Lephiziel/findrail/releases): five OS / architecture combinations.
 - [Three-document demo](../demo.md): notes, Go code, PDF page 2 and live refresh.
-- [19-second video](../assets/demo.mp4) and [GIF](../assets/demo.gif): rendered
-  from real CLI / API output, with pauses edited for readability.
+- [37-second video](../assets/demo.mp4) and [GIF](../assets/demo.gif): the
+  author's recording of the running web UI, without added captions or end card.
 - [Short English launch copy](announcement.md): X / Bluesky post and follow-ups.
 - [Contributing](../../CONTRIBUTING.md): small tasks and contribution guidance.
 - [Alpha feedback](https://github.com/Lephiziel/findrail/issues/3),
@@ -49,7 +49,7 @@ first experiment.
 | Item | Status |
 |---|---|
 | GitHub description and topics | Set on 2026-10-02; [setup screenshot](../assets/github-launch-setup.jpg) |
-| Demo and English material | In this repository |
+| Demo and English material | In this repository; web recording added on 2026-10-02 |
 | Feedback and first contribution tasks | Issues #3, #4 and #5 opened |
 | External social post | Not published; account access needed |
 | User installations / repeat use | Not measured yet |

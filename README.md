@@ -18,14 +18,15 @@ remain on the roadmap.
 [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) ·
 [Русский](docs/ru/overview.md)
 
-![Findrail walkthrough: local search, PDF page attribution and live refresh](docs/assets/demo.gif)
+[![Findrail screen recording: keyword search and PDF page preview](docs/assets/demo.gif)](docs/assets/demo.mp4)
 
 [Try the three-document demo](docs/demo.md) ·
-[Watch / download the 19-second video](docs/assets/demo.mp4) ·
+[Watch / download the 37-second video](docs/assets/demo.mp4) ·
 [Give alpha feedback](https://github.com/Lephiziel/findrail/issues/3)
 
-The walkthrough renders real CLI / API results on fictional files. Pauses are
-edited for readability; it is not a speed benchmark.
+Recorded from the running web interface using the fictional demo documents.
+The video shows search, PDF page 2 and an automatic refresh after a note edit.
+The GIF is a short preview; use the MP4 for the full recording and larger text.
 
 ## Install and try
 

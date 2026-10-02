@@ -159,7 +159,7 @@ def render(found, preview, fresh, output, fonts):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
-    parser.add_argument("--output", type=Path, default=Path("docs/assets"))
+    parser.add_argument("--output", type=Path, default=Path("dist/rendered-demo"))
     parser.add_argument("--fonts", type=Path, default=Path("/usr/share/fonts/truetype/dejavu"))
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]

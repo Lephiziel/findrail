@@ -2,9 +2,13 @@
 
 The demo contains a Markdown note, a small Go example and a two-page text PDF.
 It uses no accounts, external services or private documents. The
-[19-second walkthrough](assets/demo.mp4) renders real CLI and API results on
-these files; it is not a browser screen recording. Pauses are edited for
-readability, so the video is not a performance benchmark.
+[37-second screen recording](assets/demo.mp4) shows the running web interface
+using these files: keyword search, PDF page 2, a note edit and automatic
+refresh. It contains no added captions or end card. The MP4 preserves the
+original 1920×1080 video frames; its empty audio track was removed and the file
+was arranged for playback before the download completes. The GIF is a smaller
+preview of the search and PDF steps. This demonstration is not a performance
+benchmark.
 
 ## Start
 
@@ -51,11 +55,21 @@ or the bug-report template. Share only synthetic or redacted reproductions.
 This alpha uses literal keyword search. It does not include OCR, semantic
 retrieval, cloud connectors or a desktop launcher.
 
-## Reproduce the media
+## Prepare a screen recording
+
+Record the browser while following the search and edit steps above. Use only
+fictional documents. Save the full recording as `docs/assets/demo.mp4`, a GIF
+preview as `docs/assets/demo.gif`, and a still from the recording as
+`docs/assets/demo.png`. Keep the README and launch description consistent with
+what the video actually shows.
+
+## Optional CLI walkthrough
 
 Developers can run `python3 scripts/demo_media.py bin/findrail` from the
 repository after building the executable. This optional media tool requires
 Pillow, ffmpeg and DejaVu fonts; these are not application dependencies. It
 creates a temporary synthetic folder and index, verifies search and PDF page
 attribution, runs a loopback server, checks an automatic update, and stops it.
-Generated PNG, GIF and MP4 files go to `docs/assets/`. No personal folders are read.
+Generated PNG, GIF and MP4 files go to `dist/rendered-demo/`. These optional
+illustrations are separate from the recorded web demo and do not overwrite it.
+No personal folders are read.
