@@ -2,6 +2,7 @@ package filesystem_test
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,5 +60,40 @@ func TestSymlinkOutsideRootIsNotIndexed(t *testing.T) {
 	r, err := c.Scan(context.Background(), func(d connector.Document) error { t.Errorf("indexed symlink: %+v", d); return nil })
 	if err != nil || r.Seen != 0 {
 		t.Fatalf("symlink scan: %+v %v", r, err)
+	}
+}
+
+func TestPDFPolicyAndPageHash(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "guide.pdf"), []byte("synthetic input"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pages := []connector.Page{{Number: 1, Text: "ab"}, {Number: 2, Text: "c"}}
+	extractor := func(context.Context, io.Reader, int64) ([]connector.Page, error) { return pages, nil }
+	c, err := filesystem.NewWithOptions(root, filesystem.Options{MaxTextBytes: 128, MaxPDFBytes: 128, ExtractPDF: extractor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan := func() connector.Document {
+		t.Helper()
+		var doc connector.Document
+		r, e := c.Scan(context.Background(), func(d connector.Document) error { doc = d; return nil })
+		if e != nil || r.Seen != 1 {
+			t.Fatalf("PDF scan: %+v %v", r, e)
+		}
+		return doc
+	}
+	before := scan()
+	pages = []connector.Page{{Number: 1, Text: "a"}, {Number: 2, Text: "bc"}}
+	after := scan()
+	if before.MediaType != "application/pdf" || len(before.Pages) != 2 || before.Hash == after.Hash {
+		t.Fatal("page boundaries missing from PDF identity")
+	}
+	if c.RelevantPath(filepath.Join(root, ".hidden", "note.md")) || c.RelevantPath(filepath.Join(root, "node_modules", "note.md")) {
+		t.Fatal("watch policy ignores scan exclusions")
+	}
+	dirs, err := c.WatchDirectories(context.Background())
+	if err != nil || len(dirs) != 1 {
+		t.Fatalf("watch directories: %+v %v", dirs, err)
 	}
 }

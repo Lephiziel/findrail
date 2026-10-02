@@ -2,126 +2,165 @@
 
 **You remember the idea. Find the original.**
 
-Findrail is an open-source, local-first search product built in Go. It is being
-developed to connect your files, notes, repositories, and work tools in one
-searchable index, with matching passages and a direct route back to each source.
-Keyword search works without an AI account. Semantic search will be optional.
+Findrail is an open-source, local-first search app built in Go. Choose folders
+of notes, code and text PDFs; search remembered words, preview the matching
+source and copy its original location. Changes in those folders refresh the
+index while the app runs. Keyword search needs no AI account and uploads no
+documents. Connected services and optional semantic retrieval are the next
+product stages.
 
-**Status: development foundation, not a stable release.** The current code
-indexes local UTF-8 text, Markdown, and source files, searches with SQLite FTS5,
-and serves a small local web interface. PDF, GitHub ingestion, continuous sync,
-semantic search, and MCP are designed in the roadmap and are not shipped yet.
+**Status: local alpha, `0.1.0-alpha.1`.** It is ready for testing, not a stable
+release. GitHub ingestion, OCR, DOCX, semantic search, desktop launching and MCP
+remain on the roadmap.
 
+[Releases](https://github.com/Lephiziel/findrail/releases) ·
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
 [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) ·
 [Русский](docs/ru/overview.md)
 
-## Try the working foundation
+## Install and try
 
-Requires Go 1.26 or newer. No external database or CGO is required.
+Download the archive for Linux, macOS or Windows from
+[Releases](https://github.com/Lephiziel/findrail/releases), compare it against
+`SHA256SUMS.txt`, and extract it. Go and an external database are not required.
+These alpha binaries are unsigned; macOS may require an explicit allowance in
+Privacy & Security. Each archive contains installation instructions and license
+notices.
+
+```bash
+# Linux / macOS, inside the extracted directory:
+./findrail index /path/to/your/notes
+./findrail serve
+```
+
+```powershell
+# Windows, inside the extracted directory:
+.\findrail.exe index "C:\Users\YOU\Documents\Notes"
+.\findrail.exe serve
+```
+
+Open **http://127.0.0.1:7766**. Search, select **Preview**, and use the page
+controls for a PDF. **Copy location** gives the original file URI, including
+`#page=N` for PDF matches. Browsers restrict `file:` navigation; the web client
+provides location copying rather than a desktop file opener.
+
+Keep `serve` running for automatic refresh. Ctrl+C stops it. No background daemon
+is installed. You can register another folder using `index` while the server
+runs; it will appear automatically.
+
+### Build from source
+
+Requires Go 1.26 or newer. No CGO is required.
 
 ```bash
 git clone https://github.com/Lephiziel/findrail.git
 cd findrail
 go build -o bin/findrail ./cmd/findrail
-
 ./bin/findrail index --data-dir .findrail examples/notes
 ./bin/findrail search --data-dir .findrail "webhook"
-./bin/findrail search --data-dir .findrail --json "поиск"
 ./bin/findrail serve --data-dir .findrail
 ```
 
-Open **http://127.0.0.1:7766**. The interface shows matching passages, source
-names, and original file locations. Browsers restrict opening `file:` links from
-web pages; this foundation provides **Copy location** instead of claiming a
-working desktop file opener.
-
-Options precede positional arguments. Run `./bin/findrail COMMAND --help` for
-command-specific options. When using `--data-dir`, use the same directory for
-indexing, searching, and serving.
+Options precede positional arguments. If you use `--data-dir`, use the same
+value for index, search and serve.
 
 ## What works today
 
-- Explicitly selected local folders; UTF-8 text, Markdown, and common source files.
-- Durable SQLite index with BM25 keyword ranking, matching passages, and Unicode tokenization.
-- Multiple independent sources, source filtering, JSON output, and bounded results.
-- Changed-content detection and pruning after a complete source scan.
-- Atomic ingestion: failed or cancelled scans preserve the previous source inventory.
-- Logical removal with `findrail forget SOURCE_ID`, leaving original files untouched.
-- Local web UI and read-only HTTP API, restricted to loopback addresses.
-- Tests covering updates, deletion, rollback, persistence, query handling, and the local HTTP boundary.
+- Explicit local folders containing UTF-8 text, Markdown and common source files.
+- Text PDFs with original page numbers; a bounded extraction child process.
+- Durable SQLite FTS5 search, BM25 ranking, Unicode terms and source filters.
+- Matching passages and plain-text previews of the indexed snapshot.
+- Automatic refresh using directory notifications, debouncing and periodic scans.
+- Source health: current refresh state, last success, errors and watcher fallback.
+- Atomic full-source scans: failures preserve the previous inventory.
+- Search reads the last committed snapshot while an update is in progress.
+- CLI / JSON output, loopback web UI and a read-only HTTP API.
+- Logical source removal, leaving original files untouched.
 
-## What Findrail is being built to become
+See [alpha behaviour and limits](docs/local-alpha.md) and the
+[validation report](docs/validation.md).
 
-| Capability | Foundation | Planned product |
-|---|---|---|
-| Local documents | UTF-8 text / Markdown / source files | PDF text, DOCX, optional OCR |
-| Connected tools | Connector contract | GitHub, bookmarks, Notion, cloud drives |
-| Freshness | Explicit re-index | File watching, resumable sync, deletion propagation |
-| Retrieval | Literal keyword terms with AND semantics | Filters, typo tolerance, optional semantic retrieval |
-| Clients | CLI, local web interface, HTTP | Desktop launcher, editor integrations, read-only MCP |
-| Trust | Explicit sources, local index, loopback boundary | Credential vault, per-source scopes, verified exports |
+## Indexing and privacy
 
-The intended advantage is a practical combination of easy installation,
-source-backed results, local ownership, and useful retrieval without a mandatory
-model service. This is a product hypothesis to validate against existing tools,
-not a claim that unified search is a new category.
+Text input defaults to **1 MiB per file**, configurable up to 32 MiB. PDFs default
+to **16 MiB input**, with at most 500 pages, 1 MiB of extracted text and a 10-second
+extraction deadline. Image-only / scanned PDFs are skipped: OCR is not included.
+Malformed or encrypted PDFs fail the source scan, preserving its previous index.
 
-## Indexing behaviour
+Hidden entries, symlinks, dependency directories, binary / non-UTF-8 text and
+common credential filenames are skipped. The index directory is excluded. This
+policy cannot detect every secret inside an ordinary document.
 
-The default limit is **1 MiB per file**, configurable up to 32 MiB. Hidden files
-and directories, symlinks, binary / non-UTF-8 content, dependency directories, and
-some common credential filenames are skipped. The index directory is excluded.
-This policy cannot detect every secret inside an otherwise ordinary document.
+The index stores plaintext text and original paths. It is **not encrypted at
+rest**. On Unix, newly created directories and database files use private modes.
+There is no runtime telemetry. See [data handling](docs/data-handling.md).
 
-Re-run `index` to refresh a source. Unchanged content avoids FTS rewrites, but the
-foundation still reads the files to verify their hashes. A scan that fails does
-not publish partial updates or prune missing documents.
-
-The index includes extracted text and original locations. It is **not encrypted
-at rest**. On Unix, new data directories and database files use private modes;
-existing directory permissions are not changed. See [data handling](docs/data-handling.md).
+Upgrading from the foundation migrates the existing index automatically. Existing
+sources retain their text-only policy; re-run `index` to enable PDFs. Back up the
+data directory while Findrail is stopped before upgrading; the older binary
+cannot read schema 2.
 
 ## Commands
 
 ```bash
 findrail index /path/to/notes
+findrail index --max-pdf-bytes 0 /path/to/text-only
 findrail search --limit 10 "payment webhook"
+findrail search --source SOURCE_ID --json "architecture"
 findrail sources --json
-findrail search --source SOURCE_ID "architecture"
+findrail serve --sync-interval 5m
+findrail serve --no-sync
+findrail watch --sync-interval 5m
 findrail forget SOURCE_ID
-findrail serve --addr 127.0.0.1:7766
 findrail version
 ```
 
-Default data location: `$XDG_DATA_HOME/findrail` or `~/.local/share/findrail` on
-Linux; `~/Library/Application Support/Findrail` on macOS; `%LOCALAPPDATA%\Findrail`
-on Windows. Override with `--data-dir`.
+`watch` refreshes registered sources without starting HTTP. Periodic full refresh
+is every five minutes by default; the minimum configurable interval is one
+second. Native notifications normally trigger earlier scans.
+
+Default data directory: `$XDG_DATA_HOME/findrail` or `~/.local/share/findrail` on
+Linux; `~/Library/Application Support/Findrail` on macOS;
+`%LOCALAPPDATA%\Findrail` on Windows. Override with `--data-dir`.
+
+## Product growth
+
+| Capability | Local alpha | Next stages |
+|---|---|---|
+| Documents | Text / Markdown / code / PDF text | DOCX, optional OCR |
+| Sources | Local folders | Read-only GitHub, bookmarks, work tools |
+| Freshness | File watching and full reconciliation | Resumable remote sync |
+| Retrieval | Literal AND terms, source filter, PDF page attribution | Query evaluation, structured filters, optional semantics |
+| Clients | CLI, local web UI, HTTP | Desktop launcher, read-only MCP, editors |
+| Extensions | Experimental connector contract | Versioned SDK and conformance harness |
+
+The advantage to validate is easy installation, useful retrieval, inspectable
+sources and local ownership. Unified search already exists; user testing must
+establish where Findrail helps. [Launch plan](docs/ru/launch.md).
 
 ## Repository layout
 
-The repository uses the useful conventions from
-[golang-standards/project-layout](https://github.com/golang-standards/project-layout),
-and the official [Go module layout guidance](https://go.dev/doc/modules/layout).
+The project follows useful conventions from
+[golang-standards/project-layout](https://github.com/golang-standards/project-layout)
+and [official Go module guidance](https://go.dev/doc/modules/layout).
 
 | Path | Responsibility |
 |---|---|
 | `cmd/findrail/` | Executable entry point |
-| `internal/cli/`, `internal/config/` | Commands and platform configuration |
+| `internal/cli/`, `internal/config/` | Composition and commands |
 | `internal/connectors/` | Source adapters |
-| `internal/extract/`, `internal/ingest/` | Bounded extraction and atomic indexing |
-| `internal/store/sqlite/`, `internal/search/` | Persistence, FTS, and retrieval contracts |
-| `internal/transport/` | HTTP today; planned read-only MCP |
-| `internal/sync/`, `internal/semantic/` | Documented future modules |
-| `pkg/connector/` | Experimental connector contract |
-| `api/` | Implemented HTTP API specification |
-| `web/` | Product client design; current embedded UI is under HTTP transport |
-| `configs/`, `build/`, `deployments/` | Configuration and packaging plans |
-| `examples/`, `test/`, `scripts/` | Demo data, integration fixtures, developer tools |
-| `docs/` | Product, architecture, decisions, growth plan, and milestones |
+| `internal/extract/`, `internal/ingest/` | Text / PDF extraction and atomic indexing |
+| `internal/store/sqlite/`, `internal/search/` | Persistence, FTS and evidence |
+| `internal/sync/` | Source discovery, watchers, retries and health |
+| `internal/transport/` | HTTP and embedded UI; planned MCP |
+| `internal/semantic/` | Future semantic retrieval design |
+| `pkg/connector/` | Experimental public connector contract |
+| `api/`, `docs/` | Implemented API and product documentation |
+| `build/`, `scripts/` | Distribution, smoke tests and developer tools |
+| `examples/`, `test/`, `configs/`, `web/`, `deployments/` | Demo data and extension designs |
 
-Unit tests live beside their packages. Planned modules contain design notes, not
-placeholder functions that pretend to implement features.
+Tests live beside their packages. Future modules contain design notes, not
+placeholder functions claiming implemented features.
 
 ## Development
 
@@ -130,18 +169,15 @@ go test ./...
 go test -race ./...
 go vet ./...
 go mod verify
-make build
+go build -o bin/findrail ./cmd/findrail
+python3 scripts/smoke.py bin/findrail
+python3 scripts/package.py
 ```
 
-See the [implementation plan](docs/implementation-plan.md) for tasks and
-acceptance criteria. Small contributions to connector conformance, extraction,
-query quality, accessibility, and test corpora are welcome.
-
-The [validation report](docs/validation.md) records the foundation's local checks
-and their limits.
+Contributions to extraction fixtures, search evaluation, accessibility and
+platform installation are welcome. See [implementation tasks](docs/implementation-plan.md).
 
 ## License
 
-Apache-2.0. The core, local clients, and connector interfaces are open source.
-Future hosted offerings may charge for operated infrastructure; the local
-product should remain independently usable. See [governance](GOVERNANCE.md).
+Apache-2.0. The local product remains independently usable. Future hosted
+services may charge for operated infrastructure. See [governance](GOVERNANCE.md).

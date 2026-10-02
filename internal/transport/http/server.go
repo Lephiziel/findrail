@@ -15,6 +15,7 @@ import (
 
 	"github.com/Lephiziel/findrail/internal/search"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
+	syncer "github.com/Lephiziel/findrail/internal/sync"
 )
 
 //go:embed web/index.html
@@ -23,9 +24,24 @@ var indexHTML string
 type Backend interface {
 	search.Engine
 	Sources(context.Context) ([]sqlite.SourceStatus, error)
+	Evidence(context.Context, string, int) (search.Evidence, error)
 }
 
-func Handler(backend Backend) http.Handler {
+type options struct {
+	syncEnabled bool
+	syncStatus  func() []syncer.Status
+}
+type Option func(*options)
+
+func WithSyncStatus(enabled bool, status func() []syncer.Status) Option {
+	return func(o *options) { o.syncEnabled = enabled; o.syncStatus = status }
+}
+
+func Handler(backend Backend, opts ...Option) http.Handler {
+	var config options
+	for _, option := range opts {
+		option(&config)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -64,6 +80,37 @@ func Handler(backend Backend) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"sources": sources})
 	})
+	mux.HandleFunc("GET /api/v1/documents/{id}", func(w http.ResponseWriter, r *http.Request) {
+		page := 0
+		if raw := r.URL.Query().Get("page"); raw != "" {
+			var err error
+			page, err = strconv.Atoi(raw)
+			if err != nil || page < 1 {
+				writeError(w, 400, "invalid page number")
+				return
+			}
+		}
+		evidence, err := backend.Evidence(r.Context(), r.PathValue("id"), page)
+		if err != nil {
+			switch {
+			case errors.Is(err, search.ErrNotFound):
+				writeError(w, 404, "indexed document not found")
+			case errors.Is(err, search.ErrPage):
+				writeError(w, 400, "invalid page number")
+			default:
+				writeError(w, 500, "preview unavailable")
+			}
+			return
+		}
+		writeJSON(w, 200, evidence)
+	})
+	mux.HandleFunc("GET /api/v1/sync", func(w http.ResponseWriter, r *http.Request) {
+		statuses := []syncer.Status{}
+		if config.syncStatus != nil {
+			statuses = config.syncStatus()
+		}
+		writeJSON(w, 200, map[string]any{"enabled": config.syncEnabled, "sources": statuses})
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
@@ -97,7 +144,7 @@ func localHost(hostPort string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func Serve(ctx context.Context, addr string, backend Backend) error {
+func Serve(ctx context.Context, addr string, backend Backend, opts ...Option) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil || !localHost(host) {
 		return fmt.Errorf("server address must use localhost or a loopback IP with a port")
@@ -106,7 +153,7 @@ func Serve(ctx context.Context, addr string, backend Backend) error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: Handler(backend), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	server := &http.Server{Handler: Handler(backend, opts...), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	finished := make(chan struct{})
 	defer close(finished)
 	go func() {

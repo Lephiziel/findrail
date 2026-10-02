@@ -35,8 +35,9 @@ single-user retrieval workflow is dependable.
    Findrail returns passages and provenance; the model provider is selected by
    the user and receives only the permitted retrieval output.
 
-Only the local-folder journey is implemented in the foundation, with location
-copying rather than a desktop opener.
+The local-folder journey is implemented in the alpha, including PDF pages,
+preview and automatic refresh. Location copying is available; a desktop opener
+and the connected / AI journeys remain planned.
 
 ## Product principles
 

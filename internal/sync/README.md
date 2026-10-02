@@ -1,16 +1,14 @@
-# Synchronization design
+# Local source refresh
 
-Planned; re-running `findrail index` is the current refresh mechanism.
+Implemented in `sync.go`: registered-source discovery, per-source workers,
+fsnotify directory watches, bounded debounce, periodic full inventories, retry,
+cancellation and in-memory health. Native events trigger reconciliation rather
+than unconditional deletion. Watch setup failures fall back to periodic scans.
 
-This module will own a durable job queue, per-source scheduling, watcher event
-debouncing, retries with backoff, cancellation, and source health. Search must
-stay usable while jobs run. Start with one storage writer and measure read
-contention before changing the storage topology.
+Separate SQLite readers keep searches on the previous committed snapshot during
+writes. Refresh cannot register a source, so forgetting it prevents resurrection.
+Restart rebuilds workers and refreshes complete inventories. Durable remote jobs,
+cursors, access revocation and resumable batches remain future work.
 
-Watcher events trigger reconciliation rather than unconditional deletion. Remote
-adapters use validated cursors and explicit tombstones. A successful partial
-batch must never masquerade as a complete inventory. Persist a cursor only in
-the same transaction that publishes the corresponding document changes.
-
-Tests must cover overflowed watcher queues, interruption, retry, duplicate events,
-access revocation, and deletion propagation.
+Tests cover native and polling update / rename / nested creation / deletion,
+forgotten sources, cancellation and missing-root recovery.

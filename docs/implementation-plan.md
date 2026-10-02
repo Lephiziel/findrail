@@ -11,7 +11,12 @@ sources, source filtering, failed scans, Unicode, persistence after restart,
 excluded entries, symlinks, and HTTP Host / Origin boundaries. CI results must not
 be described as passing until a GitHub workflow actually completes.
 
-## R01: local alpha tasks
+## R01: local alpha
+
+PDF text, file watching, source health, bounded evidence preview and checksummed
+archives are implemented. Real-user retrieval validation, editable ignore rules,
+advanced queries, a labeled evaluation corpus and binary signing remain open.
+The table lists acceptance goals, including remaining beta work.
 
 | Task | Acceptance criteria |
 |---|---|
@@ -22,7 +27,7 @@ be described as passing until a GitHub workflow actually completes.
 | Evidence preview | Retrieve by indexed document ID; source confinement; content hash and modified time; safe text rendering |
 | Query language | Documented phrases / filters; invalid queries yield useful errors; tests cover Unicode and punctuation |
 | Evaluation corpus | Labeled tasks from public / consented documents; exact-match baseline; reproducible measurement commands |
-| Packaging | Signed / checksummed release artifacts; installation instructions; platform smoke tests |
+| Packaging | Checksummed release artifacts; signing remains planned; installation instructions; platform smoke tests |
 
 ## R02: GitHub connector
 

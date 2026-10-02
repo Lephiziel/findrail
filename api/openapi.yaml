@@ -1,13 +1,12 @@
 openapi: 3.1.0
 info:
   title: Findrail local search API
-  version: 0.0.0-dev
-  description: >-
-    Implemented read-only development API. The server binds to loopback, checks
-    Host and browser Origin, and has no remote authentication mode. It returns
+  version: 0.1.0-alpha.1
+  description: Implemented read-only development API. The server binds to loopback,
+    checks Host and browser Origin, and has no remote authentication mode. It returns
     indexed text and original local paths; clients must treat them as private data.
 servers:
-  - url: http://127.0.0.1:7766
+- url: http://127.0.0.1:7766
 paths:
   /healthz:
     get:
@@ -20,7 +19,8 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status]
+                required:
+                - status
                 properties:
                   status:
                     type: string
@@ -32,26 +32,26 @@ paths:
       operationId: search
       summary: Search literal terms joined with AND semantics
       parameters:
-        - name: q
-          in: query
-          required: true
-          description: Must contain letters or numbers; punctuation separates terms
-          schema:
-            type: string
-            minLength: 1
-            maxLength: 256
-        - name: source
-          in: query
-          description: Optional exact source ID; an unknown ID yields no matches
-          schema:
-            type: string
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
+      - name: q
+        in: query
+        required: true
+        description: Must contain letters or numbers; punctuation separates terms
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+      - name: source
+        in: query
+        description: Optional exact source ID; an unknown ID yields no matches
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
       responses:
         '200':
           description: Ranked matches and total match count
@@ -76,7 +76,8 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [sources]
+                required:
+                - sources
                 properties:
                   sources:
                     type: array
@@ -86,16 +87,76 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Unavailable'
+  /api/v1/documents/{id}:
+    get:
+      operationId: getEvidence
+      summary: Preview an indexed document or PDF page
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: page
+        in: query
+        description: PDF page; omitted means page 1. Text documents must omit it.
+        schema:
+          type: integer
+          minimum: 1
+      responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Unavailable'
+        '404':
+          description: Document no longer exists in the indexed snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '200':
+          description: Bounded plain text from the indexed snapshot, never an arbitrary
+            file read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Evidence'
+  /api/v1/sync:
+    get:
+      operationId: getSyncStatus
+      summary: Current in-memory source refresh health
+      responses:
+        '200':
+          description: Refresh mode and worker status; rebuilt after restart
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - enabled
+                - sources
+                properties:
+                  enabled:
+                    type: boolean
+                  sources:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SyncStatus'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 components:
   responses:
     BadRequest:
-      description: Invalid query or result limit
+      description: Invalid query, result limit or PDF page
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     Forbidden:
-      description: Non-local Host or a browser Origin that differs from the request Host
+      description: Non-local Host or a browser Origin that differs from the request
+        Host
       content:
         application/json:
           schema:
@@ -109,13 +170,17 @@ components:
   schemas:
     Error:
       type: object
-      required: [error]
+      required:
+      - error
       properties:
         error:
           type: string
     SearchResponse:
       type: object
-      required: [query, total, results]
+      required:
+      - query
+      - total
+      - results
       properties:
         query:
           type: string
@@ -129,21 +194,31 @@ components:
             $ref: '#/components/schemas/SearchResult'
     SearchResult:
       type: object
-      required: [id, title, uri, path, source_id, source_name, source_kind, snippet, score]
+      required:
+      - id
+      - title
+      - uri
+      - path
+      - source_id
+      - source_name
+      - source_kind
+      - snippet
+      - score
+      - media_type
       properties:
-        id:
+        id: &id001
           type: string
-        title:
+        title: &id002
           type: string
-        uri:
+        uri: &id003
           type: string
           description: Original location, not an HTTP document download endpoint
-        path:
+        path: &id004
           type: string
           description: Relative original path using forward slashes
-        source_id:
+        source_id: &id005
           type: string
-        source_name:
+        source_name: &id006
           type: string
         source_kind:
           type: string
@@ -153,9 +228,25 @@ components:
         score:
           type: number
           description: Negative SQLite BM25 value; higher ranks first, not a probability
+        media_type: &id007
+          type: string
+        page: &id008
+          type: integer
+          minimum: 1
+          description: Best matching PDF page; may match a subset of document query
+            terms
+        page_count: &id009
+          type: integer
+          minimum: 1
     Source:
       type: object
-      required: [id, kind, name, root, documents, last_indexed_at]
+      required:
+      - id
+      - kind
+      - name
+      - root
+      - documents
+      - last_indexed_at
       properties:
         id:
           type: string
@@ -173,3 +264,80 @@ components:
         last_indexed_at:
           type: string
           format: date-time
+        max_text_bytes:
+          type: integer
+        max_pdf_bytes:
+          type: integer
+          description: 0 disables PDF extraction for this source
+    Evidence:
+      type: object
+      required:
+      - id
+      - title
+      - uri
+      - path
+      - source_id
+      - source_name
+      - media_type
+      - content_hash
+      - modified_at
+      - text
+      - truncated
+      properties:
+        id: *id001
+        title: *id002
+        uri: *id003
+        path: *id004
+        source_id: *id005
+        source_name: *id006
+        media_type: *id007
+        page: *id008
+        page_count: *id009
+        content_hash:
+          type: string
+        modified_at:
+          type: string
+          format: date-time
+        text:
+          type: string
+          maxLength: 65536
+        truncated:
+          type: boolean
+    SyncStatus:
+      type: object
+      required:
+      - source_id
+      - state
+      - mode
+      - skipped
+      properties:
+        source_id:
+          type: string
+        state:
+          type: string
+          enum:
+          - starting
+          - indexing
+          - idle
+          - error
+        mode:
+          type: string
+          enum:
+          - events
+          - polling
+        last_started_at:
+          type: string
+          format: date-time
+        last_success_at:
+          type: string
+          format: date-time
+        last_error:
+          type: string
+        watch_warning:
+          type: string
+        skipped:
+          type: integer
+          minimum: 0
+        skipped_pdf:
+          type: integer
+          minimum: 0

@@ -28,6 +28,12 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: go build ./cmd/findrail
+      - name: Compiled alpha smoke (Unix)
+        if: runner.os != 'Windows'
+        run: python3 scripts/smoke.py ./findrail
+      - name: Compiled alpha smoke (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/smoke.py ./findrail.exe
   race:
     runs-on: ubuntu-latest
     steps:

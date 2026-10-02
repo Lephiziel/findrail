@@ -1,45 +1,49 @@
-# Foundation validation
+# Local-alpha validation
 
-Local checks performed on 2026-10-01, Linux amd64. This report describes the
-development foundation, not a production or security certification.
+Local checks performed on 2026-10-02, Linux amd64. This report describes a
+working alpha, not production certification or a security audit.
 
 | Check | Result |
 |---|---|
-| Go 1.27.1 `go vet ./...` | Passed |
-| Go 1.27.1 `go test ./...` | Passed |
-| Go 1.27.1 `go test -race ./...` | Passed |
-| Go 1.26.8 `go test ./...` | Passed |
-| `go mod verify` | Passed |
-| CGO-disabled Linux amd64 build | Passed |
-| CGO-disabled Windows amd64 cross-build | Passed |
-| CGO-disabled macOS arm64 cross-build | Passed |
-| Compiled CLI and real loopback HTTP smoke | Passed |
-| Markdown local links | Passed |
+| Go 1.27.1 unit / lifecycle tests | Passed |
+| Go 1.27.1 race detector | Passed |
+| Go 1.27.1 vet | Passed |
+| Go 1.26.8 unit / lifecycle tests | Passed |
+| Module checksums | Verified |
+| Five CGO-free distribution targets | Compiled and archived |
+| Compiled CLI / PDF worker / HTTP / automatic-refresh smoke | Passed locally |
 | OpenAPI and workflow YAML parsing | Passed |
+| Embedded UI JavaScript syntax and local Markdown links | Passed |
 
-Behavioural coverage includes multiple source inventories, Unicode queries,
-query / limit validation, updates, deletion and FTS cleanup, source filtering,
-unchanged scans, rollback, reopening the index, cross-source identity collision,
-bounded extraction, exclusions, symlinks, CLI output, and HTTP Host / Origin
-checks.
+Lifecycle coverage includes source isolation, Unicode / literal query handling,
+update / rename / deletion, unchanged scans, rollback, persistence, identity
+collisions, bounded text and PDF pages, exclusions, source forgetting and HTTP
+Host / Origin checks. Migration 2 is tested with an existing schema 1 index.
+A held write transaction is tested against concurrent reads of the previous
+snapshot. Native notifications and polling both drive automatic lifecycle tests.
+A missing root preserves results and recovers after it returns.
 
-The smoke script indexes the synthetic three-document demo corpus, performs
-English and Russian searches, and checks a real HTTP listener, sources, and
-HTML. It removes its temporary index and terminates the process.
+The smoke script uses temporary copies of synthetic notes and generated PDF
+objects. It exercises the actual executable and child process, PDF page
+attribution, textless-PDF skipping, preview, folder updates / deletion, invalid
+PDF rollback and recovery, and a real loopback HTTP listener.
 
-Cross-builds establish compilation only. Windows / macOS runtime tests are
-configured in GitHub Actions and must be confirmed after publication; no remote
-CI result is claimed here. Retrieval relevance and 100k-document performance
-targets have not yet been measured. PDF, watching, remote connectors, semantic
-retrieval, desktop clients, and MCP are not part of these checks.
+Cross-builds establish compilation only. GitHub CI separately runs unit tests
+and the compiled smoke on Linux, macOS and Windows. Check
+[Actions](https://github.com/Lephiziel/findrail/actions) for the actual result;
+remote success is not implied by local checks. ARM runtime testing, binary
+signing, relevance on a labeled corpus and large-collection performance remain
+open. Cloud sources, OCR, semantic retrieval, desktop launching and MCP are not
+part of this alpha.
 
 Reproduce from the repository root:
 
 ```bash
-go vet ./...
 go test ./...
 go test -race ./...
+go vet ./...
 go mod verify
 CGO_ENABLED=0 go build -trimpath -o bin/findrail ./cmd/findrail
 python3 scripts/smoke.py bin/findrail
+python3 scripts/package.py
 ```

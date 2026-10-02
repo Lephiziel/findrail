@@ -9,7 +9,7 @@ requiring separate services to run the first useful workflow.
 ```mermaid
 flowchart TD
   F["Selected folders"] --> C["Filesystem connector"]
-  C --> E["Bounded text extraction"]
+  C --> E["Text and PDF extraction"]
   E --> I["Atomic ingestion"]
   I --> D["SQLite and FTS5"]
   CLI["CLI"] --> Q["Search request"]
@@ -19,7 +19,7 @@ flowchart TD
   D --> R["Passages and provenance"]
 ```
 
-This diagram describes the implemented path. Cloud adapters, watching, semantic
+This diagram describes the implemented path. Cloud adapters, semantic
 retrieval, desktop launching, and MCP are future extensions.
 
 ## Boundaries
@@ -29,6 +29,8 @@ retrieval, desktop launching, and MCP are future extensions.
 | `pkg/connector` | Source / document inventory contract | Go standard library |
 | `internal/connectors/filesystem` | Explicit root enumeration and source identity | Connector contract, text extraction |
 | `internal/extract/text` | Bounded reads and UTF-8 validation | Standard library |
+| `internal/extract/pdf` | Isolated PDF text worker and page attribution | PDF parser, connector contract |
+| `internal/sync` | Source discovery, event debounce, retries and health | Filesystem adapter, ingest, store, fsnotify |
 | `internal/ingest` | Atomic full-source scan orchestration | Connector contract, storage interface |
 | `internal/store/sqlite` | Schema, transactions, content hashes, FTS, sources | SQLite driver and domain contracts |
 | `internal/search` | Retrieval request / response and literal query handling | Standard library |
@@ -60,7 +62,7 @@ source entries; cross-source deduplication is a later retrieval feature.
 The filesystem source ID hashes the canonical absolute root. Document IDs hash
 source ID and normalized relative path. A rename therefore creates a new document
 and removes the old one after a complete scan. Content hashes detect unchanged
-extracted text. Original files are never modified.
+extracted text; PDF hashes also encode page boundaries and extraction version. Original files are never modified.
 
 Deletion triggers update FTS in the same transaction. `forget` logically removes
 a source, documents, and searchable terms. SQLite / WAL / filesystem bytes may
@@ -71,7 +73,9 @@ remain recoverable; logical deletion is not a cryptographic erasure claim.
 The foundation tokenizes user input into quoted literal FTS terms joined with
 AND. SQL parameters carry all user values. BM25 ranks titles and content with a
 higher title weight. Responses contain a bounded excerpt, source, original URI,
-relative path, total count, and stable ID.
+relative path, total count, and stable ID. PDF results select a best-matching
+page and append its number to the URI. Preview retrieves a bounded indexed
+snapshot by document ID, never an arbitrary filesystem path.
 
 Future search will add passage chunks, structured filters, deduplication, language
 analysis, and optional semantic candidates. Store a chunk-to-document mapping and
@@ -81,10 +85,11 @@ or source removal.
 ## Storage
 
 SQLite FTS5 and a CGO-free Go driver keep installation simple. WAL and foreign
-keys are enabled. Schema migration 1 is transactional and embedded in the binary.
-Unknown newer schemas are rejected. The foundation uses one DB connection,
-serializing operations; production background sync will need a single writer
-queue with separately configured read connections and concurrency measurements.
+keys are enabled. Schema migrations 1 and 2 are transactional and embedded in the binary.
+Unknown newer schemas are rejected. A one-connection writer pool serializes
+updates; four query-only read connections use WAL snapshots, preserving search
+availability during extraction. PDF pages and their FTS entries commit in the
+same transaction as document updates. See [alpha semantics](local-alpha.md).
 
 Content is stored locally as plaintext. The default directory is private when
 newly created; existing directory permissions are not rewritten. Disk encryption
@@ -115,12 +120,13 @@ source scopes and bounded responses.
 
 | Milestone | Additions |
 |---|---|
-| Local alpha | PDF text, file watching, evidence preview, query evaluation corpus |
+| Local alpha (implemented) | PDF text, file watching, evidence preview, source health, archives |
+| Alpha validation (next) | Real retrieval tasks, labeled query corpus, resource measurements |
 | Connected alpha | GitHub adapter, credential vault, cursors, retry / deletion semantics |
 | Extensible beta | Connector SDK stabilization, versioned manifests, conformance suite |
 | Semantic beta | Optional embedding worker, passage retrieval, hybrid evaluation |
 | Clients | Desktop launcher, read-only MCP, editor / browser integrations |
-| Larger deployments | Separate read pools; operated sync / storage only after demand |
+| Larger deployments | Operated sync / storage only after demand |
 
 The application becomes a service platform only if user needs and measurements
 justify it. The default local product stays independently usable.

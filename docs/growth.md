@@ -50,3 +50,9 @@ encrypted-storage infrastructure after demand is demonstrated. These are
 business hypotheses, not revenue predictions. The Apache-2.0 local product
 remains independently usable; hosting revenue should pay for operations rather
 than remove basic local capabilities.
+
+## Concrete local-alpha launch
+
+See the [30-day launch plan](ru/launch.md) for a demo script, tester journey,
+community-specific material, voluntary metrics and an announcement draft.
+It describes work to perform; no outreach or posts have been sent.

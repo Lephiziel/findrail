@@ -11,6 +11,7 @@ import (
 
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
+	"github.com/Lephiziel/findrail/internal/search"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	transport "github.com/Lephiziel/findrail/internal/transport/http"
 )
@@ -33,6 +34,11 @@ func TestLocalSearchAPIAndBrowserBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := transport.Handler(s)
+	found, err := s.Search(context.Background(), search.Request{Query: "webhook", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := found.Results[0].ID
 	cases := []struct {
 		path, host, origin string
 		code               int
@@ -43,6 +49,12 @@ func TestLocalSearchAPIAndBrowserBoundary(t *testing.T) {
 		{"/api/v1/search?q=webhook&limit=0", "127.0.0.1:7766", "", 400, "limit"},
 		{"/api/v1/search?q=%22", "127.0.0.1:7766", "", 400, "query"},
 		{"/api/v1/sources", "127.0.0.1:7766", "", 200, "filesystem"},
+		{"/api/v1/documents/" + id, "127.0.0.1:7766", "", 200, "webhook"},
+		{"/api/v1/documents/" + id + "?page=1", "127.0.0.1:7766", "", 400, "page"},
+		{"/api/v1/documents/" + id + "?page=0", "127.0.0.1:7766", "", 400, "page"},
+		{"/api/v1/documents/missing", "127.0.0.1:7766", "", 404, "not found"},
+		{"/api/v1/sync", "127.0.0.1:7766", "", 200, "\"enabled\":false"},
+		{"/api/v1/documents/" + id, "attacker.example:7766", "", 403, "local host"},
 		{"/", "127.0.0.1:7766", "", 200, "Findrail"},
 		{"/api/v1/search?q=webhook", "attacker.example:7766", "", 403, "local host"},
 		{"/api/v1/search?q=webhook", "127.0.0.1:7766", "https://attacker.example", 403, "same origin"},

@@ -6,7 +6,7 @@ dates. Status changes require working code and evidence.
 | Stage | Outcome | Release gate | Status |
 |---|---|---|---|
 | R00 · Foundation | Local index, keyword search, CLI, browser UI, contracts, CI | Lifecycle / rollback tests and a runnable demo | Implemented; local validation recorded separately |
-| R01 · Local alpha | PDF text, watcher, document preview, source health, exclusions | Users complete real retrieval tasks; deletion and cancellation verified | Planned |
+| R01 · Local alpha | PDF text, watcher, document preview, source health, exclusions | Real-user retrieval validation remains open; lifecycle checks implemented | Code implemented; user validation pending |
 | R02 · Connected search | Read-only GitHub, local + remote combined search, secure credentials | Resume, rate limit, revocation, and deletion tests | Planned |
 | R03 · Extensions | Versioned connector SDK, examples, conformance harness | Independent contributor creates an adapter from docs | Planned |
 | R04 · Optional semantics | Passage chunking, opt-in embedding backend, hybrid ranking | Better retrieval on labeled corpus without losing exact-match quality | Planned |

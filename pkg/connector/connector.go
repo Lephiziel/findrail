@@ -10,10 +10,12 @@ import (
 
 // Source identifies one explicitly configured collection of documents.
 type Source struct {
-	ID   string `json:"id"`
-	Kind string `json:"kind"`
-	Name string `json:"name"`
-	Root string `json:"root"`
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Name         string `json:"name"`
+	Root         string `json:"root"`
+	MaxTextBytes int64  `json:"max_text_bytes,omitempty"`
+	MaxPDFBytes  int64  `json:"max_pdf_bytes,omitempty"`
 }
 
 // Document is an extracted, UTF-8 document with a stable identity.
@@ -27,6 +29,14 @@ type Document struct {
 	Hash       string
 	SizeBytes  int64
 	ModifiedAt time.Time
+	MediaType  string
+	Pages      []Page
+}
+
+// Page preserves the original page number of text extracted from a PDF.
+type Page struct {
+	Number int    `json:"number"`
+	Text   string `json:"text"`
 }
 
 // Connector performs a full inventory of one source. A successful scan means
@@ -39,6 +49,7 @@ type Connector interface {
 
 // Report describes scan work without logging document contents.
 type Report struct {
-	Seen    int `json:"seen"`
-	Skipped int `json:"skipped"`
+	Seen       int `json:"seen"`
+	Skipped    int `json:"skipped"`
+	SkippedPDF int `json:"skipped_pdf,omitempty"`
 }

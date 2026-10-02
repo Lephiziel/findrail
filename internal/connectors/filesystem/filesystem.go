@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -32,14 +33,30 @@ var ignoredDirs = map[string]bool{
 }
 
 type Connector struct {
-	source   connector.Source
-	maxBytes int64
-	excluded []string
+	source      connector.Source
+	maxBytes    int64
+	maxPDFBytes int64
+	extractPDF  func(context.Context, io.Reader, int64) ([]connector.Page, error)
+	excluded    []string
 }
 
 func New(root string, maxBytes int64, excluded ...string) (*Connector, error) {
+	return NewWithOptions(root, Options{MaxTextBytes: maxBytes}, excluded...)
+}
+
+type Options struct {
+	MaxTextBytes int64
+	MaxPDFBytes  int64
+	ExtractPDF   func(context.Context, io.Reader, int64) ([]connector.Page, error)
+}
+
+func NewWithOptions(root string, options Options, excluded ...string) (*Connector, error) {
+	maxBytes := options.MaxTextBytes
 	if maxBytes < 1 || maxBytes > 32<<20 {
 		return nil, fmt.Errorf("max bytes must be between 1 and 33554432")
+	}
+	if options.MaxPDFBytes < 0 || options.MaxPDFBytes > 32<<20 || (options.MaxPDFBytes > 0 && options.ExtractPDF == nil) {
+		return nil, fmt.Errorf("PDF limit must be 0–33554432 with an extractor when enabled")
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -68,13 +85,16 @@ func New(root string, maxBytes int64, excluded ...string) (*Connector, error) {
 		canonicalExclusions = append(canonicalExclusions, excludedAbs)
 	}
 	id := fmt.Sprintf("fs_%x", sha256.Sum256([]byte(abs)))
-	return &Connector{source: connector.Source{ID: id, Kind: "filesystem", Name: filepath.Base(abs), Root: abs}, maxBytes: maxBytes, excluded: canonicalExclusions}, nil
+	return &Connector{source: connector.Source{ID: id, Kind: "filesystem", Name: filepath.Base(abs), Root: abs, MaxTextBytes: maxBytes, MaxPDFBytes: options.MaxPDFBytes}, maxBytes: maxBytes, maxPDFBytes: options.MaxPDFBytes, extractPDF: options.ExtractPDF, excluded: canonicalExclusions}, nil
 }
 
 func (c *Connector) Source() connector.Source { return c.source }
 
 func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) error) (connector.Report, error) {
 	var report connector.Report
+	if err := c.validateRoot(); err != nil {
+		return report, err
+	}
 	root, err := os.OpenRoot(c.source.Root)
 	if err != nil {
 		return report, err
@@ -105,7 +125,8 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 			}
 			return nil
 		}
-		if entry.Type()&os.ModeSymlink != 0 || strings.HasPrefix(name, ".") || !supported(name) {
+		isPDF := strings.EqualFold(filepath.Ext(name), ".pdf") && c.maxPDFBytes > 0
+		if entry.Type()&os.ModeSymlink != 0 || strings.HasPrefix(name, ".") || sensitive(name) || (!isPDF && !supported(name)) {
 			report.Skipped++
 			return nil
 		}
@@ -113,8 +134,15 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() || info.Size() > c.maxBytes {
+		limit := c.maxBytes
+		if isPDF {
+			limit = c.maxPDFBytes
+		}
+		if !info.Mode().IsRegular() || info.Size() > limit {
 			report.Skipped++
+			if isPDF {
+				report.SkippedPDF++
+			}
 			return nil
 		}
 		rel, err := filepath.Rel(c.source.Root, path)
@@ -134,11 +162,27 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 			file.Close()
 			return fmt.Errorf("document %q changed during scan; retry", rel)
 		}
-		body, readErr := text.Read(file, c.maxBytes)
+		var body string
+		var pages []connector.Page
+		var readErr error
+		if isPDF {
+			pages, readErr = c.extractPDF(ctx, file, info.Size())
+			var joined strings.Builder
+			for _, p := range pages {
+				joined.WriteString(p.Text)
+				joined.WriteByte('\n')
+			}
+			body = joined.String()
+		} else {
+			body, readErr = text.Read(file, c.maxBytes)
+		}
 		finalInfo, finalStatErr := file.Stat()
 		closeErr := file.Close()
 		if errors.Is(readErr, text.ErrUnsupported) || errors.Is(readErr, text.ErrTooLarge) {
 			report.Skipped++
+			if isPDF {
+				report.SkippedPDF++
+			}
 			return nil
 		}
 		if readErr != nil {
@@ -164,6 +208,19 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 			Content: body, Hash: fmt.Sprintf("%x", sha256.Sum256([]byte(body))),
 			SizeBytes: openedInfo.Size(), ModifiedAt: openedInfo.ModTime().UTC(),
 		}
+		doc.MediaType = "text/plain"
+		if isPDF {
+			doc.MediaType = "application/pdf"
+			doc.Pages = pages
+			// Include page boundaries and extraction version in the snapshot identity.
+			h := sha256.New()
+			io.WriteString(h, "pdf-v1\x00")
+			for _, p := range pages {
+				fmt.Fprintf(h, "%d:%d:", p.Number, len(p.Text))
+				io.WriteString(h, p.Text)
+			}
+			doc.Hash = fmt.Sprintf("%x", h.Sum(nil))
+		}
 		if err := emit(doc); err != nil {
 			return err
 		}
@@ -184,9 +241,84 @@ func (c *Connector) isExcluded(path string) bool {
 }
 
 func supported(name string) bool {
-	lower := strings.ToLower(name)
-	if strings.Contains(lower, "credential") || strings.Contains(lower, "secret") || strings.Contains(lower, "private_key") {
+	if sensitive(name) {
 		return false
 	}
 	return extensions[strings.ToLower(filepath.Ext(name))]
+}
+
+func sensitive(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.Contains(lower, "credential") || strings.Contains(lower, "secret") || strings.Contains(lower, "private_key")
+}
+
+func (c *Connector) validateRoot() error {
+	info, err := os.Lstat(c.source.Root)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("source root is no longer the selected directory")
+	}
+	resolved, err := filepath.EvalSymlinks(c.source.Root)
+	if err != nil {
+		return err
+	}
+	if resolved != c.source.Root {
+		return fmt.Errorf("source root moved through a symlink")
+	}
+	return nil
+}
+
+// RelevantPath applies the same directory exclusions to native watch events.
+func (c *Connector) RelevantPath(path string) bool {
+	if c.isExcluded(path) {
+		return false
+	}
+	rel, err := filepath.Rel(c.source.Root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	for _, p := range parts {
+		if strings.HasPrefix(p, ".") || ignoredDirs[p] {
+			return false
+		}
+	}
+	return !sensitive(parts[len(parts)-1])
+}
+
+// WatchDirectories excludes hidden, dependency and index directories; symlinks
+// are never traversed. The caller falls back to polling if the budget is exceeded.
+func (c *Connector) WatchDirectories(ctx context.Context) ([]string, error) {
+	if err := c.validateRoot(); err != nil {
+		return nil, err
+	}
+	dirs := []string{}
+	err := filepath.WalkDir(c.source.Root, func(path string, e fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		if !e.IsDir() {
+			return nil
+		}
+		if path != c.source.Root && !c.RelevantPath(path) {
+			return filepath.SkipDir
+		}
+		if c.isExcluded(path) {
+			return filepath.SkipDir
+		}
+		dirs = append(dirs, path)
+		if len(dirs) > 8192 {
+			return fmt.Errorf("directory watch budget exceeded; periodic refresh remains enabled")
+		}
+		return nil
+	})
+	return dirs, err
 }

@@ -1,12 +1,14 @@
 # Data model
 
-## Implemented schema 1
+## Implemented schema 2
 
 | Entity | Identity | Stored fields |
 |---|---|---|
-| Source | Hash of canonical filesystem root | Kind, name, root, last successful indexing time |
-| Document | Hash of source ID and relative path | Title, source ID, original URI, path, content, hash, byte size, modification time, scan token |
+| Source | Hash of canonical filesystem root | Kind, name, root, last success, text / PDF input limits |
+| Document | Hash of source ID and relative path | Title, source ID, original URI, path, content, hash, byte size, modification time, scan token, media type, page count |
 | FTS entry | Document row ID | Tokenized title and content, maintained by triggers |
+| PDF page | Document ID + one-based page number | Plain text for the original page |
+| Page FTS | Page row ID | Page tokens, maintained by triggers |
 
 Source ownership is currently the OS account running the local application.
 There is no multi-user authorization model in the foundation.
@@ -16,6 +18,9 @@ There is no multi-user authorization model in the foundation.
 Results return a stable ID, original URI, source metadata, relative path,
 matching passage, and a BM25-derived ordering score. The score is not a
 probability. Square brackets mark keyword matches in plain-text snippets.
+
+Migration 2 keeps schema 1 documents and leaves existing sources text-only until
+explicitly re-indexed. See [upgrade instructions](local-alpha.md#upgrade).
 
 ## Future entities
 
