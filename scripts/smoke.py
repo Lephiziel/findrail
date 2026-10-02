@@ -65,7 +65,7 @@ def main():
 
         def run(command, *arguments):
             result = subprocess.run([str(binary), command, '--data-dir', str(data_dir), *arguments],
-                                    check=True, capture_output=True, text=True, timeout=20)
+                                    check=True, capture_output=True, text=True, encoding="utf-8", timeout=20)
             return json.loads(result.stdout)
 
         indexed = run('index', '--json', str(docs))
@@ -80,7 +80,7 @@ def main():
             port = probe.getsockname()[1]
         process = subprocess.Popen([str(binary), 'serve', '--data-dir', str(data_dir),
                                     '--sync-interval', '1s', '--addr', f'127.0.0.1:{port}'],
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
         base = f'http://127.0.0.1:{port}'
 
         def get(path):
