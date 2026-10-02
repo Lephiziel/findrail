@@ -1,6 +1,6 @@
 # Findrail
 
-**You remember the idea. Find the original.**
+**You remember a word. Find the original.**
 
 Findrail is an open-source, local-first search app built in Go. Choose folders
 of notes, code and text PDFs; search remembered words, preview the matching
@@ -17,6 +17,15 @@ remain on the roadmap.
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
 [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) ·
 [Русский](docs/ru/overview.md)
+
+![Findrail walkthrough: local search, PDF page attribution and live refresh](docs/assets/demo.gif)
+
+[Try the three-document demo](docs/demo.md) ·
+[Watch / download the 19-second video](docs/assets/demo.mp4) ·
+[Give alpha feedback](https://github.com/Lephiziel/findrail/issues/3)
+
+The walkthrough renders real CLI / API results on fictional files. Pauses are
+edited for readability; it is not a speed benchmark.
 
 ## Install and try
 
