@@ -17,6 +17,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def modules(go):
+    # Module metadata may exist without source archives on a clean CI runner.
+    # Populate the complete graph before collecting dependency license notices.
+    subprocess.run([go, 'mod', 'download', 'all'], cwd=ROOT, check=True)
     raw = subprocess.check_output([go, 'list', '-m', '-json', 'all'], cwd=ROOT, text=True, encoding="utf-8")
     decoder = json.JSONDecoder()
     while raw.strip():
