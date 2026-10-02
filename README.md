@@ -24,6 +24,8 @@ remain on the roadmap.
 [Watch / download the 19-second video](docs/assets/demo.mp4) ·
 [Give alpha feedback](https://github.com/Lephiziel/findrail/issues/3)
 
+[Try the synthetic Turkish and English search evaluation](docs/search-evaluation.md).
+
 The walkthrough renders real CLI / API results on fictional files. Pauses are
 edited for readability; it is not a speed benchmark.
 
