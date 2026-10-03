@@ -76,6 +76,28 @@ go build -o bin/findrail ./cmd/findrail
 Options precede positional arguments. If you use `--data-dir`, use the same
 value for index, search and serve.
 
+### One-command launch from source
+
+Source builds also provide `start` (not included in the `0.1.0-alpha.1` archives):
+
+```bash
+./bin/findrail start --data-dir .findrail /path/to/your/notes
+# Later, resume the same registered folders:
+./bin/findrail start --data-dir .findrail
+```
+
+The first command indexes the selected folder, starts automatic refresh and
+attempts to open the local UI in your default browser. The terminal prints the
+actual URL once the listener is bound. Keep it running; Ctrl+C stops the server.
+Use `--no-open` on a headless machine, or open the printed URL manually if no
+browser appears. Browser-opener startup failures do not stop search.
+
+Options precede the folder. `--addr 127.0.0.1:7767` selects another local port;
+network-facing addresses are rejected. Repeating `start DIRECTORY` applies the
+chosen document-size limits to that folder, just like `index`; omitting DIRECTORY
+resumes stored sources with their existing limits. Initial extraction errors
+stop startup and preserve the prior committed inventory.
+
 ## What works today
 
 - Explicit local folders containing UTF-8 text, Markdown and common source files.
@@ -116,6 +138,8 @@ cannot read schema 2.
 
 ```bash
 findrail index /path/to/notes
+findrail start --no-open /path/to/notes
+findrail start
 findrail index --max-pdf-bytes 0 /path/to/text-only
 findrail search --limit 10 "payment webhook"
 findrail search --source SOURCE_ID --json "architecture"

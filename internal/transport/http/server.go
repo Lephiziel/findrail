@@ -30,11 +30,19 @@ type Backend interface {
 type options struct {
 	syncEnabled bool
 	syncStatus  func() []syncer.Status
+	ready       func(string) error
 }
 type Option func(*options)
 
 func WithSyncStatus(enabled bool, status func() []syncer.Status) Option {
 	return func(o *options) { o.syncEnabled = enabled; o.syncStatus = status }
+}
+
+// WithReady runs after the loopback listener is bound, before serving requests.
+// It receives the actual URL, including the allocated port when addr uses :0.
+// The callback must not wait for a request to the server it is starting.
+func WithReady(ready func(string) error) Option {
+	return func(o *options) { o.ready = ready }
 }
 
 func Handler(backend Backend, opts ...Option) http.Handler {
@@ -144,19 +152,45 @@ func localHost(hostPort string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func Serve(ctx context.Context, addr string, backend Backend, opts ...Option) error {
-	host, _, err := net.SplitHostPort(addr)
+// ValidateAddress checks the local serving boundary without opening a listener.
+func ValidateAddress(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil || !localHost(host) {
 		return fmt.Errorf("server address must use localhost or a loopback IP with a port")
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 0 || n > 65535 {
+		return fmt.Errorf("server port must be between 0 and 65535")
+	}
+	return nil
+}
+
+func Serve(ctx context.Context, addr string, backend Backend, opts ...Option) error {
+	if err := ValidateAddress(addr); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
+	defer listener.Close()
+	var config options
+	for _, option := range opts {
+		option(&config)
+	}
 	server := &http.Server{Handler: Handler(backend, opts...), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	if config.ready != nil {
+		if err := config.ready("http://" + listener.Addr().String()); err != nil {
+			return err
+		}
+	}
 	finished := make(chan struct{})
-	defer close(finished)
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		select {
 		case <-ctx.Done():
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -168,6 +202,8 @@ func Serve(ctx context.Context, addr string, backend Backend, opts ...Option) er
 		}
 	}()
 	err = server.Serve(listener)
+	close(finished)
+	<-shutdownDone
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

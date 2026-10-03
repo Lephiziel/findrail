@@ -2,18 +2,21 @@ Findrail local alpha — https://github.com/Lephiziel/findrail
 
 1. Extract the archive into a directory you own. Go is not required.
 2. Open a terminal in the extracted directory.
-3. Register a folder, then start the local search interface:
+3. Index a folder and start the local search interface in one command:
 
    Linux / macOS:
-     ./findrail index /absolute/path/to/notes
-     ./findrail serve
+     ./findrail start /absolute/path/to/notes
 
    Windows (PowerShell):
-     .\findrail.exe index "C:\Users\YOU\Documents\Notes"
-     .\findrail.exe serve
+     .\findrail.exe start "C:\Users\YOU\Documents\Notes"
 
-4. Open http://127.0.0.1:7766 in your browser.
+4. Findrail attempts to open your browser after indexing and binding its local
+   listener. If no browser appears, open the printed URL manually.
    Keep the server running for automatic refresh. Ctrl+C stops it.
+
+On later runs, use ./findrail start (or .\findrail.exe start) to resume the same
+folders. --no-open skips browser opening on a headless machine. Use
+--addr 127.0.0.1:7767 before the folder if the default port is already in use.
 
 Keyword search, PDF text extraction and preview work without an AI account.
 Scanned / image-only PDFs require OCR, which is not included. PDFs are limited
@@ -24,12 +27,12 @@ On macOS, an unsigned downloaded binary may require opening Privacy & Security
 and explicitly allowing this application according to your system policy.
 These alpha binaries are not notarized or code-signed.
 
-Use the same --data-dir DIR for index, search and serve if overriding defaults.
+Use the same --data-dir DIR for start, index, search and serve if overriding defaults.
 Sources from the original foundation remain text-only until you re-run index.
 The index stores plaintext copies of extracted text. Select folders deliberately.
 findrail forget SOURCE_ID removes that source from the index and leaves originals.
 
 Options precede the folder or query. Run findrail --help for all commands.
-No background daemon is installed; stopping serve or watch stops refresh.
+No background daemon is installed; stopping start, serve or watch stops refresh.
 To uninstall, stop Findrail and remove the executable. See docs/data-handling.md
 in the repository for default index directories and optional index removal.

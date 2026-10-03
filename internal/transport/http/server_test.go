@@ -2,12 +2,17 @@ package http_test
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
@@ -80,5 +85,113 @@ func TestLocalSearchAPIAndBrowserBoundary(t *testing.T) {
 func TestServerRejectsNetworkExposure(t *testing.T) {
 	if err := transport.Serve(context.Background(), "0.0.0.0:7766", nil); err == nil {
 		t.Fatal("expected loopback restriction")
+	}
+}
+
+func TestAddressValidation(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:7766", "localhost:0", "[::1]:7766"} {
+		if err := transport.ValidateAddress(addr); err != nil {
+			t.Errorf("rejected %q: %v", addr, err)
+		}
+	}
+	for _, addr := range []string{"0.0.0.0:7766", "[::]:7766", "example.com:7766", "127.0.0.1", "127.0.0.1:-1", "127.0.0.1:65536", "localhost:http"} {
+		if err := transport.ValidateAddress(addr); err == nil {
+			t.Errorf("accepted %q", addr)
+		}
+	}
+}
+
+func TestReadyFailureReleasesBoundListener(t *testing.T) {
+	sentinel := errors.New("cannot print URL")
+	var address string
+	err := transport.Serve(context.Background(), "127.0.0.1:0", nil, transport.WithReady(func(base string) error {
+		u, err := url.Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		address = u.Host
+		return sentinel
+	}))
+	if !errors.Is(err, sentinel) || address == "" || strings.HasSuffix(address, ":0") {
+		t.Fatalf("bad ready failure: address=%s, err=%v", address, err)
+	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("listener leaked after callback failure: %v", err)
+	}
+	listener.Close()
+}
+
+type drainingBackend struct {
+	transport.Backend
+	started, release chan struct{}
+}
+
+func (b drainingBackend) Search(ctx context.Context, request search.Request) (search.Response, error) {
+	close(b.started)
+	select {
+	case <-b.release:
+		return search.Response{Query: request.Query, Results: []search.Result{}}, nil
+	case <-ctx.Done():
+		return search.Response{}, ctx.Err()
+	}
+}
+
+func TestShutdownDrainsActiveSearchBeforeReturning(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backend := drainingBackend{started: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(backend.release) })
+	defer release()
+	ready := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- transport.Serve(ctx, "127.0.0.1:0", backend, transport.WithReady(func(base string) error {
+			ready <- base
+			return nil
+		}))
+	}()
+	var base string
+	select {
+	case base = <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("listener did not become ready")
+	}
+	requestDone := make(chan error, 1)
+	go func() {
+		client := &http.Client{Timeout: 5 * time.Second}
+		r, err := client.Get(base + "/api/v1/search?q=drain")
+		if err == nil {
+			r.Body.Close()
+		}
+		requestDone <- err
+	}()
+	select {
+	case <-backend.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("search did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		t.Fatalf("server returned before active search finished: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-requestDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("active search did not complete")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not finish shutdown")
 	}
 }
