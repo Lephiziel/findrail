@@ -26,6 +26,7 @@ const help = `Findrail — find your knowledge, keep your sources.
 
 Usage:
   findrail index [--data-dir DIR] [--max-bytes N] [--max-pdf-bytes N] [--json] DIRECTORY
+  findrail start [--data-dir DIR] [--addr 127.0.0.1:7766] [--no-open] [DIRECTORY]
   findrail search [--data-dir DIR] [--limit N] [--source ID] [--json] QUERY
   findrail sources [--data-dir DIR] [--json]
   findrail forget [--data-dir DIR] SOURCE_ID
@@ -49,6 +50,9 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	if args[0] == "version" {
 		_, err := fmt.Fprintln(out, "findrail", version)
 		return err
+	}
+	if args[0] == "start" {
+		return runStart(ctx, args[1:], out, stderr, openBrowser)
 	}
 	if args[0] != "index" && args[0] != "search" && args[0] != "sources" && args[0] != "serve" && args[0] != "watch" && args[0] != "forget" {
 		return fmt.Errorf("unknown command %q; run findrail --help", args[0])
