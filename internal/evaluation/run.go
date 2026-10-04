@@ -3,37 +3,69 @@ package evaluation
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/Lephiziel/findrail/internal/search"
 )
 
 func validateCases(cases []Case) error {
 	if len(cases) < 1 || len(cases) > 100 {
-		return fmt.Errorf("len of cases not in range, len=%d", len(cases))
+		return fmt.Errorf("expected 1 to 100 cases, got %d", len(cases))
 	}
 
-	for _, c := range cases {
-		expectedPaths := make(map[string]struct{})
+	for i, c := range cases {
+		seenPaths := make(map[string]struct{})
 
-		_, err := search.Expression(c.Query)
-
-		if err != nil {
-			return err
+		if _, err := search.Expression(c.Query); err != nil {
+			return fmt.Errorf("case %d: query: %w", i+1, err)
 		}
 		if c.ExpectedPaths == nil {
-			return fmt.Errorf("no expected paths")
+			return fmt.Errorf(
+				"case %d: expected_paths must be a non-null array",
+				i+1,
+			)
 		}
 		if len(c.ExpectedPaths) > 100 {
-			return fmt.Errorf("len of expected paths not in range, len=%d", len(c.ExpectedPaths))
+			return fmt.Errorf(
+				"case %d: expected_paths: maximum 100 paths, got %d",
+				i+1, len(c.ExpectedPaths),
+			)
 		}
 
 		for _, path := range c.ExpectedPaths {
-			if _, ok := expectedPaths[path]; ok {
-				return fmt.Errorf("duplicate of key")
+			if _, ok := seenPaths[path]; ok {
+				return fmt.Errorf(
+					"case %d: expected_paths: duplicate path %q",
+					i+1, path,
+				)
 			}
-			expectedPaths[path] = struct{}{}
+			seenPaths[path] = struct{}{}
 		}
+	}
+	return nil
+}
+
+func validateExpectedPath(p string) error {
+	if p == "" {
+		return fmt.Errorf("path is empty")
+	}
+	if filepath.IsAbs(p) {
+		return fmt.Errorf("absolute file path")
+	}
+
+	parts := strings.Split(p, string(filepath.Separator))
+	for _, part := range parts {
+		if part == "." || part == ".." {
+			return fmt.Errorf(". and .. are not allowed")
+		}
+	}
+	if strings.Contains(p, "\\") {
+		return fmt.Errorf("back slashes are not allowed")
+	}
+	if filepath.VolumeName(p) != "" {
+		return fmt.Errorf("windows prefixes are not allowed")
 	}
 	return nil
 }
@@ -48,16 +80,16 @@ func Run(ctx context.Context, engine search.Engine, cases []Case, sourceID strin
 
 	results := make([]CaseResult, 0, len(cases))
 
-	for _, c := range cases {
+	for i, c := range cases {
 		actualSet := make(map[string]struct{})
 		expectedSet := make(map[string]struct{})
 		expected := make([]string, len(c.ExpectedPaths))
 		copy(expected, c.ExpectedPaths)
 		sort.Strings(expected)
 
-		actualPaths := make([]string, 0, 1)
-		missingPaths := make([]string, 0, 1)
-		unexpectedPaths := make([]string, 0, 1)
+		actualPaths := make([]string, 0, 0)
+		missingPaths := make([]string, 0, 0)
+		unexpectedPaths := make([]string, 0, 0)
 
 		req := search.Request{
 			Query:    c.Query,
@@ -65,31 +97,48 @@ func Run(ctx context.Context, engine search.Engine, cases []Case, sourceID strin
 			Limit:    100,
 		}
 
-		if ctx.Err() != nil {
-			return Report{}, ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return Report{}, fmt.Errorf("case %d: %w", i+1, err)
 		}
 
 		res, err := engine.Search(ctx, req)
 		if err != nil {
-			return Report{}, fmt.Errorf("the engine returned an error: %w", err)
+			return Report{}, fmt.Errorf("case %d: search: %w", i+1, err)
 		}
 		if res.Total < len(res.Results) || res.Total < 0 {
-			return Report{}, fmt.Errorf("len of the array slice more then total num or total is a negative number")
+			return Report{}, fmt.Errorf(
+				"case %d: invalid search response: total=%d, results=%d",
+				i+1, res.Total, len(res.Results),
+			)
+		}
+		if res.Total > len(res.Results) {
+			return Report{}, fmt.Errorf(
+				"case %d: %w: received %d of %d results",
+				i+1, ErrIncompleteResults, len(res.Results), res.Total,
+			)
 		}
 
 		for _, r := range res.Results {
-			actualPaths = append(actualPaths, r.Path)
-
 			if _, ok := actualSet[r.Path]; ok {
-				return Report{}, fmt.Errorf("duplicate of the key")
+				return Report{}, fmt.Errorf("case %d: duplicate result path %q", i+1, r.Path)
 			}
-			if r.ID != sourceID {
-				return Report{}, fmt.Errorf("IDs are not matching")
+			if r.SourceID != sourceID {
+				return Report{}, fmt.Errorf(
+					"case %d: source mismatch expected %q, got %q",
+					i+1, sourceID, r.SourceID,
+				)
 			}
 
+			actualPaths = append(actualPaths, r.Path)
 			actualSet[r.Path] = struct{}{}
 		}
 		for _, path := range c.ExpectedPaths {
+			if err := validateExpectedPath(path); err != nil {
+				return Report{}, fmt.Errorf(
+					"case %d: expected_paths: invalid path %q: %w",
+					i+1, path, err,
+				)
+			}
 			expectedSet[path] = struct{}{}
 		}
 
@@ -105,17 +154,17 @@ func Run(ctx context.Context, engine search.Engine, cases []Case, sourceID strin
 			}
 		}
 
+		sort.Strings(actualPaths)
+		sort.Strings(missingPaths)
+		sort.Strings(unexpectedPaths)
+
 		caseResult := CaseResult{
 			Query:           c.Query,
-			ExpectedPaths:   c.ExpectedPaths,
+			ExpectedPaths:   expected,
 			ActualPaths:     actualPaths,
 			MissingPaths:    missingPaths,
 			UnexpectedPaths: unexpectedPaths,
-			Passed:          true,
-		}
-
-		if len(missingPaths) != 0 || len(unexpectedPaths) != 0 {
-			caseResult.Passed = false
+			Passed:          len(missingPaths) == 0 && len(unexpectedPaths) == 0,
 		}
 
 		results = append(results, caseResult)

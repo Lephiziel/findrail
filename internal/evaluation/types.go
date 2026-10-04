@@ -1,5 +1,11 @@
 package evaluation
 
+import "errors"
+
+var ErrIncompleteResults = errors.New(
+	"incomplete search results",
+)
+
 type Case struct {
 	Query         string   `json:"query"`
 	ExpectedPaths []string `json:"expected_paths"`
