@@ -78,8 +78,10 @@ def main():
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', 0))
             port = probe.getsockname()[1]
-        process = subprocess.Popen([str(binary), 'serve', '--data-dir', str(data_dir),
-                                    '--sync-interval', '1s', '--addr', f'127.0.0.1:{port}'],
+        # start must populate a fresh index itself, rather than relying on the
+        # separate index command exercised above. CI is intentionally headless.
+        process = subprocess.Popen([str(binary), 'start', '--no-open', '--data-dir', str(base_dir / 'start-index'),
+                                    '--sync-interval', '1s', '--addr', f'127.0.0.1:{port}', str(docs)],
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
         base = f'http://127.0.0.1:{port}'
 
@@ -130,7 +132,7 @@ def main():
         # Windows terminate() is an OS kill, not a graceful Unix SIGTERM.
         if sys.platform != 'win32':
             assert process.returncode == 0, process.returncode
-    print('Findrail alpha smoke passed: CLI, PDF worker, preview, auto-refresh, rollback and HTTP.')
+    print('Findrail alpha smoke passed: one-command start, CLI, PDF worker, preview, auto-refresh, rollback and HTTP.')
 
 
 if __name__ == '__main__':
