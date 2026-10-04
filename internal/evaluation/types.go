@@ -17,10 +17,10 @@ type CaseResult struct {
 }
 
 type Report struct {
-	SourceID        string       `json:"source_id"`
-	Total           int          `json:"total"`
-	Passed          int          `json:"passed"`
-	Failed          int          `json:"failed"`
-	ExpectMatchRate float64      `json:"exact_match_rate"`
-	Results         []CaseResult `json:"results"`
+	SourceID       string       `json:"source_id"`
+	Total          int          `json:"total"`
+	Passed         int          `json:"passed"`
+	Failed         int          `json:"failed"`
+	ExactMatchRate float64      `json:"exact_match_rate"`
+	Results        []CaseResult `json:"results"`
 }
