@@ -9,7 +9,7 @@ index while the app runs. Keyword search needs no AI account and uploads no
 documents. Connected services and optional semantic retrieval are the next
 product stages.
 
-**Status: local alpha, `0.1.0-alpha.1`.** It is ready for testing, not a stable
+**Status: local alpha, `0.1.0-alpha.2`.** It is ready for testing, not a stable
 release. GitHub ingestion, OCR, DOCX, semantic search, desktop launching and MCP
 remain on the roadmap.
 
@@ -41,22 +41,33 @@ notices.
 
 ```bash
 # Linux / macOS, inside the extracted directory:
-./findrail index /path/to/your/notes
-./findrail serve
+./findrail demo
+# After the demo, stop with Ctrl+C and choose your own folder:
+./findrail start /path/to/your/notes
 ```
 
 ```powershell
 # Windows, inside the extracted directory:
-.\findrail.exe index "C:\Users\YOU\Documents\Notes"
-.\findrail.exe serve
+.\findrail.exe demo
+# After the demo, stop with Ctrl+C and choose your own folder:
+.\findrail.exe start "C:\Users\YOU\Documents\Notes"
 ```
 
-Open **http://127.0.0.1:7766**. Search, select **Preview**, and use the page
+Findrail attempts to open the browser after the local listener is ready. If it
+does not, open the
+URL printed in the terminal (normally **http://127.0.0.1:7766**). In the demo,
+search **idempotency** to find three fictional documents. The PDF match is on
+page 2. [Try a live edit](docs/demo.md#watch-an-edit-appear) without sharing your
+own files. The temporary demo workspace is removed on a normal stop; your
+normal index is separate. A forced process kill can leave temporary files.
+
+Search, select **Preview**, and use the page
 controls for a PDF. **Copy location** gives the original file URI, including
 `#page=N` for PDF matches. Browsers restrict `file:` navigation; the web client
 provides location copying rather than a desktop file opener.
 
-Keep `serve` running for automatic refresh. Ctrl+C stops it. No background daemon
+Keep `start` running for automatic refresh. Later, `./findrail start` resumes
+your registered folders. Ctrl+C stops it. No background daemon
 is installed. You can register another folder using `index` while the server
 runs; it will appear automatically.
 
@@ -74,11 +85,16 @@ go build -o bin/findrail ./cmd/findrail
 ```
 
 Options precede positional arguments. If you use `--data-dir`, use the same
-value for index, search and serve.
+value for start, index, search and serve. `demo` always uses its own temporary
+index and does not accept `--data-dir`.
 
-### One-command launch from source
+The older `0.1.0-alpha.1` archives do not include `start` or `demo`. Download
+`0.1.0-alpha.2` for the commands above, or use `index` followed by `serve` on the
+older release.
 
-Source builds also provide `start` (not included in the `0.1.0-alpha.1` archives):
+### Start options
+
+`start` indexes a folder and launches search in one command:
 
 ```bash
 ./bin/findrail start --data-dir .findrail /path/to/your/notes
@@ -100,6 +116,7 @@ stop startup and preserve the prior committed inventory.
 
 ## What works today
 
+- A built-in three-document demo and one-command startup for your own folders.
 - Explicit local folders containing UTF-8 text, Markdown and common source files.
 - Text PDFs with original page numbers; a bounded extraction child process.
 - Durable SQLite FTS5 search, BM25 ranking, Unicode terms and source filters.

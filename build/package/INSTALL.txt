@@ -2,7 +2,20 @@ Findrail local alpha — https://github.com/Lephiziel/findrail
 
 1. Extract the archive into a directory you own. Go is not required.
 2. Open a terminal in the extracted directory.
-3. Index a folder and start the local search interface in one command:
+3. Try the included fictional documents first:
+
+   Linux / macOS:
+     ./findrail demo
+
+   Windows (PowerShell):
+     .\findrail.exe demo
+
+   Search for idempotency, then preview webhook-runbook.pdf on page 2. The terminal
+   prints the demo document folder so you can edit retry-notes.md and try refresh.
+   Ctrl+C stops the demo and removes its temporary documents and index on a normal
+   shutdown. A forced kill can leave temporary files. Your normal index is separate.
+
+4. After stopping the demo, search your own folder in one command:
 
    Linux / macOS:
      ./findrail start /absolute/path/to/notes
@@ -10,7 +23,7 @@ Findrail local alpha — https://github.com/Lephiziel/findrail
    Windows (PowerShell):
      .\findrail.exe start "C:\Users\YOU\Documents\Notes"
 
-4. Findrail attempts to open your browser after indexing and binding its local
+5. Findrail attempts to open your browser after indexing and binding its local
    listener. If no browser appears, open the printed URL manually.
    Keep the server running for automatic refresh. Ctrl+C stops it.
 
