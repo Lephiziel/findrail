@@ -3,7 +3,7 @@ package evaluation
 import (
 	"context"
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 
@@ -34,14 +34,21 @@ func validateCases(cases []Case) error {
 			)
 		}
 
-		for _, path := range c.ExpectedPaths {
-			if _, ok := seenPaths[path]; ok {
+		for _, p := range c.ExpectedPaths {
+			if err := validateExpectedPath(p); err != nil {
 				return fmt.Errorf(
-					"case %d: expected_paths: duplicate path %q",
-					i+1, path,
+					"case %d: expected_paths: invalid path %q: %w",
+					i+1, p, err,
 				)
 			}
-			seenPaths[path] = struct{}{}
+			if _, ok := seenPaths[p]; ok {
+				return fmt.Errorf(
+					"case %d: expected_paths: duplicate path %q",
+					i+1, p,
+				)
+			}
+
+			seenPaths[p] = struct{}{}
 		}
 	}
 	return nil
@@ -51,22 +58,26 @@ func validateExpectedPath(p string) error {
 	if p == "" {
 		return fmt.Errorf("path is empty")
 	}
-	if filepath.IsAbs(p) {
-		return fmt.Errorf("absolute file path")
-	}
-
-	parts := strings.Split(p, string(filepath.Separator))
-	for _, part := range parts {
-		if part == "." || part == ".." {
-			return fmt.Errorf(". and .. are not allowed")
-		}
+	if path.IsAbs(p) {
+		return fmt.Errorf("absolute paths are not allowed")
 	}
 	if strings.Contains(p, "\\") {
-		return fmt.Errorf("back slashes are not allowed")
+		return fmt.Errorf("backslashes are not allowed")
 	}
-	if filepath.VolumeName(p) != "" {
-		return fmt.Errorf("windows prefixes are not allowed")
+
+	// Reject Windows drive prefixes regardless of the host OS
+	if len(p) >= 2 && p[1] == ':' &&
+		((p[0] >= 'A' && p[0] <= 'Z') ||
+			(p[0] >= 'a' && p[0] <= 'z')) {
+		return fmt.Errorf("Windows drive prefixes are not allowed")
 	}
+
+	for _, segment := range strings.Split(p, "/") {
+		if segment == "." || segment == ".." {
+			return fmt.Errorf("dot path segments are not allowed")
+		}
+	}
+
 	return nil
 }
 
@@ -87,9 +98,9 @@ func Run(ctx context.Context, engine search.Engine, cases []Case, sourceID strin
 		copy(expected, c.ExpectedPaths)
 		sort.Strings(expected)
 
-		actualPaths := make([]string, 0, 0)
-		missingPaths := make([]string, 0, 0)
-		unexpectedPaths := make([]string, 0, 0)
+		actualPaths := make([]string, 0)
+		missingPaths := make([]string, 0)
+		unexpectedPaths := make([]string, 0)
 
 		req := search.Request{
 			Query:    c.Query,
@@ -133,24 +144,18 @@ func Run(ctx context.Context, engine search.Engine, cases []Case, sourceID strin
 			actualSet[r.Path] = struct{}{}
 		}
 		for _, path := range c.ExpectedPaths {
-			if err := validateExpectedPath(path); err != nil {
-				return Report{}, fmt.Errorf(
-					"case %d: expected_paths: invalid path %q: %w",
-					i+1, path, err,
-				)
-			}
 			expectedSet[path] = struct{}{}
 		}
 
-		for k := range expectedSet {
-			if _, ok := actualSet[k]; !ok {
-				missingPaths = append(missingPaths, k)
+		for p := range expectedSet {
+			if _, ok := actualSet[p]; !ok {
+				missingPaths = append(missingPaths, p)
 			}
 		}
 
-		for k := range actualSet {
-			if _, ok := expectedSet[k]; !ok {
-				unexpectedPaths = append(unexpectedPaths, k)
+		for p := range actualSet {
+			if _, ok := expectedSet[p]; !ok {
+				unexpectedPaths = append(unexpectedPaths, p)
 			}
 		}
 
