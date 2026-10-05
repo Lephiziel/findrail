@@ -2,7 +2,6 @@ package evaluation
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"testing"
 
@@ -376,14 +375,81 @@ func TestRunContinuesAfterMismatch(t *testing.T) {
 			response.Query = req.Query
 			response.Total = 1
 			response.Results = []search.Result{
-				{},
+				{
+					Path:     "b.md",
+					SourceID: sourceID,
+				},
 			}
+		default:
+			t.Fatalf("unexpected request")
 		}
 		return response, nil
 	})
 
 	report, err := Run(ctx, engine, cases, sourceID)
 	if err != nil {
-		fmt.Println(report)
+		t.Fatalf("Run() error=%v, want nil", err)
+	}
+	if len(report.Results) != 2 {
+		t.Errorf("len(report.Results)=%d, want 2")
+	}
+
+	firstResult := report.Results[0]
+	wantMissingPaths := []string{"a.md"}
+	if firstResult.Passed {
+		t.Errorf("firstResult.Passed=%t, want false")
+	}
+	if len(firstResult.ExpectedPaths) != 0 || firstResult.ExpectedPaths == nil {
+		t.Errorf(
+			"firstResult.ExpectedPaths=%#v, want empty non-nil slice",
+			firstResult.ExpectedPaths,
+		)
+	}
+	if len(firstResult.ActualPaths) != 0 || firstResult.ActualPaths == nil {
+		t.Errorf(
+			"firstResult.ActualPaths=%#v, want empty non-nil slice",
+			firstResult.ActualPaths,
+		)
+	}
+	if !reflect.DeepEqual(firstResult.MissingPaths, wantMissingPaths) {
+		t.Errorf(
+			"firstResult.MissingPaths=%#v, want %#v",
+			firstResult.MissingPaths, wantMissingPaths,
+		)
+	}
+	if len(firstResult.UnexpectedPaths) != 0 || firstResult.UnexpectedPaths == nil {
+		t.Errorf(
+			"firstResult.UnexpectedPaths=%#v, want empty non-nil slice",
+			firstResult.UnexpectedPaths,
+		)
+	}
+
+	secondResult := report.Results[1]
+	if secondResult.Passed {
+		t.Errorf("secondResult.Passed=%t, want false")
+	}
+	if len(secondResult.ExpectedPaths) != 0 || secondResult.ExpectedPaths == nil {
+		t.Errorf(
+			"secondResult.ExpectedPaths=%#v, want empty non-nil slice",
+			secondResult.ExpectedPaths,
+		)
+	}
+	if len(secondResult.ActualPaths) != 0 || secondResult.ActualPaths == nil {
+		t.Errorf(
+			"secondResult.ActualPaths=%#v, want empty non-nil slice",
+			secondResult.ActualPaths,
+		)
+	}
+	if !reflect.DeepEqual(secondResult.MissingPaths, wantMissingPaths) {
+		t.Errorf(
+			"secondResult.MissingPaths=%#v, want %#v",
+			secondResult.MissingPaths, wantMissingPaths,
+		)
+	}
+	if len(secondResult.UnexpectedPaths) != 0 || secondResult.UnexpectedPaths == nil {
+		t.Errorf(
+			"secondResult.UnexpectedPaths=%#v, want empty non-nil slice",
+			secondResult.UnexpectedPaths,
+		)
 	}
 }
