@@ -27,6 +27,8 @@ var alphaSchema string
 
 type Store struct{ db, readers *sql.DB }
 
+const currentSchemaVersion = 2
+
 func Open(ctx context.Context, dataDir string) (*Store, error) {
 	dataDir, err := filepath.Abs(dataDir)
 	if err != nil {
@@ -47,11 +49,7 @@ func Open(ctx context.Context, dataDir string) (*Store, error) {
 	if err = file.Close(); err != nil {
 		return nil, err
 	}
-	uriPath := filepath.ToSlash(path)
-	if !strings.HasPrefix(uriPath, "/") {
-		uriPath = "/" + uriPath
-	}
-	u := url.URL{Scheme: "file", Path: uriPath}
+	u := sqliteFileURL(path)
 	q := u.Query()
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "busy_timeout(5000)")
@@ -79,6 +77,64 @@ func Open(ctx context.Context, dataDir string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// OpenReadOnly opens an existing Findrail index without creating or migrating
+// anything. The returned store exposes the same read methods as Store, but all
+// write paths fail safely because it has no writer connection.
+func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
+	dataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("read-only index directory: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("read-only index path is not a directory")
+	}
+	path := filepath.Join(dataDir, "findrail.db")
+	if info, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("read-only index database: %w", err)
+	} else if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("read-only index database is not a regular file")
+	}
+	u := sqliteFileURL(path)
+	q := u.Query()
+	q.Set("mode", "ro")
+	q.Add("_pragma", "foreign_keys(1)")
+	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", "query_only(1)")
+	u.RawQuery = q.Encode()
+	readers, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, err
+	}
+	readers.SetMaxOpenConns(4)
+	s := &Store{readers: readers}
+	if err := readers.PingContext(ctx); err != nil {
+		_ = readers.Close()
+		return nil, err
+	}
+	var version int
+	if err := readers.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		_ = readers.Close()
+		return nil, err
+	}
+	if version != currentSchemaVersion {
+		_ = readers.Close()
+		return nil, fmt.Errorf("unsupported index schema %d; open or update this index with the regular Findrail command", version)
+	}
+	return s, nil
+}
+
+func sqliteFileURL(path string) url.URL {
+	uriPath := filepath.ToSlash(path)
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	return url.URL{Scheme: "file", Path: uriPath}
 }
 
 func (s *Store) initialize(ctx context.Context) error {
@@ -111,7 +167,19 @@ func (s *Store) initialize(ctx context.Context) error {
 	return tx.Commit()
 }
 
-func (s *Store) Close() error { return errors.Join(s.readers.Close(), s.db.Close()) }
+func (s *Store) Close() error {
+	if s == nil {
+		return nil
+	}
+	var errs []error
+	if s.readers != nil {
+		errs = append(errs, s.readers.Close())
+	}
+	if s.db != nil {
+		errs = append(errs, s.db.Close())
+	}
+	return errors.Join(errs...)
+}
 
 type scan struct {
 	tx       *sql.Tx
@@ -128,6 +196,9 @@ func (s *Store) BeginRefresh(ctx context.Context, source connector.Source) (inge
 }
 
 func (s *Store) begin(ctx context.Context, source connector.Source, create bool) (ingest.Scan, error) {
+	if s.db == nil {
+		return nil, errors.New("index is read-only")
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -317,6 +388,19 @@ func (s *Store) Sources(ctx context.Context) ([]SourceStatus, error) {
 
 // Evidence reads only the indexed snapshot and returns at most 64 Ki characters.
 func (s *Store) Evidence(ctx context.Context, id string, page int) (search.Evidence, error) {
+	return s.evidence(ctx, "", id, page)
+}
+
+// EvidenceForSource reads evidence only after the document identity and source
+// scope have been checked by the same read transaction.
+func (s *Store) EvidenceForSource(ctx context.Context, sourceID, id string, page int) (search.Evidence, error) {
+	if sourceID == "" {
+		return search.Evidence{}, search.ErrNotFound
+	}
+	return s.evidence(ctx, sourceID, id, page)
+}
+
+func (s *Store) evidence(ctx context.Context, sourceID, id string, page int) (search.Evidence, error) {
 	var e search.Evidence
 	if page < 0 {
 		return e, search.ErrPage
@@ -326,8 +410,14 @@ func (s *Store) Evidence(ctx context.Context, id string, page int) (search.Evide
 		return e, err
 	}
 	defer tx.Rollback()
-	err = tx.QueryRowContext(ctx, `SELECT d.id,d.title,d.uri,d.path,d.source_id,s.name,d.media_type,d.content_hash,d.modified_at,d.page_count,
-        substr(d.content,1,65536),length(d.content)>65536 FROM documents d JOIN sources s ON s.id=d.source_id WHERE d.id=?`, id).Scan(&e.ID, &e.Title, &e.URI, &e.Path, &e.SourceID, &e.SourceName, &e.MediaType, &e.ContentHash, &e.ModifiedAt, &e.PageCount, &e.Text, &e.Truncated)
+	where := "d.id=?"
+	args := []any{id}
+	if sourceID != "" {
+		where += " AND d.source_id=?"
+		args = append(args, sourceID)
+	}
+	err = tx.QueryRowContext(ctx, `SELECT d.id,d.title,d.uri,d.path,d.source_id,s.name,d.media_type,d.content_hash,d.modified_at,d.page_count
+	        FROM documents d JOIN sources s ON s.id=d.source_id WHERE `+where, args...).Scan(&e.ID, &e.Title, &e.URI, &e.Path, &e.SourceID, &e.SourceName, &e.MediaType, &e.ContentHash, &e.ModifiedAt, &e.PageCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, search.ErrNotFound
 	}
@@ -341,13 +431,15 @@ func (s *Store) Evidence(ctx context.Context, id string, page int) (search.Evide
 		if page > e.PageCount {
 			return e, search.ErrPage
 		}
-		if err := tx.QueryRowContext(ctx, "SELECT substr(content,1,65536),length(content)>65536 FROM document_pages WHERE document_id=? AND page_number=?", id, page).Scan(&e.Text, &e.Truncated); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT substr(content,1,65536),length(content)>65536 FROM document_pages WHERE document_id=? AND page_number=?", e.ID, page).Scan(&e.Text, &e.Truncated); err != nil {
 			return e, err
 		}
 		e.Page = page
 		e.URI += fmt.Sprintf("#page=%d", page)
 	} else if page != 0 {
 		return e, search.ErrPage
+	} else if err := tx.QueryRowContext(ctx, "SELECT substr(content,1,65536),length(content)>65536 FROM documents WHERE id=?", e.ID).Scan(&e.Text, &e.Truncated); err != nil {
+		return e, err
 	}
 	return e, nil
 }
@@ -355,6 +447,9 @@ func (s *Store) Evidence(ctx context.Context, id string, page int) (search.Evide
 // ForgetSource removes a source and its searchable documents. Originals are
 // untouched. This is a logical deletion, not forensic secure erasure.
 func (s *Store) ForgetSource(ctx context.Context, id string) error {
+	if s.db == nil {
+		return errors.New("index is read-only")
+	}
 	result, err := s.db.ExecContext(ctx, "DELETE FROM sources WHERE id=?", id)
 	if err != nil {
 		return err

@@ -33,11 +33,13 @@ Usage:
   findrail forget [--data-dir DIR] SOURCE_ID
   findrail serve [--data-dir DIR] [--addr 127.0.0.1:7766] [--no-sync]
   findrail watch [--data-dir DIR] [--sync-interval 5m]
+  findrail mcp --data-dir DIR --source ID [--source ID ...]
   findrail version
 
 Options must precede positional arguments. Run COMMAND --help for details.
 Local alpha: text, Markdown, source code, text PDFs, preview and automatic refresh.
-Cloud connectors, semantic search and MCP remain planned.
+Cloud connectors and semantic search remain planned. Source builds also include a
+read-only stdio MCP server.
 `
 
 func Run(ctx context.Context, args []string, out, stderr io.Writer, version string) error {
@@ -54,6 +56,9 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	}
 	if args[0] == "start" {
 		return runStart(ctx, args[1:], out, stderr, openBrowser)
+	}
+	if args[0] == "mcp" {
+		return runMCP(ctx, args[1:], out, stderr, version)
 	}
 	if args[0] == "demo" {
 		return runDemo(ctx, args[1:], out, stderr, openBrowser, runStart)

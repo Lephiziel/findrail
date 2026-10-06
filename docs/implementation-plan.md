@@ -61,8 +61,9 @@ corpus. Publish failure cases and resource requirements.
 
 Desktop: hotkey, keyboard navigation, platform file opener, update policy.
 MCP: read-only tools, source scopes, response limits, source-backed passages, and
-redaction rules. An MCP connection never grants an agent broader source access
-than its declared scope.
+redaction rules. The local stdio implementation is shipped in the source build;
+an MCP connection never grants an agent broader source access than its declared
+scope. Desktop and editor access surfaces remain future work.
 
 ## Definition of done
 
