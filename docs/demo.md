@@ -12,20 +12,32 @@ benchmark.
 
 ## Start
 
-Download and extract a [release archive](https://github.com/Lephiziel/findrail/releases).
-Download this repository using GitHub's **Code → Download ZIP**, then extract it.
-In a terminal inside the repository folder, replace `/path/to/findrail` below
-with the executable from the release archive:
+Download and extract the `0.1.0-alpha.2` archive for your platform from
+[Releases](https://github.com/Lephiziel/findrail/releases). Inside the extracted
+folder, run:
 
 ```bash
-/path/to/findrail index --data-dir .findrail-demo examples/demo
-/path/to/findrail serve --data-dir .findrail-demo
+# Linux / macOS
+./findrail demo
 ```
 
-On Windows, use the path to `findrail.exe`, such as
-`C:\Tools\Findrail\findrail.exe`. In PowerShell, prefix a quoted executable path
-with `&`. Use the same data directory in both commands. Go is only needed if
-you choose to build the executable yourself.
+```powershell
+# Windows
+.\findrail.exe demo
+```
+
+The binary includes all three documents; a repository download and Go are not
+needed. Findrail prints the temporary document folder and attempts to open your
+browser. If no browser appears, open the printed local URL manually. Use
+`demo --no-open` on a headless machine, or `demo --addr 127.0.0.1:7767` if the
+default port is busy.
+
+Each run creates fresh documents and an isolated index. Normal shutdown removes
+the workspace; a forced process kill can leave it in the OS temporary directory.
+Edits to the demo files are discarded on normal shutdown. The original example
+files also remain available in `examples/demo` for repository users. On older
+`0.1.0-alpha.1` binaries, download the repository and run `index --data-dir
+.findrail-demo examples/demo`, then `serve --data-dir .findrail-demo`.
 
 Open **http://127.0.0.1:7766** and search for **idempotency**. There should be
 three matching documents. Select **Preview** on `webhook-runbook.pdf`: the
@@ -40,13 +52,14 @@ selection, the button copies the whole visible page preview instead.
 ## Watch an edit appear
 
 Search for **cobalt**: the initial demo has no match. In
-`examples/demo/retry-notes.md`, change `Demo marker: amber` to
-`Demo marker: cobalt` and save. While `serve` is running, the result should
+`retry-notes.md` in the temporary document folder printed by `demo`, change `Demo marker: amber` to
+`Demo marker: cobalt` and save. While `demo` is running, the result should
 appear automatically. Folder notifications normally trigger a refresh within
 a few seconds; periodic scans provide a fallback. Restore `amber` afterward
 if you want to repeat the original demo.
 
 Ctrl+C stops the server. The demo index is separate from your normal index.
+To search your own files after stopping the demo, use `findrail start DIRECTORY`.
 Original documents are never changed by Findrail.
 
 ## A useful first test
@@ -58,7 +71,7 @@ Use the [alpha feedback issue](https://github.com/Lephiziel/findrail/issues/3)
 or the bug-report template. Share only synthetic or redacted reproductions.
 
 This alpha uses literal keyword search. It does not include OCR, semantic
-retrieval, cloud connectors or a desktop launcher.
+retrieval, cloud connectors or a desktop file opener.
 
 ## Prepare a screen recording
 

@@ -2,6 +2,7 @@
 """Exercise the compiled alpha using synthetic documents and a temporary index."""
 import argparse
 import json
+import os
 import pathlib
 import shutil
 import socket
@@ -47,6 +48,59 @@ def eventually(condition, timeout=12):
             return
         time.sleep(0.05)
     raise AssertionError('Reconciliation did not complete')
+
+
+def demo_smoke(binary):
+    with tempfile.TemporaryDirectory(prefix='findrail-demo-smoke-') as temporary:
+        parent = pathlib.Path(temporary)
+        env = dict(os.environ, TMPDIR=temporary, TMP=temporary, TEMP=temporary)
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        process = subprocess.Popen([str(binary), 'demo', '--no-open', '--sync-interval', '1s',
+                                    '--addr', f'127.0.0.1:{port}'], env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
+        base = f'http://127.0.0.1:{port}'
+
+        def get(path):
+            with urllib.request.urlopen(base + path, timeout=3) as response:
+                return json.load(response)
+
+        try:
+            def ready():
+                if process.poll() is not None:
+                    raise RuntimeError('Demo exited: ' + process.stderr.read())
+                try:
+                    return get('/healthz') == {'status': 'ok'}
+                except (urllib.error.URLError, TimeoutError):
+                    return False
+            eventually(ready)
+            response = get('/api/v1/search?q=idempotency')
+            assert response['total'] == 3, response
+            pdf = next(r for r in response['results'] if r['media_type'] == 'application/pdf')
+            assert pdf['page'] == 2 and pdf['uri'].endswith('#page=2'), pdf
+            evidence = get('/api/v1/documents/' + pdf['id'] + '?page=2')
+            assert evidence['page_count'] == 2 and 'Idempotency' in evidence['text'], evidence
+            sources = get('/api/v1/sources')['sources']
+            assert len(sources) == 1 and sources[0]['documents'] == 3, sources
+            documents = pathlib.Path(sources[0]['root'])
+            workspace = documents.parent
+            assert workspace.parent.resolve() == parent.resolve() and documents.name == 'documents', documents
+            note = documents / 'retry-notes.md'
+            note.write_text(note.read_text(encoding='utf-8').replace('amber', 'cobalt'), encoding='utf-8')
+            eventually(lambda: get('/api/v1/search?q=cobalt')['total'] == 1)
+            assert get('/api/v1/search?q=amber')['total'] == 0
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.communicate(timeout=7)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate(timeout=2)
+        if sys.platform != 'win32':
+            assert process.returncode == 0, process.returncode
+            assert not workspace.exists(), workspace
 
 
 def main():
@@ -132,7 +186,8 @@ def main():
         # Windows terminate() is an OS kill, not a graceful Unix SIGTERM.
         if sys.platform != 'win32':
             assert process.returncode == 0, process.returncode
-    print('Findrail alpha smoke passed: one-command start, CLI, PDF worker, preview, auto-refresh, rollback and HTTP.')
+    demo_smoke(binary)
+    print('Findrail alpha smoke passed: embedded demo, one-command start, CLI, PDF worker, preview, auto-refresh, rollback and HTTP.')
 
 
 if __name__ == '__main__':

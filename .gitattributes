@@ -1,0 +1,2 @@
+# Preserve PDF bytes and treat fixtures as binary in diffs.
+*.pdf binary

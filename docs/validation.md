@@ -1,6 +1,6 @@
 # Local-alpha validation
 
-Local checks performed on 2026-10-02, Linux amd64. This report describes a
+Local checks performed on 2026-10-05 for alpha.2, Linux amd64. This report describes a
 working alpha, not production certification or a security audit.
 
 | Check | Result |
@@ -8,10 +8,10 @@ working alpha, not production certification or a security audit.
 | Go 1.27.1 unit / lifecycle tests | Passed |
 | Go 1.27.1 race detector | Passed |
 | Go 1.27.1 vet | Passed |
-| Go 1.26.8 unit / lifecycle tests | Passed |
+| Go 1.26 compatibility | GitHub CI race job; see Actions for this commit |
 | Module checksums | Verified |
 | Five CGO-free distribution targets | Compiled and archived |
-| Compiled CLI / PDF worker / HTTP / automatic-refresh smoke | Passed locally |
+| Compiled demo / start / CLI / PDF worker / HTTP / refresh smoke | Passed locally |
 | OpenAPI and workflow YAML parsing | Passed |
 | Embedded UI JavaScript syntax and local Markdown links | Passed |
 
@@ -24,7 +24,11 @@ snapshot. Native notifications and polling both drive automatic lifecycle tests.
 A missing root preserves results and recovers after it returns.
 
 The smoke script uses temporary copies of synthetic notes and generated PDF
-objects. It exercises the actual executable and child process, PDF page
+objects, and separately runs the embedded three-document demo from the actual
+executable. The demo test verifies three matches, PDF page 2, note refresh and
+workspace removal after a graceful Unix stop. Windows CI terminates the process
+with an OS kill, so cleanup there is covered by the Go command lifecycle tests.
+It exercises the actual executable and child process, PDF page
 attribution, textless-PDF skipping, preview, folder updates / deletion, invalid
 PDF rollback and recovery, and a real loopback HTTP listener.
 
