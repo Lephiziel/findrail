@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatCitation } from './citation.mjs';
+import { formatCitation, sourceURI } from './citation.mjs';
 
 const note = {
   title: 'retry-notes.md',
@@ -80,7 +80,7 @@ test('marks full and selected truncated previews differently', () => {
 
 test('rejects unsafe metadata, URIs, and excerpts', () => {
   for (const uri of ['javascript:alert(1)', 'data:text/plain,hello', '/tmp/note.md', 'https://example.test/note.md']) {
-    assert.throws(() => formatCitation({ ...note, uri }), /file URI|file: scheme/);
+    assert.throws(() => formatCitation({ ...note, uri }), /source URI|file: scheme|GitHub blob/);
   }
   for (const excerpt of ['', '   ', 'not present', 42, {}]) {
     assert.throws(() => formatCitation(note, { excerpt }), /excerpt/);
@@ -111,4 +111,21 @@ test('does not mutate inputs and is deterministic', () => {
   assert.equal(first, formatCitation(evidence, options));
   assert.deepEqual(evidence, beforeEvidence);
   assert.deepEqual(options, beforeOptions);
+});
+
+test('accepts only commit-pinned GitHub blob permalinks', () => {
+  const sha = '0123456789abcdef0123456789abcdef01234567';
+  const uri = `https://github.com/example/demo/blob/${sha}/docs/a%20file%23%3F%25.md`;
+  assert.equal(sourceURI(uri), uri);
+  assert.match(formatCitation({ ...note, uri, title: 'a file.md' }), /github\.com\/example\/demo\/blob\/012345/);
+  for (const unsafe of [
+    'http://github.com/example/demo/blob/'+sha+'/a.md',
+    'https://github.com.evil.example/example/demo/blob/'+sha+'/a.md',
+    'https://github.com/example/demo/blob/main/a.md',
+    'https://github.com/example/demo/raw/'+sha+'/a.md',
+    'https://github.com/example/demo/blob/'+sha+'/../a.md',
+    'https://github.com/example/demo/blob/'+sha+'/a%2Fb.md',
+    'https://user@github.com/example/demo/blob/'+sha+'/a.md',
+    'https://github.com:443/example/demo/blob/'+sha+'/a.md?x=1',
+  ]) assert.throws(() => sourceURI(unsafe), /GitHub|unsafe|source URI/);
 });

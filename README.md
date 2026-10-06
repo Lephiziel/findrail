@@ -10,8 +10,8 @@ documents. Source builds also provide a scoped, read-only stdio MCP server.
 Connected services and optional semantic retrieval are the next product stages.
 
 **Status: local alpha, `0.1.0-alpha.2`.** It is ready for testing, not a stable
-release. GitHub ingestion, OCR, DOCX, semantic search and desktop launching
-remain on the roadmap.
+release. Public GitHub file snapshots are available in source builds. Private
+GitHub, OCR, DOCX, semantic search and desktop launching remain on the roadmap.
 
 [Releases](https://github.com/Lephiziel/findrail/releases) ·
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
@@ -129,6 +129,7 @@ stop startup and preserve the prior committed inventory.
 - CLI / JSON output, loopback web UI, read-only HTTP API and source-built
   read-only stdio MCP (`findrail mcp`).
 - Logical source removal, leaving original files untouched.
+- Manual, commit-pinned public GitHub text snapshots with offline preview.
 
 See [alpha behaviour and limits](docs/local-alpha.md) and the
 [validation report](docs/validation.md).
@@ -151,12 +152,14 @@ There is no runtime telemetry. See [data handling](docs/data-handling.md).
 Upgrading from the foundation migrates the existing index automatically. Existing
 sources retain their text-only policy; re-run `index` to enable PDFs. Back up the
 data directory while Findrail is stopped before upgrading; the older binary
-cannot read schema 2.
+cannot read schema 3.
 
 ## Commands
 
 ```bash
 findrail index /path/to/notes
+findrail index-github --path docs OWNER/REPO
+findrail refresh-github SOURCE_ID
 findrail start --no-open /path/to/notes
 findrail start
 findrail index --max-pdf-bytes 0 /path/to/text-only
@@ -183,7 +186,7 @@ Linux; `~/Library/Application Support/Findrail` on macOS;
 | Capability | Local alpha | Next stages |
 |---|---|---|
 | Documents | Text / Markdown / code / PDF text | DOCX, optional OCR |
-| Sources | Local folders | Read-only GitHub, bookmarks, work tools |
+| Sources | Local folders; public GitHub snapshots in source builds | Private GitHub, bookmarks, work tools |
 | Freshness | File watching and full reconciliation | Resumable remote sync |
 | Retrieval | Literal AND terms, source filter, PDF page attribution | Query evaluation, structured filters, optional semantics |
 | Clients | CLI, local web UI, HTTP, read-only stdio MCP | Desktop launcher, editors |

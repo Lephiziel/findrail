@@ -7,7 +7,7 @@ dates. Status changes require working code and evidence.
 |---|---|---|---|
 | R00 · Foundation | Local index, keyword search, CLI, browser UI, contracts, CI | Lifecycle / rollback tests and a runnable demo | Implemented; local validation recorded separately |
 | R01 · Local alpha | PDF text, watcher, document preview, source health, exclusions | Real-user retrieval validation remains open; lifecycle checks implemented | Code implemented; user validation pending |
-| R02 · Connected search | Read-only GitHub, local + remote combined search, secure credentials | Resume, rate limit, revocation, and deletion tests | Planned |
+| R02 · Connected search | Read-only GitHub, local + remote combined search, secure credentials | Resume, rate limit, revocation, and deletion tests | Public file snapshots/manual refresh implemented; private and resumable sync planned |
 | R03 · Extensions | Versioned connector SDK, examples, conformance harness | Independent contributor creates an adapter from docs | Planned |
 | R04 · Optional semantics | Passage chunking, opt-in embedding backend, hybrid ranking | Better retrieval on labeled corpus without losing exact-match quality | Planned |
 | R05 · Daily access | Desktop launcher, editor integration | Daily use and bounded / scoped AI retrieval demonstrated; local stdio MCP is implemented | In progress |

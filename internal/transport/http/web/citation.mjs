@@ -15,18 +15,39 @@ function escapeMarkdown(value) {
   return value.replace(/[\\`*_{}\[\]<>#]/g, '\\$&');
 }
 
-function sourceURI(value) {
+export function sourceURI(value) {
   if (typeof value !== 'string' || value.trim() === '') {
-    throw new TypeError('evidence.uri must be a non-empty absolute file URI');
+    throw new TypeError('evidence.uri must be a safe absolute source URI');
+  }
+  if (/[\u0000-\u001f\u007f\\]/.test(value) || /%(?:2f|5c)/i.test(value)) {
+    throw new TypeError('evidence.uri contains an unsafe path');
   }
   let parsed;
   try {
     parsed = new URL(value);
   } catch {
-    throw new TypeError('evidence.uri must be an absolute file URI');
+    throw new TypeError('evidence.uri must be an absolute source URI');
   }
-  if (parsed.protocol !== 'file:' || (parsed.hostname !== '' && parsed.hostname !== 'localhost')) {
-    throw new TypeError('evidence.uri must use the file: scheme');
+	if (parsed.protocol === 'https:') {
+    if (parsed.username || parsed.password || parsed.port || parsed.hostname !== 'github.com' || parsed.search || parsed.hash) {
+      throw new TypeError('evidence.uri must be a commit-pinned GitHub blob permalink');
+    }
+    const rawPath = value.slice('https://github.com'.length);
+    const segments = rawPath.split('/').slice(1);
+    if (segments.length < 5 || segments[2] !== 'blob' || !/^[0-9a-f]{40}$/i.test(segments[3])) {
+      throw new TypeError('evidence.uri must be a commit-pinned GitHub blob permalink');
+    }
+    for (const segment of segments) {
+      let decoded;
+      try { decoded = decodeURIComponent(segment); } catch { throw new TypeError('evidence.uri has invalid escaping'); }
+      if (decoded === '' || decoded === '.' || decoded === '..' || decoded.includes('/') || decoded.includes('\\')) {
+        throw new TypeError('evidence.uri contains an unsafe path segment');
+      }
+    }
+    return parsed.href;
+  }
+	if (parsed.protocol !== 'file:' || (parsed.hostname !== '' && parsed.hostname !== 'localhost')) {
+    throw new TypeError('evidence.uri must use the file: scheme or a commit-pinned GitHub blob permalink');
   }
   if (!/^file:\/\//i.test(value)) {
     throw new TypeError('evidence.uri must be an absolute file URI');

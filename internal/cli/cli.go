@@ -26,6 +26,8 @@ const help = `Findrail — find your knowledge, keep your sources.
 
 Usage:
   findrail index [--data-dir DIR] [--max-bytes N] [--max-pdf-bytes N] [--json] DIRECTORY
+  findrail index-github [--data-dir DIR] [--ref REF] [--path PATH] [--max-bytes N] [--timeout 2m] [--json] OWNER/REPO
+  findrail refresh-github [--data-dir DIR] [--timeout 2m] [--json] SOURCE_ID
   findrail start [--data-dir DIR] [--addr 127.0.0.1:7766] [--no-open] [DIRECTORY]
   findrail demo [--addr 127.0.0.1:7766] [--no-open]
   findrail search [--data-dir DIR] [--limit N] [--source ID] [--json] QUERY
@@ -38,7 +40,7 @@ Usage:
 
 Options must precede positional arguments. Run COMMAND --help for details.
 Local alpha: text, Markdown, source code, text PDFs, preview and automatic refresh.
-Cloud connectors and semantic search remain planned. Source builds also include a
+Public GitHub file snapshots use explicit indexing and manual refresh. Source builds also include a
 read-only stdio MCP server.
 `
 
@@ -62,6 +64,9 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	}
 	if args[0] == "demo" {
 		return runDemo(ctx, args[1:], out, stderr, openBrowser, runStart)
+	}
+	if args[0] == "index-github" || args[0] == "refresh-github" {
+		return runGitHub(ctx, args[0], args[1:], out, stderr)
 	}
 	if args[0] != "index" && args[0] != "search" && args[0] != "sources" && args[0] != "serve" && args[0] != "watch" && args[0] != "forget" {
 		return fmt.Errorf("unknown command %q; run findrail --help", args[0])

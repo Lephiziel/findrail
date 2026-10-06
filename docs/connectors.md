@@ -25,6 +25,12 @@ The host owns transactions, retention, indexing, retrieval, result rendering,
 authorization, and logical removal. Connectors should not write database tables,
 edit source documents, store credentials in content, or send analytics.
 
+## Public GitHub files
+
+`internal/connectors/github` resolves a public ref to a commit, validates a
+bounded tar/gzip inventory, and returns a prepared in-memory full scan. The host
+publishes it atomically and stores its settings. See [GitHub snapshots](github.md).
+
 ## Filesystem example
 
 Read `internal/connectors/filesystem/filesystem.go` and the lifecycle tests under
