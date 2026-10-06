@@ -112,6 +112,22 @@ func runMCPWithIO(ctx context.Context, args []string, out, stderr io.Writer, ver
 	if !ok {
 		writer = nopWriteCloser{out}
 	}
+	if file, ok := reader.(*os.File); ok {
+		stream, cleanup, err := prepareMCPFile(file)
+		if err != nil {
+			return fmt.Errorf("prepare MCP input: %w", err)
+		}
+		defer cleanup()
+		reader = stream
+	}
+	if file, ok := writer.(*os.File); ok {
+		stream, cleanup, err := prepareMCPFile(file)
+		if err != nil {
+			return fmt.Errorf("prepare MCP output: %w", err)
+		}
+		defer cleanup()
+		writer = stream
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// SDK session shutdown drains active responses before closing the transport.

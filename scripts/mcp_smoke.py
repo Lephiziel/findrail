@@ -134,6 +134,65 @@ def expect_error(result, code):
     assert "FOREIGN_MCP_MARKER" not in json.dumps(result), result
 
 
+def blocked_output_shutdown(binary, data, source, document, cause):
+    """Leave a real stdout pipe unread while the server writes large evidence."""
+    process = subprocess.Popen(
+        [str(binary), "mcp", "--data-dir", str(data), "--source", source,
+         "--max-text-chars", "32768"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    readers = []
+    try:
+        def read_with_timeout(read):
+            result = queue.Queue()
+
+            def read_output():
+                try:
+                    result.put((read(), None))
+                except Exception as error:
+                    result.put((None, error))
+
+            reader = threading.Thread(target=read_output, daemon=True)
+            readers.append(reader)
+            reader.start()
+            value, error = result.get(timeout=10)
+            if error is not None:
+                raise error
+            return value
+
+        def send(message):
+            process.stdin.write(json.dumps(message).encode("utf-8") + b"\n")
+            process.stdin.flush()
+
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": VERSIONS[0], "capabilities": {},
+            "clientInfo": {"name": "blocked-output-smoke", "version": "1"},
+        }})
+        assert "result" in json.loads(read_with_timeout(process.stdout.readline))
+        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        send({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "findrail_get_evidence", "arguments": {
+                "document_id": document, "source_id": source,
+            },
+        }})
+        assert read_with_timeout(lambda: process.stdout.read(1)), "evidence output did not start"
+        # Reading one byte establishes that the write started. The remaining
+        # response exceeds the OS pipe buffer and is deliberately left unread.
+        if cause == "EOF":
+            process.stdin.close()
+        else:
+            process.terminate()
+        process.wait(timeout=5)
+        assert process.returncode == 0, process.stderr.read().decode("utf-8")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        for reader in readers:
+            reader.join(timeout=2)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=pathlib.Path)
@@ -199,6 +258,10 @@ def main():
                 assert bounded["truncated"] and "mcp_response_budget" in bounded["truncation_reasons"], bounded
                 assert bounded["text_chars"] == len(bounded["text"]), "invalid Unicode text count"
                 expect_error(client.call("findrail_get_evidence", document_id=large["id"], source_id=source, page=1), "invalid_page")
+                if version == VERSIONS[0]:
+                    blocked_output_shutdown(binary, data, source, large["id"], "EOF")
+                    if os.name != "nt":
+                        blocked_output_shutdown(binary, data, source, large["id"], "SIGTERM")
                 if version == VERSIONS[-1]:
                     run(binary, "forget", "--data-dir", data, source)
                     assert client.call("findrail_list_sources")["structuredContent"]["sources"] == []
