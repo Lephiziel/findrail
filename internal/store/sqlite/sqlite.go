@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	githubconnector "github.com/Lephiziel/findrail/internal/connectors/github"
 	"github.com/Lephiziel/findrail/internal/ingest"
 	"github.com/Lephiziel/findrail/internal/search"
 	"github.com/Lephiziel/findrail/pkg/connector"
@@ -25,9 +26,12 @@ var initialSchema string
 //go:embed migrations/002_local_alpha.sql
 var alphaSchema string
 
+//go:embed migrations/003_github_snapshots.sql
+var githubSchema string
+
 type Store struct{ db, readers *sql.DB }
 
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {
 	dataDir, err := filepath.Abs(dataDir)
@@ -160,7 +164,12 @@ func (s *Store) initialize(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, alphaSchema); err != nil {
 			return fmt.Errorf("migrate index: %w", err)
 		}
+		fallthrough
 	case 2:
+		if _, err := tx.ExecContext(ctx, githubSchema); err != nil {
+			return fmt.Errorf("migrate GitHub snapshots: %w", err)
+		}
+	case 3:
 	default:
 		return fmt.Errorf("unsupported index schema %d; use a compatible Findrail version", version)
 	}
@@ -364,12 +373,36 @@ func (s *Store) Search(ctx context.Context, request search.Request) (search.Resp
 
 type SourceStatus struct {
 	connector.Source
-	Documents     int    `json:"documents"`
-	LastIndexedAt string `json:"last_indexed_at"`
+	Documents     int           `json:"documents"`
+	LastIndexedAt string        `json:"last_indexed_at"`
+	GitHub        *GitHubSource `json:"github,omitempty"`
+}
+
+type GitHubSource struct {
+	SourceID          string    `json:"source_id,omitempty"`
+	RepositoryID      int64     `json:"repository_id"`
+	Owner             string    `json:"owner"`
+	Repo              string    `json:"repo"`
+	RepositoryURL     string    `json:"repository_url"`
+	RefMode           string    `json:"ref_mode"`
+	RefValue          string    `json:"ref_value,omitempty"`
+	SelectedPath      string    `json:"selected_path,omitempty"`
+	MaxBytes          int64     `json:"max_bytes"`
+	PolicyVersion     int       `json:"policy_version"`
+	SHA               string    `json:"sha"`
+	CommitTime        time.Time `json:"commit_time"`
+	RegistrationToken string    `json:"-"`
+	Revision          int64     `json:"revision"`
+	LastError         string    `json:"last_error,omitempty"`
 }
 
 func (s *Store) Sources(ctx context.Context) ([]SourceStatus, error) {
-	rows, err := s.readers.QueryContext(ctx, `SELECT s.id,s.kind,s.name,s.root,s.last_indexed_at,COUNT(d.id),s.max_text_bytes,s.max_pdf_bytes
+	tx, err := s.readers.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.kind,s.name,s.root,s.last_indexed_at,COUNT(d.id),s.max_text_bytes,s.max_pdf_bytes
         FROM sources s LEFT JOIN documents d ON d.source_id=s.id GROUP BY s.id ORDER BY s.name,s.id`)
 	if err != nil {
 		return nil, err
@@ -383,7 +416,159 @@ func (s *Store) Sources(ctx context.Context) ([]SourceStatus, error) {
 		}
 		result = append(result, source)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range result {
+		if result[i].Kind != "github" {
+			continue
+		}
+		g, err := githubSourceQuery(ctx, tx, result[i].ID)
+		if err != nil {
+			if errors.Is(err, ingest.ErrSourceGone) {
+				return nil, errors.New("source changed while reading source status")
+			}
+			return nil, err
+		}
+		g.RegistrationToken = ""
+		result[i].GitHub = &g
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (s *Store) GitHubSource(ctx context.Context, id string) (GitHubSource, error) {
+	return githubSourceQuery(ctx, s.readers, id)
+}
+
+type queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func githubSourceQuery(ctx context.Context, q queryer, id string) (GitHubSource, error) {
+	var g GitHubSource
+	var commit string
+	err := q.QueryRowContext(ctx, `SELECT source_id,repository_id,owner,repo,repository_url,ref_mode,ref_value,selected_path,max_bytes,policy_version,snapshot_sha,commit_time,registration_token,revision,last_error FROM github_sources WHERE source_id=?`, id).Scan(&g.SourceID, &g.RepositoryID, &g.Owner, &g.Repo, &g.RepositoryURL, &g.RefMode, &g.RefValue, &g.SelectedPath, &g.MaxBytes, &g.PolicyVersion, &g.SHA, &commit, &g.RegistrationToken, &g.Revision, &g.LastError)
+	if errors.Is(err, sql.ErrNoRows) {
+		return g, ingest.ErrSourceGone
+	}
+	if err != nil {
+		return g, err
+	}
+	g.CommitTime, err = time.Parse(time.RFC3339Nano, commit)
+	return g, err
+}
+
+// PublishGitHub atomically publishes a fully prepared snapshot. expected is nil
+// for a first registration and otherwise guards against stale downloads.
+func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Snapshot, expected *GitHubSource) (ingest.Result, GitHubSource, error) {
+	result := ingest.Result{Source: snapshot.Source()}
+	meta := snapshot.Metadata()
+	if s.db == nil {
+		return result, GitHubSource{}, errors.New("index is read-only")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, GitHubSource{}, err
+	}
+	defer tx.Rollback()
+	var currentToken string
+	var currentRevision, repositoryID int64
+	err = tx.QueryRowContext(ctx, "SELECT registration_token,revision,repository_id FROM github_sources WHERE source_id=?", result.Source.ID).Scan(&currentToken, &currentRevision, &repositoryID)
+	if expected == nil {
+		if err == nil {
+			return result, GitHubSource{}, fmt.Errorf("source_changed: GitHub source was concurrently registered")
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return result, GitHubSource{}, err
+		}
+	} else {
+		if errors.Is(err, sql.ErrNoRows) {
+			return result, GitHubSource{}, ingest.ErrSourceGone
+		}
+		if err != nil {
+			return result, GitHubSource{}, err
+		}
+		if currentToken != expected.RegistrationToken || currentRevision != expected.Revision || repositoryID != meta.RepositoryID {
+			return result, GitHubSource{}, fmt.Errorf("source_changed: GitHub source changed during refresh")
+		}
+	}
+	maxText := result.Source.MaxTextBytes
+	if _, err = tx.ExecContext(ctx, `INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes) VALUES(?,?,?,?,?,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,root=excluded.root,max_text_bytes=excluded.max_text_bytes WHERE sources.kind='github'`, result.Source.ID, "github", result.Source.Name, result.Source.Root, maxText); err != nil {
+		return result, GitHubSource{}, err
+	}
+	var token string
+	revision := int64(1)
+	if expected != nil {
+		token = currentToken
+		revision = currentRevision + 1
+	} else {
+		var b [16]byte
+		if _, err = rand.Read(b[:]); err != nil {
+			return result, GitHubSource{}, err
+		}
+		token = fmt.Sprintf("%x", b)
+	}
+	sc := &scan{tx: tx, sourceID: result.Source.ID, token: token + fmt.Sprintf("-%d", revision)}
+	report, err := snapshot.Scan(ctx, func(doc connector.Document) error {
+		changed, e := sc.Upsert(ctx, doc)
+		if e == nil {
+			if changed {
+				result.Updated++
+			} else {
+				result.Unchanged++
+			}
+		}
+		return e
+	})
+	result.Seen, result.Skipped = report.Seen, report.Skipped
+	if err != nil {
+		return result, GitHubSource{}, fmt.Errorf("scan failed; previous index preserved: %w", err)
+	}
+	r, err := tx.ExecContext(ctx, "DELETE FROM documents WHERE source_id=? AND scan_token<>?", result.Source.ID, sc.token)
+	if err != nil {
+		return result, GitHubSource{}, err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return result, GitHubSource{}, err
+	}
+	result.Removed = int(n)
+	now := time.Now().UTC()
+	if _, err = tx.ExecContext(ctx, "UPDATE sources SET last_indexed_at=? WHERE id=?", now.Format(time.RFC3339Nano), result.Source.ID); err != nil {
+		return result, GitHubSource{}, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO github_sources(source_id,repository_id,owner,repo,repository_url,ref_mode,ref_value,selected_path,max_bytes,policy_version,snapshot_sha,commit_time,registration_token,revision,last_error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, '') ON CONFLICT(source_id) DO UPDATE SET repository_id=excluded.repository_id,owner=excluded.owner,repo=excluded.repo,repository_url=excluded.repository_url,ref_mode=excluded.ref_mode,ref_value=excluded.ref_value,selected_path=excluded.selected_path,max_bytes=excluded.max_bytes,policy_version=excluded.policy_version,snapshot_sha=excluded.snapshot_sha,commit_time=excluded.commit_time,revision=excluded.revision,last_error='' WHERE github_sources.registration_token=? AND github_sources.revision=?`, result.Source.ID, meta.RepositoryID, meta.Owner, meta.Repo, meta.RepositoryURL, meta.RefMode, meta.RefValue, meta.SelectedPath, meta.MaxBytes, meta.PolicyVersion, meta.SHA, meta.CommitTime.Format(time.RFC3339Nano), token, revision, currentToken, currentRevision)
+	if err != nil {
+		return result, GitHubSource{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return result, GitHubSource{}, err
+	}
+	g := GitHubSource{SourceID: result.Source.ID, RepositoryID: meta.RepositoryID, Owner: meta.Owner, Repo: meta.Repo, RepositoryURL: meta.RepositoryURL, RefMode: meta.RefMode, RefValue: meta.RefValue, SelectedPath: meta.SelectedPath, MaxBytes: meta.MaxBytes, PolicyVersion: meta.PolicyVersion, SHA: meta.SHA, CommitTime: meta.CommitTime, RegistrationToken: token, Revision: revision}
+	return result, g, nil
+}
+
+func (s *Store) RecordGitHubError(ctx context.Context, expected GitHubSource, message string) {
+	if s.db == nil {
+		return
+	}
+	message = safeError(message, 512)
+	_, _ = s.db.ExecContext(ctx, "UPDATE github_sources SET last_error=? WHERE source_id=? AND registration_token=? AND revision=?", message, expected.SourceID, expected.RegistrationToken, expected.Revision)
+}
+func safeError(v string, n int) string {
+	v = strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, v)
+	if len(v) > n {
+		v = v[:n]
+	}
+	return v
 }
 
 // Evidence reads only the indexed snapshot and returns at most 64 Ki characters.
@@ -416,8 +601,8 @@ func (s *Store) evidence(ctx context.Context, sourceID, id string, page int) (se
 		where += " AND d.source_id=?"
 		args = append(args, sourceID)
 	}
-	err = tx.QueryRowContext(ctx, `SELECT d.id,d.title,d.uri,d.path,d.source_id,s.name,d.media_type,d.content_hash,d.modified_at,d.page_count
-	        FROM documents d JOIN sources s ON s.id=d.source_id WHERE `+where, args...).Scan(&e.ID, &e.Title, &e.URI, &e.Path, &e.SourceID, &e.SourceName, &e.MediaType, &e.ContentHash, &e.ModifiedAt, &e.PageCount)
+	err = tx.QueryRowContext(ctx, `SELECT d.id,d.title,d.uri,d.path,d.source_id,s.name,s.kind,d.media_type,d.content_hash,d.modified_at,d.page_count
+	        FROM documents d JOIN sources s ON s.id=d.source_id WHERE `+where, args...).Scan(&e.ID, &e.Title, &e.URI, &e.Path, &e.SourceID, &e.SourceName, &e.SourceKind, &e.MediaType, &e.ContentHash, &e.ModifiedAt, &e.PageCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, search.ErrNotFound
 	}

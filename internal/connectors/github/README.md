@@ -1,10 +1,12 @@
-# GitHub connector design
+# GitHub connectors
 
-Planned; no GitHub ingestion is implemented yet.
+This package implements bounded snapshots of text files from public GitHub
+repositories. It resolves one ref to a commit and prepares an in-memory archive
+inventory; host storage publishes it atomically.
 
-The first adapter reads issues and discussions from explicitly selected public
-repositories. A later private-repository mode needs a credential vault and
-repository scopes before release. It never posts comments or changes repositories.
+Issues and discussions remain future separate adapters. A private-repository
+mode needs a credential vault and repository scopes before release. Findrail
+never posts comments or changes repositories.
 
 - Stable identity: repository node ID and issue / discussion node ID, not title.
 - Provenance: canonical GitHub URL, repository, author, creation / update times.

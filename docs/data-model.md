@@ -1,6 +1,6 @@
 # Data model
 
-## Implemented schema 2
+## Implemented schema 3
 
 | Entity | Identity | Stored fields |
 |---|---|---|
@@ -8,6 +8,7 @@
 | Document | Hash of source ID and relative path | Title, source ID, original URI, path, content, hash, byte size, modification time, scan token, media type, page count |
 | FTS entry | Document row ID | Tokenized title and content, maintained by triggers |
 | PDF page | Document ID + one-based page number | Plain text for the original page |
+| GitHub snapshot | Source ID | Repository identity, ref/path policy, full SHA, commit time, registration token and revision |
 | Page FTS | Page row ID | Page tokens, maintained by triggers |
 
 Source ownership is currently the OS account running the local application.
@@ -19,7 +20,8 @@ Results return a stable ID, original URI, source metadata, relative path,
 matching passage, and a BM25-derived ordering score. The score is not a
 probability. Square brackets mark keyword matches in plain-text snippets.
 
-Migration 2 keeps schema 1 documents and leaves existing sources text-only until
+Migration 3 preserves schema 1/2 documents, FTS and PDF pages and adds GitHub
+metadata with cascade deletion. Migration 2 leaves existing sources text-only until
 explicitly re-indexed. See [upgrade instructions](local-alpha.md#upgrade).
 
 ## Future entities

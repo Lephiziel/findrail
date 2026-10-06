@@ -19,8 +19,9 @@ flowchart TD
   D --> R["Passages and provenance"]
 ```
 
-This diagram describes the implemented path. Cloud adapters, semantic
-retrieval, and desktop launching are future extensions. The source build also
+This diagram describes the local path. Public GitHub files use a bounded archive
+prepared before the same atomic ingestion boundary. Private adapters, semantic
+retrieval, and desktop launching remain future extensions. The source build also
 has a read-only stdio MCP transport over the same search and indexed-evidence
 contracts.
 
@@ -30,6 +31,7 @@ contracts.
 |---|---|---|
 | `pkg/connector` | Source / document inventory contract | Go standard library |
 | `internal/connectors/filesystem` | Explicit root enumeration and source identity | Connector contract, text extraction |
+| `internal/connectors/github` | Public ref resolution and bounded commit archive preparation | Connector contract, text extraction, HTTP standard library |
 | `internal/extract/text` | Bounded reads and UTF-8 validation | Standard library |
 | `internal/extract/pdf` | Isolated PDF text worker and page attribution | PDF parser, connector contract |
 | `internal/sync` | Source discovery, event debounce, retries and health | Filesystem adapter, ingest, store, fsnotify |
@@ -88,7 +90,8 @@ or source removal.
 ## Storage
 
 SQLite FTS5 and a CGO-free Go driver keep installation simple. WAL and foreign
-keys are enabled. Schema migrations 1 and 2 are transactional and embedded in the binary.
+keys are enabled. Schema migrations 1–3 are transactional and embedded in the binary.
+Schema 3 stores GitHub selection/snapshot metadata and stale-update revision guards.
 Unknown newer schemas are rejected. A one-connection writer pool serializes
 updates; four query-only read connections use WAL snapshots, preserving search
 availability during extraction. PDF pages and their FTS entries commit in the
@@ -126,7 +129,7 @@ responses; it does not provide a remote endpoint.
 |---|---|
 | Local alpha (implemented) | PDF text, file watching, evidence preview, source health, archives |
 | Alpha validation (next) | Real retrieval tasks, labeled query corpus, resource measurements |
-| Connected alpha | GitHub adapter, credential vault, cursors, retry / deletion semantics |
+| Connected alpha | Public GitHub snapshots implemented; private credentials and resumable cursors remain |
 | Extensible beta | Connector SDK stabilization, versioned manifests, conformance suite |
 | Semantic beta | Optional embedding worker, passage retrieval, hybrid evaluation |
 | Clients | Source-built read-only stdio MCP; desktop launcher and editor / browser integrations remain planned |

@@ -75,7 +75,7 @@ Stop Findrail and back up its dedicated data directory. Migration 2 preserves
 schema 1 documents, adds media metadata, PDF pages / page FTS and source limits.
 The migration commits atomically. Old sources stay text-only until explicitly
 re-indexed, preserving their previous inclusion policy. The old binary rejects
-schema 2; restore the stopped-directory backup to downgrade.
+schema 3; restore the stopped-directory backup to downgrade.
 
 ## Alpha release scope
 

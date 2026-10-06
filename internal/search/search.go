@@ -41,6 +41,7 @@ type Evidence struct {
 	Path        string `json:"path"`
 	SourceID    string `json:"source_id"`
 	SourceName  string `json:"source_name"`
+	SourceKind  string `json:"source_kind"`
 	MediaType   string `json:"media_type"`
 	ContentHash string `json:"content_hash"`
 	ModifiedAt  string `json:"modified_at"`
