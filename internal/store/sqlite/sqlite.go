@@ -397,7 +397,12 @@ type GitHubSource struct {
 }
 
 func (s *Store) Sources(ctx context.Context) ([]SourceStatus, error) {
-	rows, err := s.readers.QueryContext(ctx, `SELECT s.id,s.kind,s.name,s.root,s.last_indexed_at,COUNT(d.id),s.max_text_bytes,s.max_pdf_bytes
+	tx, err := s.readers.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.kind,s.name,s.root,s.last_indexed_at,COUNT(d.id),s.max_text_bytes,s.max_pdf_bytes
         FROM sources s LEFT JOIN documents d ON d.source_id=s.id GROUP BY s.id ORDER BY s.name,s.id`)
 	if err != nil {
 		return nil, err
@@ -418,20 +423,34 @@ func (s *Store) Sources(ctx context.Context) ([]SourceStatus, error) {
 		if result[i].Kind != "github" {
 			continue
 		}
-		g, err := s.GitHubSource(ctx, result[i].ID)
+		g, err := githubSourceQuery(ctx, tx, result[i].ID)
 		if err != nil {
+			if errors.Is(err, ingest.ErrSourceGone) {
+				return nil, errors.New("source changed while reading source status")
+			}
 			return nil, err
 		}
 		g.RegistrationToken = ""
 		result[i].GitHub = &g
 	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
 func (s *Store) GitHubSource(ctx context.Context, id string) (GitHubSource, error) {
+	return githubSourceQuery(ctx, s.readers, id)
+}
+
+type queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func githubSourceQuery(ctx context.Context, q queryer, id string) (GitHubSource, error) {
 	var g GitHubSource
 	var commit string
-	err := s.readers.QueryRowContext(ctx, `SELECT source_id,repository_id,owner,repo,repository_url,ref_mode,ref_value,selected_path,max_bytes,policy_version,snapshot_sha,commit_time,registration_token,revision,last_error FROM github_sources WHERE source_id=?`, id).Scan(&g.SourceID, &g.RepositoryID, &g.Owner, &g.Repo, &g.RepositoryURL, &g.RefMode, &g.RefValue, &g.SelectedPath, &g.MaxBytes, &g.PolicyVersion, &g.SHA, &commit, &g.RegistrationToken, &g.Revision, &g.LastError)
+	err := q.QueryRowContext(ctx, `SELECT source_id,repository_id,owner,repo,repository_url,ref_mode,ref_value,selected_path,max_bytes,policy_version,snapshot_sha,commit_time,registration_token,revision,last_error FROM github_sources WHERE source_id=?`, id).Scan(&g.SourceID, &g.RepositoryID, &g.Owner, &g.Repo, &g.RepositoryURL, &g.RefMode, &g.RefValue, &g.SelectedPath, &g.MaxBytes, &g.PolicyVersion, &g.SHA, &commit, &g.RegistrationToken, &g.Revision, &g.LastError)
 	if errors.Is(err, sql.ErrNoRows) {
 		return g, ingest.ErrSourceGone
 	}

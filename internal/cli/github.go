@@ -99,19 +99,27 @@ func runGitHub(ctx context.Context, command string, args []string, out, stderr i
 		}
 		return publishGitHub(child, store, snapshot, expected, *jsonOutput, out)
 	}
-	snapshot, err := githubconnector.NewClient().Prepare(child, sel)
+	client := githubconnector.NewClient()
+	// Resolve repository identity before opening storage or downloading the
+	// archive. The guard captured here must cover the whole remote operation.
+	meta, err := client.Resolve(child, sel)
 	if err != nil {
-		return fmt.Errorf("prepare GitHub snapshot: %w", err)
+		return fmt.Errorf("resolve GitHub repository: %w", err)
 	}
 	store, err := sqlite.Open(child, dir)
 	if err != nil {
 		return fmt.Errorf("open index: %w", err)
 	}
 	defer store.Close()
-	if g, e := store.GitHubSource(child, snapshot.Source().ID); e == nil {
+	identity := githubconnector.SourceID(meta.RepositoryID, sel)
+	if g, e := store.GitHubSource(child, identity); e == nil {
 		expected = &g
 	} else if !errors.Is(e, ingest.ErrSourceGone) {
 		return e
+	}
+	snapshot, err := client.PrepareResolved(child, sel, meta)
+	if err != nil {
+		return fmt.Errorf("prepare GitHub snapshot: %w", err)
 	}
 	return publishGitHub(child, store, snapshot, expected, *jsonOutput, out)
 }

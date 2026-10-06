@@ -19,7 +19,7 @@ export function sourceURI(value) {
   if (typeof value !== 'string' || value.trim() === '') {
     throw new TypeError('evidence.uri must be a safe absolute source URI');
   }
-  if (/[\u0000-\u001f\u007f\\]/.test(value) || /%(?:2f|5c)/i.test(value)) {
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
     throw new TypeError('evidence.uri contains an unsafe path');
   }
   let parsed;
@@ -29,20 +29,29 @@ export function sourceURI(value) {
     throw new TypeError('evidence.uri must be an absolute source URI');
   }
 	if (parsed.protocol === 'https:') {
-    if (parsed.username || parsed.password || parsed.port || parsed.hostname !== 'github.com' || parsed.search || parsed.hash) {
+    // Check the raw authority because URL normalizes an explicit :443 away.
+    if (!value.startsWith('https://github.com/') || parsed.username || parsed.password || parsed.port || parsed.hostname !== 'github.com' || parsed.search || parsed.hash) {
       throw new TypeError('evidence.uri must be a commit-pinned GitHub blob permalink');
     }
     const rawPath = value.slice('https://github.com'.length);
+    if (rawPath.includes('?') || rawPath.includes('#')) {
+      throw new TypeError('evidence.uri must be a commit-pinned GitHub blob permalink');
+    }
     const segments = rawPath.split('/').slice(1);
     if (segments.length < 5 || segments[2] !== 'blob' || !/^[0-9a-f]{40}$/i.test(segments[3])) {
       throw new TypeError('evidence.uri must be a commit-pinned GitHub blob permalink');
     }
-    for (const segment of segments) {
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/.test(segments[0]) ||
+        !/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/.test(segments[1])) {
+      throw new TypeError('evidence.uri has invalid repository components');
+    }
+    for (const [index, segment] of segments.entries()) {
       let decoded;
       try { decoded = decodeURIComponent(segment); } catch { throw new TypeError('evidence.uri has invalid escaping'); }
-      if (decoded === '' || decoded === '.' || decoded === '..' || decoded.includes('/') || decoded.includes('\\')) {
+      if (decoded === '' || decoded === '.' || decoded === '..' || decoded.includes('/') || decoded.includes('\\') || /[\u0000-\u001f\u007f\u2028\u2029]/u.test(decoded)) {
         throw new TypeError('evidence.uri contains an unsafe path segment');
       }
+      if (index === 2 && decoded !== 'blob') throw new TypeError('evidence.uri has invalid permalink components');
     }
     return parsed.href;
   }

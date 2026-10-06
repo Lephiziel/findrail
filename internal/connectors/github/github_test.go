@@ -98,6 +98,48 @@ func TestPrepareHTTPArchiveSnapshot(t *testing.T) {
 	}
 }
 
+func TestPrepareArchiveIgnoresGlobalPAXHeader(t *testing.T) {
+	var raw bytes.Buffer
+	gz := gzip.NewWriter(&raw)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "pax_global_header", Typeflag: tar.TypeXGlobalHeader, PAXRecords: map[string]string{"comment": strings.Repeat("a", 40)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "repo-root", Typeflag: tar.TypeDir, Mode: 0755}); err != nil {
+		t.Fatal(err)
+	}
+	body := "hello"
+	if err := tw.WriteHeader(&tar.Header{Name: "repo-root/readme.md", Typeflag: tar.TypeReg, Mode: 0600, Size: int64(len(body))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := prepareArchive(context.Background(), bytes.NewReader(raw.Bytes()), Metadata{RepositoryID: 1, Owner: "Example", Repo: "Demo", SHA: strings.Repeat("b", 40), RefMode: "default", MaxBytes: 1024, CommitTime: time.Unix(0, 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	_, err = s.Scan(context.Background(), func(connector.Document) error { got++; return nil })
+	if err != nil || got != 1 {
+		t.Fatalf("scan got %d, %v", got, err)
+	}
+}
+
+func TestNormalizePathRejectsAbsoluteBeforeTrimming(t *testing.T) {
+	for _, value := range []string{"/", "//", "C:/repo", `\\server\\share`} {
+		if _, err := NormalizePath(value); err == nil {
+			t.Errorf("NormalizePath(%q) accepted unsafe path", value)
+		}
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

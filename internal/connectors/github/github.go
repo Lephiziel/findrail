@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Lephiziel/findrail/internal/extract/text"
@@ -125,11 +126,14 @@ func repoError() error {
 }
 
 func NormalizePath(value string) (string, error) {
+	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "\\") || regexp.MustCompile(`^[A-Za-z]:`).MatchString(value) {
+		return "", errors.New("path must be a relative POSIX directory of at most 1024 UTF-8 bytes")
+	}
 	value = strings.TrimSuffix(value, "/")
 	if value == "" {
 		return "", nil
 	}
-	if len(value) > 1024 || !utf8.ValidString(value) || strings.HasPrefix(value, "/") || strings.Contains(value, "\\") || regexp.MustCompile(`^[A-Za-z]:`).MatchString(value) {
+	if len(value) > 1024 || !utf8.ValidString(value) || strings.Contains(value, "\\") {
 		return "", errors.New("path must be a relative POSIX directory of at most 1024 UTF-8 bytes")
 	}
 	for _, p := range strings.Split(value, "/") {
@@ -240,6 +244,16 @@ func secureRedirect(req *http.Request, via []*http.Request) error {
 }
 
 func (c *Client) Prepare(ctx context.Context, sel Selection) (*Snapshot, error) {
+	meta, err := c.Resolve(ctx, sel)
+	if err != nil {
+		return nil, err
+	}
+	return c.prepareResolved(ctx, sel, meta)
+}
+
+// Resolve identifies the public repository and commit without downloading its archive.
+// Callers can use the returned identity to establish a storage CAS guard first.
+func (c *Client) Resolve(ctx context.Context, sel Selection) (Metadata, error) {
 	var repo struct {
 		ID            int64  `json:"id"`
 		Name          string `json:"name"`
@@ -252,13 +266,13 @@ func (c *Client) Prepare(ctx context.Context, sel Selection) (*Snapshot, error) 
 		} `json:"owner"`
 	}
 	if err := c.getJSON(ctx, "/repos/"+url.PathEscape(sel.Owner)+"/"+url.PathEscape(sel.Repo), &repo); err != nil {
-		return nil, err
+		return Metadata{}, err
 	}
 	if repo.ID <= 0 || repo.Private || repo.Owner.Login == "" || repo.Name == "" || repo.DefaultBranch == "" {
-		return nil, errors.New("GitHub repository metadata is invalid or repository is not public")
+		return Metadata{}, errors.New("GitHub repository metadata is invalid or repository is not public")
 	}
 	if !strings.EqualFold(repo.FullName, sel.Owner+"/"+sel.Repo) {
-		return nil, errors.New("repository canonical name changed; select it again explicitly")
+		return Metadata{}, errors.New("repository canonical name changed; select it again explicitly")
 	}
 	ref := sel.RefValue
 	if sel.RefMode == "default" {
@@ -273,19 +287,30 @@ func (c *Client) Prepare(ctx context.Context, sel Selection) (*Snapshot, error) 
 		} `json:"commit"`
 	}
 	if err := c.getJSON(ctx, "/repos/"+url.PathEscape(repo.Owner.Login)+"/"+url.PathEscape(repo.Name)+"/commits/"+url.PathEscape(ref), &commit); err != nil {
-		return nil, err
+		return Metadata{}, err
 	}
 	if !fullSHA.MatchString(commit.SHA) || commit.Commit.Committer.Date.IsZero() {
-		return nil, errors.New("GitHub commit metadata is invalid")
+		return Metadata{}, errors.New("GitHub commit metadata is invalid")
 	}
 	commit.SHA = strings.ToLower(commit.SHA)
-	body, err := c.get(ctx, "/repos/"+url.PathEscape(repo.Owner.Login)+"/"+url.PathEscape(repo.Name)+"/tarball/"+commit.SHA, MaxArchiveBytes, false)
+	return Metadata{RepositoryID: repo.ID, Owner: repo.Owner.Login, Repo: repo.Name, RepositoryURL: "https://github.com/" + repo.Owner.Login + "/" + repo.Name, RefMode: sel.RefMode, RefValue: sel.RefValue, SelectedPath: sel.Path, MaxBytes: sel.MaxBytes, PolicyVersion: PolicyVersion, SHA: commit.SHA, CommitTime: commit.Commit.Committer.Date.UTC()}, nil
+}
+
+func (c *Client) prepareResolved(ctx context.Context, sel Selection, meta Metadata) (*Snapshot, error) {
+	body, err := c.get(ctx, "/repos/"+url.PathEscape(meta.Owner)+"/"+url.PathEscape(meta.Repo)+"/tarball/"+meta.SHA, MaxArchiveBytes, false)
 	if err != nil {
 		return nil, err
 	}
 	defer body.Close()
-	meta := Metadata{RepositoryID: repo.ID, Owner: repo.Owner.Login, Repo: repo.Name, RepositoryURL: "https://github.com/" + repo.Owner.Login + "/" + repo.Name, RefMode: sel.RefMode, RefValue: sel.RefValue, SelectedPath: sel.Path, MaxBytes: sel.MaxBytes, PolicyVersion: PolicyVersion, SHA: commit.SHA, CommitTime: commit.Commit.Committer.Date.UTC()}
 	return prepareArchive(ctx, body, meta)
+}
+
+// PrepareResolved downloads and validates the archive for a previously resolved identity.
+func (c *Client) PrepareResolved(ctx context.Context, sel Selection, meta Metadata) (*Snapshot, error) {
+	if meta.RepositoryID <= 0 || meta.Owner == "" || meta.Repo == "" || !fullSHA.MatchString(meta.SHA) {
+		return nil, errors.New("invalid resolved GitHub identity")
+	}
+	return c.prepareResolved(ctx, sel, meta)
 }
 
 func (c *Client) getJSON(ctx context.Context, endpoint string, target any) error {
@@ -367,7 +392,7 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		return nil, fmt.Errorf("open GitHub archive: %w", err)
 	}
 	gz.Multistream(false)
-	expanded := &countingReader{r: gz, max: MaxExpandedBytes}
+	expanded := &countingReader{r: gz, max: MaxExpandedBytes, ctx: ctx}
 	tr := tar.NewReader(expanded)
 	var docs []connector.Document
 	var skips SkipCounts
@@ -375,6 +400,7 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 	wrapper := ""
 	scopeFound := meta.SelectedPath == ""
 	var inventory int64
+	var metadataBytes int64
 	entries := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -393,6 +419,16 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		if entries > MaxEntries {
 			gz.Close()
 			return nil, errors.New("GitHub archive entry limit exceeded")
+		}
+		// GNU/PAX metadata is not an archive root. The tar reader has already
+		// applied local PAX/GNU name records to h.Name for real entries.
+		if h.Typeflag == tar.TypeXGlobalHeader || h.Typeflag == tar.TypeXHeader {
+			metadataBytes += h.Size
+			if h.Size < 0 || metadataBytes > MaxMetadataBytes {
+				gz.Close()
+				return nil, errors.New("GitHub archive metadata limit exceeded")
+			}
+			continue
 		}
 		name := h.Name
 		if err := validateTarPath(name); err != nil {
@@ -419,10 +455,12 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		if rel == meta.SelectedPath && h.FileInfo().IsDir() {
 			scopeFound = true
 		}
+		if meta.SelectedPath != "" && strings.HasPrefix(rel, meta.SelectedPath+"/") {
+			scopeFound = true
+		}
 		if !inScope {
 			continue
 		}
-		scopeFound = true
 		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
 			if !h.FileInfo().IsDir() {
 				skips.Special++
@@ -480,7 +518,28 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		sid := SourceID(meta.RepositoryID, Selection{RefMode: meta.RefMode, RefValue: meta.RefValue, Path: meta.SelectedPath})
 		docs = append(docs, connector.Document{ID: fmt.Sprintf("doc_%x", sha256.Sum256([]byte(sid+"\x00"+rel))), SourceID: sid, Title: path.Base(rel), URI: uri, Path: rel, Content: body, Hash: fmt.Sprintf("%x", sha256.Sum256([]byte(body))), SizeBytes: h.Size, ModifiedAt: meta.CommitTime, MediaType: "text/plain"})
 	}
-	if _, err := io.Copy(io.Discard, gz); err != nil {
+	var tail [32 * 1024]byte
+	for {
+		if err := ctx.Err(); err != nil {
+			gz.Close()
+			return nil, err
+		}
+		n, err := expanded.Read(tail[:])
+		for _, b := range tail[:n] {
+			if b != 0 {
+				gz.Close()
+				return nil, errors.New("GitHub archive has trailing non-padding data")
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			gz.Close()
+			return nil, fmt.Errorf("verify GitHub archive: %w", err)
+		}
+	}
+	if err := expanded.Err(); err != nil {
 		gz.Close()
 		return nil, fmt.Errorf("verify GitHub archive: %w", err)
 	}
@@ -511,22 +570,30 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 type countingReader struct {
 	r      io.Reader
 	n, max int64
+	ctx    context.Context
+	err    error
 }
 
 func (c *countingReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
 	n, e := c.r.Read(p)
 	c.n += int64(n)
 	if c.n > c.max {
-		return n, errors.New("GitHub expanded archive limit exceeded")
+		c.err = errors.New("GitHub expanded archive limit exceeded")
+		return n, c.err
 	}
 	return n, e
 }
+
+func (c *countingReader) Err() error { return c.err }
 func validateTarPath(v string) error {
-	if v == "" || len(v) > MaxPathBytes || !utf8.ValidString(v) || strings.HasPrefix(v, "/") || strings.Contains(v, "\\") || hasControl(v) {
+	if v == "" || len(v) > MaxPathBytes || !utf8.ValidString(v) || strings.HasPrefix(v, "/") || strings.HasPrefix(v, "\\") || strings.Contains(v, "\\") || hasControl(v) {
 		return errors.New("unsafe GitHub archive path")
 	}
-	for _, p := range strings.Split(strings.TrimSuffix(v, "/"), "/") {
-		if p == "" || p == "." || p == ".." {
+	for i, p := range strings.Split(strings.TrimSuffix(v, "/"), "/") {
+		if p == "" || p == "." || p == ".." || (i == 0 && regexp.MustCompile(`^[A-Za-z]:`).MatchString(p)) {
 			return errors.New("unsafe GitHub archive path")
 		}
 	}
@@ -534,7 +601,7 @@ func validateTarPath(v string) error {
 }
 func hasControl(v string) bool {
 	for _, r := range v {
-		if r < 32 || r == 127 {
+		if unicode.IsControl(r) || r == 127 {
 			return true
 		}
 	}

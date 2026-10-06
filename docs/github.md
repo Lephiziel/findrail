@@ -25,9 +25,12 @@ SOURCE_ID`; its three retrieval tools cannot download or refresh.
 
 ## Policy and failure behavior
 
-The default per-file limit is 1 MiB and maximum is 8 MiB. Preparation also limits
-metadata, compressed and expanded archive bytes, entries, documents, retained
-text, and path length. Supported text/code extensions match the local policy,
+The default per-file limit is 1 MiB and maximum is 8 MiB. Preparation limits
+metadata to 2 MiB, compressed response bytes to 32 MiB, expanded gzip bytes to
+128 MiB, retained text to 32 MiB, entries to 50,000, documents to 5,000, and
+effective paths to 2,048 bytes. PAX metadata counts toward the archive budgets;
+only zero padding is accepted after the tar inventory, and extra inventories or
+gzip members are rejected. Supported text/code extensions match the local policy,
 plus case-insensitive `README`, `LICENSE`, `NOTICE`, `Makefile`, and `Dockerfile`.
 Hidden paths except `.github`, dependencies/build outputs, credential-like names,
 PDFs, binary/non-UTF-8 files, links/special entries, submodules, and Git LFS
