@@ -129,7 +129,7 @@ responses; it does not provide a remote endpoint.
 | Connected alpha | GitHub adapter, credential vault, cursors, retry / deletion semantics |
 | Extensible beta | Connector SDK stabilization, versioned manifests, conformance suite |
 | Semantic beta | Optional embedding worker, passage retrieval, hybrid evaluation |
-| Clients | Source-built read-only stdio MCP | Desktop launcher, editor / browser integrations |
+| Clients | Source-built read-only stdio MCP; desktop launcher and editor / browser integrations remain planned |
 | Larger deployments | Operated sync / storage only after demand |
 
 The application becomes a service platform only if user needs and measurements

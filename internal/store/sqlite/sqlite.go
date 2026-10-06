@@ -394,6 +394,9 @@ func (s *Store) Evidence(ctx context.Context, id string, page int) (search.Evide
 // EvidenceForSource reads evidence only after the document identity and source
 // scope have been checked by the same read transaction.
 func (s *Store) EvidenceForSource(ctx context.Context, sourceID, id string, page int) (search.Evidence, error) {
+	if sourceID == "" {
+		return search.Evidence{}, search.ErrNotFound
+	}
 	return s.evidence(ctx, sourceID, id, page)
 }
 

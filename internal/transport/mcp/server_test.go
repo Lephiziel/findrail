@@ -78,6 +78,9 @@ func TestToolsAndReadOnlyJourney(t *testing.T) {
 	for _, version := range supportedProtocolVersions {
 		t.Run(version, func(t *testing.T) {
 			_, _, session := connectTestServer(t, version)
+			if got := session.InitializeResult().ProtocolVersion; got != version {
+				t.Fatalf("negotiated protocol = %s, want %s", got, version)
+			}
 			list, err := session.ListTools(context.Background(), nil)
 			if err != nil {
 				t.Fatal(err)

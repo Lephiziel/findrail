@@ -46,11 +46,12 @@ type Backend interface {
 }
 
 type Server struct {
-	backend Backend
-	allowed map[string]struct{}
-	config  Config
-	slots   chan struct{}
-	server  *mcp.Server
+	backend        Backend
+	allowed        map[string]struct{}
+	config         Config
+	slots          chan struct{}
+	server         *mcp.Server
+	resultOverhead int
 }
 
 func New(backend Backend, config Config) (*Server, error) {
@@ -89,8 +90,21 @@ func New(backend Backend, config Config) (*Server, error) {
 		return nil, fmt.Errorf("source allowlist must contain 1 to %d unique IDs", MaxAllowedSources)
 	}
 
-	server := &Server{backend: backend, allowed: allowed, config: config, slots: make(chan struct{}, 4)}
-	server.server = mcp.NewServer(&mcp.Implementation{Name: "findrail", Version: config.Version}, &mcp.ServerOptions{
+	implementation := &mcp.Implementation{Name: "findrail", Version: config.Version}
+	// The SDK adds these fields after a handler returns under the new protocol.
+	// Reserve their actual serialized size, including the joining comma.
+	metadata, err := json.Marshal(map[string]any{
+		"_meta":      mcp.Meta{mcp.MetaKeyServerInfo: implementation},
+		"resultType": "complete",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(metadata) > MaxResultBytes-1024 {
+		return nil, errors.New("MCP server identity exceeds the response budget")
+	}
+	server := &Server{backend: backend, allowed: allowed, config: config, slots: make(chan struct{}, 4), resultOverhead: len(metadata) - 1}
+	server.server = mcp.NewServer(implementation, &mcp.ServerOptions{
 		Capabilities:              &mcp.ServerCapabilities{},
 		SupportedProtocolVersions: supportedProtocolVersions,
 		Logger:                    config.Logger,
@@ -122,7 +136,9 @@ func (s *Server) addTools() error {
 	searchInputSchema.Properties["query"].MaxLength = intPtr(256)
 	searchInputSchema.Properties["source_id"].MinLength = intPtr(1)
 	searchInputSchema.Properties["source_id"].MaxLength = intPtr(128)
-	searchInputSchema.Properties["source_id"].Pattern = `^[^\s\p{C}]+$`
+	searchInputSchema.Properties["source_id"].Pattern = `^[^\s\p{Z}\p{Cc}]+$`
+	searchInputSchema.Properties["limit"].Type = "integer"
+	searchInputSchema.Properties["limit"].Types = nil
 	searchInputSchema.Properties["limit"].Minimum = floatPtr(1)
 	searchInputSchema.Properties["limit"].Maximum = floatPtr(float64(s.config.MaxResults))
 	searchOutputSchema, err := jsonschema.For[searchOutput](nil)
@@ -135,10 +151,12 @@ func (s *Server) addTools() error {
 	}
 	evidenceInputSchema.Properties["source_id"].MinLength = intPtr(1)
 	evidenceInputSchema.Properties["source_id"].MaxLength = intPtr(128)
-	evidenceInputSchema.Properties["source_id"].Pattern = `^[^\s\p{C}]+$`
+	evidenceInputSchema.Properties["source_id"].Pattern = `^[^\s\p{Z}\p{Cc}]+$`
 	evidenceInputSchema.Properties["document_id"].MinLength = intPtr(1)
 	evidenceInputSchema.Properties["document_id"].MaxLength = intPtr(128)
-	evidenceInputSchema.Properties["document_id"].Pattern = `^[^\s\p{C}]+$`
+	evidenceInputSchema.Properties["document_id"].Pattern = `^[^\s\p{Z}\p{Cc}]+$`
+	evidenceInputSchema.Properties["page"].Type = "integer"
+	evidenceInputSchema.Properties["page"].Types = nil
 	evidenceInputSchema.Properties["page"].Minimum = floatPtr(1)
 	evidenceOutputSchema, err := jsonschema.For[evidenceOutput](nil)
 	if err != nil {
@@ -293,7 +311,7 @@ func (s *Server) search(ctx context.Context, _ *mcp.CallToolRequest, input searc
 	if err != nil {
 		return s.errorResult(s.mapBackendError(err, "search unavailable"))
 	}
-	if response.Total < 0 || len(response.Results) > limit {
+	if response.Total < len(response.Results) || len(response.Results) > limit {
 		return s.errorResult(toolError{"backend_unavailable", "Search backend returned an invalid result."})
 	}
 	result := searchOutput{Query: input.Query, SourceID: input.SourceID, Total: response.Total, IndexedSnapshot: true, ContentUntrusted: true, Results: make([]searchResult, 0, len(response.Results))}
@@ -333,6 +351,9 @@ func (s *Server) evidence(ctx context.Context, _ *mcp.CallToolRequest, input evi
 		return s.errorResult(s.mapEvidenceError(err))
 	}
 	if evidence.ID != input.DocumentID || evidence.SourceID != input.SourceID || evidence.Page < 0 || evidence.PageCount < 0 || (evidence.PageCount == 0 && evidence.Page != 0) || (evidence.PageCount > 0 && evidence.Page > evidence.PageCount) {
+		return s.errorResult(toolError{"backend_unavailable", "Evidence backend returned an invalid result."})
+	}
+	if (page > 0 && evidence.Page != page) || (page == 0 && evidence.PageCount > 0 && evidence.Page != 1) {
 		return s.errorResult(toolError{"backend_unavailable", "Evidence backend returned an invalid result."})
 	}
 	reasons := []string{}
@@ -378,9 +399,6 @@ func (s *Server) withBackend(ctx context.Context, fn func(context.Context) error
 	requestCtx, cancel := context.WithTimeout(ctx, s.config.RequestTimeout)
 	defer cancel()
 	err := fn(requestCtx)
-	if err == nil {
-		return nil
-	}
 	if errors.Is(requestCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 		return toolError{"request_timeout", "The Findrail request timed out."}
 	}
@@ -412,7 +430,7 @@ func (s *Server) mapEvidenceError(err error) toolError {
 }
 
 func (s *Server) successResult(value any) (*mcp.CallToolResult, any, error) {
-	result, err := renderResult(value, false)
+	result, err := s.renderResult(value, false)
 	if err != nil {
 		return s.errorResult(toolError{"response_too_large", "The response is too large."})
 	}
@@ -424,35 +442,33 @@ func (s *Server) errorResult(err toolError) (*mcp.CallToolResult, any, error) {
 		err = toolError{"backend_unavailable", "Findrail backend unavailable."}
 	}
 	value := map[string]any{"error": map[string]string{"code": err.Code, "message": err.Message}}
-	result, _ := renderResult(value, true)
+	result, _ := s.renderResult(value, true)
 	result.IsError = true
 	return result, nil, nil
 }
 
 func (s *Server) fitSearch(result searchOutput) (*mcp.CallToolResult, any, error) {
-	for len(result.Results) >= 0 {
+	for {
 		result.Returned = len(result.Results)
 		result.ResultsTruncated = result.Total > result.Returned
-		wire, err := renderResult(result, false)
+		wire, err := s.renderResult(result, false)
 		if err == nil {
 			return wire, nil, nil
 		}
-		if len(result.Results) == 0 {
+		if len(result.Results) <= 1 {
 			return s.errorResult(toolError{"response_too_large", "The response is too large."})
 		}
 		result.Results = result.Results[:len(result.Results)-1]
 	}
-	return s.errorResult(toolError{"response_too_large", "The response is too large."})
 }
 
 func (s *Server) fitEvidence(result evidenceOutput) (*mcp.CallToolResult, any, error) {
 	original := []rune(result.Text)
-	if wire, err := renderResult(result, false); err == nil {
+	if wire, err := s.renderResult(result, false); err == nil {
 		return wire, nil, nil
 	}
 	lo, hi := 0, len(original)
 	var best *mcp.CallToolResult
-	bestN := -1
 	for lo <= hi {
 		mid := lo + (hi-lo)/2
 		candidate := result
@@ -460,9 +476,9 @@ func (s *Server) fitEvidence(result evidenceOutput) (*mcp.CallToolResult, any, e
 		candidate.TextChars = mid
 		candidate.Truncated = true
 		candidate.TruncationReasons = appendUnique(candidate.TruncationReasons, "mcp_response_budget")
-		wire, err := renderResult(candidate, false)
+		wire, err := s.renderResult(candidate, false)
 		if err == nil {
-			best, bestN = wire, mid
+			best = wire
 			lo = mid + 1
 		} else {
 			hi = mid - 1
@@ -471,11 +487,10 @@ func (s *Server) fitEvidence(result evidenceOutput) (*mcp.CallToolResult, any, e
 	if best == nil {
 		return s.errorResult(toolError{"response_too_large", "The response is too large."})
 	}
-	_ = bestN
 	return best, nil, nil
 }
 
-func renderResult(value any, isError bool) (*mcp.CallToolResult, error) {
+func (s *Server) renderResult(value any, isError bool) (*mcp.CallToolResult, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
@@ -485,7 +500,7 @@ func renderResult(value any, isError bool) (*mcp.CallToolResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(wire) > MaxResultBytes {
+	if len(wire)+s.resultOverhead > MaxResultBytes {
 		return nil, errors.New("MCP result exceeds byte budget")
 	}
 	return result, nil

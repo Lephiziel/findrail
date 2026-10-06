@@ -103,6 +103,20 @@ startup limit fails before stdio transport starts; diagnostics go to stderr and
 stdout remains free for MCP JSON-RPC. Ctrl+C, SIGTERM, client close, and stdin
 EOF close the process and its read-only database.
 
+The automated client tests verify MCP `2025-11-25` (legacy initialization) and
+`2026-07-28` (discovery and per-request metadata), using Go SDK v1.8.0. To run
+the compiled integration checks on the source binary:
+
+```bash
+python3 scripts/mcp_smoke.py bin/findrail
+```
+
+On Windows, use `python scripts/mcp_smoke.py bin/findrail.exe` after building
+that executable. CI runs this check on Linux, macOS and Windows. It verifies
+source and document denials, scoped totals, PDF snapshots, response budgets,
+source deletion and EOF shutdown. No particular AI client has been verified by
+these automated tests.
+
 ## Record a demo
 
 Use the synthetic public files in `examples/demo`, not a private folder. Build

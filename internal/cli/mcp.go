@@ -108,8 +108,21 @@ func runMCPWithIO(ctx context.Context, args []string, out, stderr io.Writer, ver
 	if err != nil {
 		return err
 	}
-	err = server.Run(ctx, &sdkmcp.IOTransport{Reader: reader, Writer: nopWriteCloser{out}, MaxLineLength: mcptransport.MaxFrameBytes})
-	if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+	writer, ok := out.(io.WriteCloser)
+	if !ok {
+		writer = nopWriteCloser{out}
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// SDK session shutdown drains active responses before closing the transport.
+	// Close both pipes on cancellation so a stalled client cannot block that drain.
+	stopClose := context.AfterFunc(runCtx, func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+	defer stopClose()
+	err = server.Run(runCtx, &sdkmcp.IOTransport{Reader: cancelOnEOFReader{reader, cancel}, Writer: writer, MaxLineLength: mcptransport.MaxFrameBytes})
+	if runCtx.Err() != nil {
 		return nil
 	}
 	return err
@@ -118,6 +131,19 @@ func runMCPWithIO(ctx context.Context, args []string, out, stderr io.Writer, ver
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
+
+type cancelOnEOFReader struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (r cancelOnEOFReader) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if errors.Is(err, io.EOF) {
+		r.cancel()
+	}
+	return n, err
+}
 
 func validateMCPID(value string) error {
 	if value == "" {
