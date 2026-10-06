@@ -46,3 +46,10 @@ migrates. GitHub `ModifiedAt` is snapshot commit time, not per-file modification
 Automated tests use an injected synthetic transport and generated archive
 fixtures, so CI needs no GitHub quota. A manual live check is optional. See the
 [short demo script](github-demo.md).
+
+`go test ./internal/cli -run '^TestGitHubCLIIntegration$' -count=1` runs the
+GitHub integration smoke on each CI platform. It executes compiled CLI test
+processes against a local HTTP fixture: local plus GitHub ingestion, changed and
+removed files, an unchanged file's new permalink, failed-refresh preservation,
+offline CLI/HTTP/scoped SDK MCP reads, and forget. Alternate origins exist only
+in the test helper; the release executable still uses fixed GitHub origins.

@@ -1,5 +1,6 @@
 // Package github prepares bounded, immutable snapshots of public GitHub repositories.
-// It performs network I/O only from Prepare; a Snapshot is an in-memory connector.
+// Only explicit resolution and preparation perform network I/O;
+// a Snapshot is an in-memory connector.
 package github
 
 import (
@@ -214,6 +215,14 @@ type Client struct {
 	apiBase string
 }
 
+// Repository is the validated identity needed to capture a storage revision
+// before resolving the moving branch or tag and downloading its archive.
+type Repository struct {
+	ID            int64
+	Owner, Repo   string
+	DefaultBranch string
+}
+
 func NewClient() *Client {
 	c := &http.Client{Timeout: 0}
 	c.CheckRedirect = secureRedirect
@@ -252,8 +261,16 @@ func (c *Client) Prepare(ctx context.Context, sel Selection) (*Snapshot, error) 
 }
 
 // Resolve identifies the public repository and commit without downloading its archive.
-// Callers can use the returned identity to establish a storage CAS guard first.
 func (c *Client) Resolve(ctx context.Context, sel Selection) (Metadata, error) {
+	repo, err := c.ResolveRepository(ctx, sel)
+	if err != nil {
+		return Metadata{}, err
+	}
+	return c.ResolveCommit(ctx, sel, repo)
+}
+
+// ResolveRepository checks the public repository's identity without resolving a ref.
+func (c *Client) ResolveRepository(ctx context.Context, sel Selection) (Repository, error) {
 	var repo struct {
 		ID            int64  `json:"id"`
 		Name          string `json:"name"`
@@ -266,14 +283,19 @@ func (c *Client) Resolve(ctx context.Context, sel Selection) (Metadata, error) {
 		} `json:"owner"`
 	}
 	if err := c.getJSON(ctx, "/repos/"+url.PathEscape(sel.Owner)+"/"+url.PathEscape(sel.Repo), &repo); err != nil {
-		return Metadata{}, err
+		return Repository{}, err
 	}
 	if repo.ID <= 0 || repo.Private || repo.Owner.Login == "" || repo.Name == "" || repo.DefaultBranch == "" {
-		return Metadata{}, errors.New("GitHub repository metadata is invalid or repository is not public")
+		return Repository{}, errors.New("GitHub repository metadata is invalid or repository is not public")
 	}
 	if !strings.EqualFold(repo.FullName, sel.Owner+"/"+sel.Repo) {
-		return Metadata{}, errors.New("repository canonical name changed; select it again explicitly")
+		return Repository{}, errors.New("repository canonical name changed; select it again explicitly")
 	}
+	return Repository{ID: repo.ID, Owner: repo.Owner.Login, Repo: repo.Name, DefaultBranch: repo.DefaultBranch}, nil
+}
+
+// ResolveCommit resolves the selected ref after callers have captured their CAS guard.
+func (c *Client) ResolveCommit(ctx context.Context, sel Selection, repo Repository) (Metadata, error) {
 	ref := sel.RefValue
 	if sel.RefMode == "default" {
 		ref = repo.DefaultBranch
@@ -286,14 +308,14 @@ func (c *Client) Resolve(ctx context.Context, sel Selection) (Metadata, error) {
 			} `json:"committer"`
 		} `json:"commit"`
 	}
-	if err := c.getJSON(ctx, "/repos/"+url.PathEscape(repo.Owner.Login)+"/"+url.PathEscape(repo.Name)+"/commits/"+url.PathEscape(ref), &commit); err != nil {
+	if err := c.getJSON(ctx, "/repos/"+url.PathEscape(repo.Owner)+"/"+url.PathEscape(repo.Repo)+"/commits/"+url.PathEscape(ref), &commit); err != nil {
 		return Metadata{}, err
 	}
 	if !fullSHA.MatchString(commit.SHA) || commit.Commit.Committer.Date.IsZero() {
 		return Metadata{}, errors.New("GitHub commit metadata is invalid")
 	}
 	commit.SHA = strings.ToLower(commit.SHA)
-	return Metadata{RepositoryID: repo.ID, Owner: repo.Owner.Login, Repo: repo.Name, RepositoryURL: "https://github.com/" + repo.Owner.Login + "/" + repo.Name, RefMode: sel.RefMode, RefValue: sel.RefValue, SelectedPath: sel.Path, MaxBytes: sel.MaxBytes, PolicyVersion: PolicyVersion, SHA: commit.SHA, CommitTime: commit.Commit.Committer.Date.UTC()}, nil
+	return Metadata{RepositoryID: repo.ID, Owner: repo.Owner, Repo: repo.Repo, RepositoryURL: "https://github.com/" + repo.Owner + "/" + repo.Repo, RefMode: sel.RefMode, RefValue: sel.RefValue, SelectedPath: sel.Path, MaxBytes: sel.MaxBytes, PolicyVersion: PolicyVersion, SHA: commit.SHA, CommitTime: commit.Commit.Committer.Date.UTC()}, nil
 }
 
 func (c *Client) prepareResolved(ctx context.Context, sel Selection, meta Metadata) (*Snapshot, error) {

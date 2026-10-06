@@ -100,9 +100,10 @@ func runGitHub(ctx context.Context, command string, args []string, out, stderr i
 		return publishGitHub(child, store, snapshot, expected, *jsonOutput, out)
 	}
 	client := githubconnector.NewClient()
-	// Resolve repository identity before opening storage or downloading the
-	// archive. The guard captured here must cover the whole remote operation.
-	meta, err := client.Resolve(child, sel)
+	// Resolve repository identity before opening storage or resolving the
+	// selected commit. A slow ref request must not permit a forgotten source
+	// or a newer published revision to be overwritten.
+	repo, err := client.ResolveRepository(child, sel)
 	if err != nil {
 		return fmt.Errorf("resolve GitHub repository: %w", err)
 	}
@@ -111,11 +112,15 @@ func runGitHub(ctx context.Context, command string, args []string, out, stderr i
 		return fmt.Errorf("open index: %w", err)
 	}
 	defer store.Close()
-	identity := githubconnector.SourceID(meta.RepositoryID, sel)
+	identity := githubconnector.SourceID(repo.ID, sel)
 	if g, e := store.GitHubSource(child, identity); e == nil {
 		expected = &g
 	} else if !errors.Is(e, ingest.ErrSourceGone) {
 		return e
+	}
+	meta, err := client.ResolveCommit(child, sel, repo)
+	if err != nil {
+		return fmt.Errorf("resolve GitHub commit: %w", err)
 	}
 	snapshot, err := client.PrepareResolved(child, sel, meta)
 	if err != nil {

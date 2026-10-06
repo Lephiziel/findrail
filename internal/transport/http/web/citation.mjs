@@ -48,7 +48,7 @@ export function sourceURI(value) {
     for (const [index, segment] of segments.entries()) {
       let decoded;
       try { decoded = decodeURIComponent(segment); } catch { throw new TypeError('evidence.uri has invalid escaping'); }
-      if (decoded === '' || decoded === '.' || decoded === '..' || decoded.includes('/') || decoded.includes('\\') || /[\u0000-\u001f\u007f\u2028\u2029]/u.test(decoded)) {
+      if (decoded === '' || decoded === '.' || decoded === '..' || decoded.includes('/') || decoded.includes('\\') || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(decoded)) {
         throw new TypeError('evidence.uri contains an unsafe path segment');
       }
       if (index === 2 && decoded !== 'blob') throw new TypeError('evidence.uri has invalid permalink components');

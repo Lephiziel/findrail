@@ -127,5 +127,16 @@ test('accepts only commit-pinned GitHub blob permalinks', () => {
     'https://github.com/example/demo/blob/'+sha+'/a%2Fb.md',
     'https://user@github.com/example/demo/blob/'+sha+'/a.md',
     'https://github.com:443/example/demo/blob/'+sha+'/a.md?x=1',
+    'https://github.com:443/example/demo/blob/'+sha+'/a.md',
+    'https://github.com/example/demo/blob/'+sha+'/a%00.md',
+    'https://github.com/example/demo/blob/'+sha+'/a%0A.md',
+    'https://github.com/example/demo/blob/'+sha+'/a%C2%85.md',
+    'https://github.com/example/demo/blob/'+sha+'/a.md?',
+    'https://github.com/example/demo/blob/'+sha+'/a.md#',
   ]) assert.throws(() => sourceURI(unsafe), /GitHub|unsafe|source URI/);
+});
+
+test('preserves percent-escaped backslashes in Unix file paths', () => {
+  const uri = 'file:///home/user/notes/a%5Cb.md';
+  assert.equal(sourceURI(uri), uri);
 });
