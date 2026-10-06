@@ -21,6 +21,9 @@ import (
 //go:embed web/index.html
 var indexHTML string
 
+//go:embed web/citation.mjs
+var citationModule []byte
+
 type Backend interface {
 	search.Engine
 	Sources(context.Context) ([]sqlite.SourceStatus, error)
@@ -54,6 +57,10 @@ func Handler(backend Backend, opts ...Option) http.Handler {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, indexHTML)
+	})
+	mux.HandleFunc("GET /assets/citation.mjs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Write(citationModule)
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

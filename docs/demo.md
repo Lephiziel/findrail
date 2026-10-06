@@ -32,6 +32,11 @@ three matching documents. Select **Preview** on `webhook-runbook.pdf`: the
 match is on **page 2 of 2**. **Copy location** includes `#page=2`; it does not
 launch an external PDF viewer.
 
+For a Markdown citation, select the sentence in the page 2 preview and choose
+**Copy as Markdown**. Paste it into a note: the selected passage appears in a
+text code block with the PDF title, `file:` source and `#page=2`. With no
+selection, the button copies the whole visible page preview instead.
+
 ## Watch an edit appear
 
 Search for **cobalt**: the initial demo has no match. In

@@ -59,6 +59,12 @@ func TestLocalSearchAPIAndBrowserBoundary(t *testing.T) {
 		{"/api/v1/documents/" + id + "?page=0", "127.0.0.1:7766", "", 400, "page"},
 		{"/api/v1/documents/missing", "127.0.0.1:7766", "", 404, "not found"},
 		{"/api/v1/sync", "127.0.0.1:7766", "", 200, "\"enabled\":false"},
+		{"/assets/citation.mjs", "127.0.0.1:7766", "", 200, "export function formatCitation"},
+		{"/assets/citation.mjs", "127.0.0.1:7766", "http://127.0.0.1:7766", 200, "export function formatCitation"},
+		{"/assets/citation.mjs", "attacker.example:7766", "", 403, "local host"},
+		{"/assets/citation.mjs", "127.0.0.1:7766", "https://attacker.example", 403, "same origin"},
+		{"/assets/unknown.mjs", "127.0.0.1:7766", "", 404, ""},
+		{"/assets/citation_test.mjs", "127.0.0.1:7766", "", 404, ""},
 		{"/api/v1/documents/" + id, "attacker.example:7766", "", 403, "local host"},
 		{"/", "127.0.0.1:7766", "", 200, "Findrail"},
 		{"/api/v1/search?q=webhook", "attacker.example:7766", "", 403, "local host"},
@@ -78,6 +84,16 @@ func TestLocalSearchAPIAndBrowserBoundary(t *testing.T) {
 		}
 		if strings.HasPrefix(tc.path, "/api/") && strings.Contains(w.Body.String(), "<script>") {
 			t.Error("unescaped HTML in JSON")
+		}
+		if tc.path == "/assets/citation.mjs" && tc.code == http.StatusOK {
+			if got := w.Header().Get("Content-Type"); got != "text/javascript; charset=utf-8" {
+				t.Errorf("citation module content type = %q", got)
+			}
+			for _, header := range []string{"X-Content-Type-Options", "Cache-Control", "Content-Security-Policy"} {
+				if w.Header().Get(header) == "" {
+					t.Errorf("citation module missing %s header", header)
+				}
+			}
 		}
 	}
 }
@@ -193,5 +209,15 @@ func TestShutdownDrainsActiveSearchBeforeReturning(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("server did not finish shutdown")
+	}
+}
+
+func TestCitationAssetDoesNotNeedBackend(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7766/assets/citation.mjs", nil)
+	req.Host = "127.0.0.1:7766"
+	recorder := httptest.NewRecorder()
+	transport.Handler(nil).ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "export function formatCitation") {
+		t.Fatalf("citation asset response = %d %s", recorder.Code, recorder.Body.String())
 	}
 }
