@@ -59,6 +59,16 @@ file. The UI displays plain text, safely highlights query words and offers PDF
 page navigation. If files change before reindexing, the preview still shows the
 version that was indexed.
 
+`Copy location` copies only the original address. `Copy as Markdown` copies the
+selected passage from the current preview, or the whole current preview when
+nothing useful is selected. For PDFs, both the citation text and its `file:`
+source retain the current page. The result is always an indexed snapshot; the
+browser does not read the original file again. A truncated preview is marked in
+the citation, and the same Markdown is shown in a read-only field when the
+Clipboard API is unavailable or refuses the copy. The local `file:` address
+preserves provenance, but it is not a public link and may not open in every
+Markdown client.
+
 ## Upgrade
 
 Stop Findrail and back up its dedicated data directory. Migration 2 preserves
