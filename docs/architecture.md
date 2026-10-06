@@ -20,7 +20,9 @@ flowchart TD
 ```
 
 This diagram describes the implemented path. Cloud adapters, semantic
-retrieval, desktop launching, and MCP are future extensions.
+retrieval, and desktop launching are future extensions. The source build also
+has a read-only stdio MCP transport over the same search and indexed-evidence
+contracts.
 
 ## Boundaries
 
@@ -35,6 +37,7 @@ retrieval, desktop launching, and MCP are future extensions.
 | `internal/store/sqlite` | Schema, transactions, content hashes, FTS, sources | SQLite driver and domain contracts |
 | `internal/search` | Retrieval request / response and literal query handling | Standard library |
 | `internal/transport/http` | Loopback HTTP and embedded browser UI | Search interface, source status model |
+| `internal/transport/mcp` | Scoped read-only stdio MCP tools and response budgets | Search interface, read-only SQLite evidence |
 | `internal/cli` | Composition, command parsing, presentation | Application modules |
 | `cmd/findrail` | Process entry, signals, version | CLI |
 
@@ -113,8 +116,9 @@ These boundaries do not protect against a compromised OS account or local malwar
 
 Remote serving requires an explicit authentication design, authorization, TLS,
 and operational documentation. Changing the default bind address is not that
-design. MCP will initially expose read-only search and evidence retrieval, with
-source scopes and bounded responses.
+design. The implemented MCP transport is local stdio only: it exposes
+read-only search and evidence retrieval with fixed source scopes and bounded
+responses; it does not provide a remote endpoint.
 
 ## Growth path
 
@@ -125,7 +129,7 @@ source scopes and bounded responses.
 | Connected alpha | GitHub adapter, credential vault, cursors, retry / deletion semantics |
 | Extensible beta | Connector SDK stabilization, versioned manifests, conformance suite |
 | Semantic beta | Optional embedding worker, passage retrieval, hybrid evaluation |
-| Clients | Desktop launcher, read-only MCP, editor / browser integrations |
+| Clients | Source-built read-only stdio MCP | Desktop launcher, editor / browser integrations |
 | Larger deployments | Operated sync / storage only after demand |
 
 The application becomes a service platform only if user needs and measurements

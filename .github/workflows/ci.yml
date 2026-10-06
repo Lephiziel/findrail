@@ -43,6 +43,12 @@ jobs:
       - name: Compiled alpha smoke (Windows)
         if: runner.os == 'Windows'
         run: python scripts/smoke.py ./findrail.exe
+      - name: Compiled MCP smoke (Unix)
+        if: runner.os != 'Windows'
+        run: python3 scripts/mcp_smoke.py ./findrail
+      - name: Compiled MCP smoke (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/mcp_smoke.py ./findrail.exe
   race:
     runs-on: ubuntu-latest
     steps:

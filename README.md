@@ -6,15 +6,16 @@ Findrail is an open-source, local-first search app built in Go. Choose folders
 of notes, code and text PDFs; search remembered words, preview the matching
 source and copy its original location. Changes in those folders refresh the
 index while the app runs. Keyword search needs no AI account and uploads no
-documents. Connected services and optional semantic retrieval are the next
-product stages.
+documents. Source builds also provide a scoped, read-only stdio MCP server.
+Connected services and optional semantic retrieval are the next product stages.
 
 **Status: local alpha, `0.1.0-alpha.1`.** It is ready for testing, not a stable
-release. GitHub ingestion, OCR, DOCX, semantic search, desktop launching and MCP
+release. GitHub ingestion, OCR, DOCX, semantic search and desktop launching
 remain on the roadmap.
 
 [Releases](https://github.com/Lephiziel/findrail/releases) ·
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
+[MCP integration](docs/mcp.md) ·
 [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) ·
 [Русский](docs/ru/overview.md)
 
@@ -108,7 +109,8 @@ stop startup and preserve the prior committed inventory.
 - Source health: current refresh state, last success, errors and watcher fallback.
 - Atomic full-source scans: failures preserve the previous inventory.
 - Search reads the last committed snapshot while an update is in progress.
-- CLI / JSON output, loopback web UI and a read-only HTTP API.
+- CLI / JSON output, loopback web UI, read-only HTTP API and source-built
+  read-only stdio MCP (`findrail mcp`).
 - Logical source removal, leaving original files untouched.
 
 See [alpha behaviour and limits](docs/local-alpha.md) and the
@@ -167,7 +169,7 @@ Linux; `~/Library/Application Support/Findrail` on macOS;
 | Sources | Local folders | Read-only GitHub, bookmarks, work tools |
 | Freshness | File watching and full reconciliation | Resumable remote sync |
 | Retrieval | Literal AND terms, source filter, PDF page attribution | Query evaluation, structured filters, optional semantics |
-| Clients | CLI, local web UI, HTTP | Desktop launcher, read-only MCP, editors |
+| Clients | CLI, local web UI, HTTP, read-only stdio MCP | Desktop launcher, editors |
 | Extensions | Experimental connector contract | Versioned SDK and conformance harness |
 
 The advantage to validate is easy installation, useful retrieval, inspectable
@@ -188,7 +190,7 @@ and [official Go module guidance](https://go.dev/doc/modules/layout).
 | `internal/extract/`, `internal/ingest/` | Text / PDF extraction and atomic indexing |
 | `internal/store/sqlite/`, `internal/search/` | Persistence, FTS and evidence |
 | `internal/sync/` | Source discovery, watchers, retries and health |
-| `internal/transport/` | HTTP and embedded UI; planned MCP |
+| `internal/transport/` | HTTP, embedded UI and source-built stdio MCP |
 | `internal/semantic/` | Future semantic retrieval design |
 | `pkg/connector/` | Experimental public connector contract |
 | `api/`, `docs/` | Implemented API and product documentation |
