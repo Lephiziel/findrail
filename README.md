@@ -15,6 +15,7 @@ GitHub, OCR, DOCX, semantic search and desktop launching remain on the roadmap.
 
 [Releases](https://github.com/Lephiziel/findrail/releases) ·
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
+[Source management](docs/source-management.md) ·
 [MCP integration](docs/mcp.md) ·
 [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) ·
 [Русский](docs/ru/overview.md)
@@ -72,6 +73,13 @@ your registered folders. Ctrl+C stops it. No background daemon
 is installed. You can register another folder using `index` while the server
 runs; it will appear automatically.
 
+Source builds also let `start` create an empty index and manage folder/public
+GitHub sources in the Sources panel. Folder selection uses an absolute path on
+the machine running Findrail; browser file pickers cannot choose a server path.
+Manual GitHub refresh, job cancellation and logical removal are documented in
+[source management](docs/source-management.md). Existing release archives do
+not yet include this new web management flow.
+
 ### Build from source
 
 Requires Go 1.26 or newer. No CGO is required.
@@ -82,7 +90,7 @@ cd findrail
 go build -o bin/findrail ./cmd/findrail
 ./bin/findrail index --data-dir .findrail examples/notes
 ./bin/findrail search --data-dir .findrail "webhook"
-./bin/findrail serve --data-dir .findrail
+./bin/findrail start --data-dir .findrail
 ```
 
 Options precede positional arguments. If you use `--data-dir`, use the same
@@ -130,6 +138,8 @@ stop startup and preserve the prior committed inventory.
   read-only stdio MCP (`findrail mcp`).
 - Logical source removal, leaving original files untouched.
 - Manual, commit-pinned public GitHub text snapshots with offline preview.
+- Empty-index onboarding and web source management in source builds (`start`);
+  release archives do not yet include these changes.
 
 See [alpha behaviour and limits](docs/local-alpha.md) and the
 [validation report](docs/validation.md).
@@ -211,6 +221,7 @@ and [official Go module guidance](https://go.dev/doc/modules/layout).
 | `internal/store/sqlite/`, `internal/search/` | Persistence, FTS and evidence |
 | `internal/sync/` | Source discovery, watchers, retries and health |
 | `internal/transport/` | HTTP, embedded UI and source-built stdio MCP |
+| `internal/sourceapp/` | `start`-only source operations and in-memory jobs |
 | `internal/semantic/` | Future semantic retrieval design |
 | `pkg/connector/` | Experimental public connector contract |
 | `api/`, `docs/` | Implemented API and product documentation |

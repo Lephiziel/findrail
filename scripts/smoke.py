@@ -75,6 +75,14 @@ def demo_smoke(binary):
                 except (urllib.error.URLError, TimeoutError):
                     return False
             eventually(ready)
+            assert get('/api/v1/capabilities')['management'] is False
+            try:
+                request = urllib.request.Request(base + '/api/v1/sources', data=b'{}', method='POST',
+                                                 headers={'Origin': base, 'Content-Type': 'application/json'})
+                urllib.request.urlopen(request, timeout=3)
+                raise AssertionError('demo unexpectedly enabled source mutations')
+            except urllib.error.HTTPError as error:
+                assert error.code != 202
             response = get('/api/v1/search?q=idempotency')
             assert response['total'] == 3, response
             pdf = next(r for r in response['results'] if r['media_type'] == 'application/pdf')
@@ -101,6 +109,107 @@ def demo_smoke(binary):
         if sys.platform != 'win32':
             assert process.returncode == 0, process.returncode
             assert not workspace.exists(), workspace
+
+
+def source_management_smoke(binary):
+    with tempfile.TemporaryDirectory(prefix='findrail-management-smoke-') as temporary:
+        parent = pathlib.Path(temporary)
+        notes = parent / 'Notes Ω'
+        notes.mkdir()
+        original = notes / 'synthetic.md'
+        original.write_text('management marker citation fixture', encoding='utf-8')
+        pdf_original = notes / 'fixture.pdf'
+        pdf_original.write_bytes(pdf_fixture(['first page only', 'managementpdfphrase page evidence']))
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        process = subprocess.Popen([str(binary), 'start', '--no-open', '--data-dir', str(parent / 'index'),
+                                    '--addr', f'127.0.0.1:{port}'], stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, encoding='utf-8')
+        base = f'http://127.0.0.1:{port}'
+
+        def get(path):
+            with urllib.request.urlopen(base + path, timeout=3) as response:
+                return json.load(response)
+
+        def mutate(path, method, body=None, origin=base, token=None):
+            headers = {'Origin': origin, 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin'}
+            if token:
+                headers['X-Findrail-Token'] = token
+            data = None if body is None else json.dumps(body).encode()
+            request = urllib.request.Request(base + path, data=data, method=method, headers=headers)
+            try:
+                with urllib.request.urlopen(request, timeout=4) as response:
+                    return response.status, json.load(response) if response.status != 204 else None
+            except urllib.error.HTTPError as error:
+                return error.code, json.load(error)
+
+        def wait_job(job_id):
+            result = {}
+            def terminal():
+                nonlocal result
+                result = get('/api/v1/jobs/' + job_id)
+                return result['status'] in ('succeeded', 'failed', 'canceled')
+            eventually(terminal, timeout=15)
+            assert result['status'] == 'succeeded', result
+            return result
+
+        try:
+            def ready():
+                if process.poll() is not None:
+                    raise RuntimeError('Empty start exited: ' + process.stderr.read())
+                try:
+                    return get('/api/v1/capabilities').get('management') is True
+                except (urllib.error.URLError, TimeoutError):
+                    return False
+            eventually(ready)
+            assert get('/api/v1/sources')['sources'] == []
+            session = get('/api/v1/session')
+            token = session['token']
+            assert token and len(token) >= 32
+            assert mutate('/api/v1/sources', 'POST', {'type': 'folder', 'path': str(notes)},
+                          origin='http://attacker.invalid', token=token)[0] == 403
+            assert get('/api/v1/jobs')['jobs'] == []
+            status, accepted = mutate('/api/v1/sources', 'POST', {'type': 'folder', 'path': str(notes)}, token=token)
+            assert status == 202, (status, accepted)
+            wait_job(accepted['job']['id'])
+            sources = get('/api/v1/sources')['sources']
+            assert len(sources) == 1 and sources[0]['documents'] == 2
+            source_id = sources[0]['id']
+            matches = get('/api/v1/search?q=management+marker')['results']
+            assert len(matches) == 1
+            assert 'citation fixture' in get('/api/v1/documents/' + matches[0]['id'])['text']
+            pdf_match = get('/api/v1/search?q=managementpdfphrase')['results'][0]
+            assert pdf_match['page'] == 2 and pdf_match['uri'].endswith('#page=2'), pdf_match
+            pdf_preview = get('/api/v1/documents/' + pdf_match['id'] + '?page=2')
+            assert pdf_preview['page_count'] == 2 and 'page evidence' in pdf_preview['text']
+            original.write_text('management marker citation fixture watcherrefresh', encoding='utf-8')
+            eventually(lambda: get('/api/v1/search?q=watcherrefresh')['total'] == 1, timeout=12)
+            status, accepted = mutate('/api/v1/sources/' + source_id + '/refresh', 'POST', token=token)
+            assert status == 202, (status, accepted)
+            wait_job(accepted['job']['id'])
+            status, accepted = mutate('/api/v1/sources/' + source_id, 'DELETE', token=token)
+            assert status == 202, (status, accepted)
+            wait_job(accepted['job']['id'])
+            assert get('/api/v1/sources')['sources'] == []
+            assert get('/api/v1/search?q=management+marker')['total'] == 0
+            try:
+                get('/api/v1/documents/' + matches[0]['id'])
+                raise AssertionError('removed preview remained available')
+            except urllib.error.HTTPError as error:
+                assert error.code == 404
+            assert original.read_text(encoding='utf-8') == 'management marker citation fixture watcherrefresh'
+            assert pdf_original.exists()
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.communicate(timeout=8)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate(timeout=2)
+        if sys.platform != 'win32':
+            assert process.returncode == 0, process.returncode
 
 
 def main():
@@ -186,8 +295,9 @@ def main():
         # Windows terminate() is an OS kill, not a graceful Unix SIGTERM.
         if sys.platform != 'win32':
             assert process.returncode == 0, process.returncode
+    source_management_smoke(binary)
     demo_smoke(binary)
-    print('Findrail alpha smoke passed: embedded demo, one-command start, CLI, PDF worker, preview, auto-refresh, rollback and HTTP.')
+    print('Findrail smoke passed: empty start, source management APIs/jobs, demo read-only boundary, CLI, PDF worker, preview, auto-refresh, rollback and HTTP.')
 
 
 if __name__ == '__main__':
