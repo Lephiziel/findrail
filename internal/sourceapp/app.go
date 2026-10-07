@@ -34,8 +34,10 @@ type Store interface {
 	ingest.RefreshStore
 	Sources(context.Context) ([]sqlite.SourceStatus, error)
 	ForgetSource(context.Context, string) error
+	ForgetSourceRegistration(context.Context, string, string) error
 	GitHubSource(context.Context, string) (sqlite.GitHubSource, error)
 	PublishGitHub(context.Context, *gh.Snapshot, *sqlite.GitHubSource) (ingest.Result, sqlite.GitHubSource, error)
+	BeginConfigure(context.Context, connector.Source, string, int64, int64) (ingest.Scan, error)
 	RecordGitHubError(context.Context, sqlite.GitHubSource, string)
 }
 
@@ -425,12 +427,55 @@ func (a *App) AddFolderWithDOCX(path string, maxDOCXBytes int64) (Job, error) {
 		if e != nil {
 			return "", e
 		}
-		return fmt.Sprintf("Indexed %d documents", r.Seen), nil
+		return fmt.Sprintf("Indexed %d documents; %d DOCX files skipped", r.Seen, r.SkippedDOCX), nil
 	})
 }
 func filepathIsAbs(p string) bool { return filepath.IsAbs(p) }
 func (a *App) folder(s connector.Source) (*filesystem.Connector, error) {
-	return filesystem.NewWithOptions(s.Root, filesystem.Options{MaxTextBytes: s.MaxTextBytes, MaxPDFBytes: s.MaxPDFBytes, MaxDOCXBytes: s.MaxDOCXBytes, ExtractPDF: pdfextract.Extractor(a.executable)}, a.dataDir)
+	return filesystem.NewWithOptions(s.Root, filesystem.Options{MaxTextBytes: s.MaxTextBytes, MaxPDFBytes: s.MaxPDFBytes, MaxDOCXBytes: s.MaxDOCXBytes, RegistrationToken: s.RegistrationToken, RegistrationRevision: s.RegistrationRevision, ExtractPDF: pdfextract.Extractor(a.executable)}, a.dataDir)
+}
+
+func (a *App) Configure(id string, maxDOCXBytes int64) (Job, error) {
+	if maxDOCXBytes < 0 || maxDOCXBytes > 16<<20 {
+		return Job{}, errors.New("max_docx_bytes must be 0–16777216")
+	}
+	sources, err := a.store.Sources(a.root)
+	if err != nil {
+		return Job{}, err
+	}
+	var found *sqlite.SourceStatus
+	for i := range sources {
+		if sources[i].ID == id {
+			found = &sources[i]
+			break
+		}
+	}
+	if found == nil {
+		return Job{}, errors.New("not_found")
+	}
+	if found.Kind != "filesystem" {
+		return Job{}, errors.New("filesystem_source_required")
+	}
+	previousLimit, token, revision := found.MaxDOCXBytes, found.RegistrationToken, found.RegistrationRevision
+	updated := found.Source
+	updated.MaxDOCXBytes = maxDOCXBytes
+	return a.submit("configure", id, id, func(ctx context.Context, j *Job) (string, error) {
+		a.phase(j, "indexing")
+		unlock, e := a.coordinator.Acquire(ctx, id)
+		if e != nil {
+			return "", e
+		}
+		defer unlock()
+		c, e := a.folder(updated)
+		if e != nil {
+			return "", e
+		}
+		r, e := ingest.Configure(ctx, a.store, c, token, revision, previousLimit)
+		if e != nil {
+			return "", e
+		}
+		return fmt.Sprintf("Updated DOCX policy; indexed %d documents; %d DOCX files skipped", r.Seen, r.SkippedDOCX), nil
+	})
 }
 
 func (a *App) AddGitHub(repo, ref, subdir string) (Job, error) {
@@ -562,9 +607,11 @@ func (a *App) Remove(id string) (Job, error) {
 		return Job{}, err
 	}
 	exists := false
+	var foundRegistrationToken string
 	for _, s := range sources {
 		if s.ID == id {
 			exists = true
+			foundRegistrationToken = s.RegistrationToken
 			break
 		}
 	}
@@ -616,7 +663,7 @@ func (a *App) Remove(id string) (Job, error) {
 			return "", e
 		}
 		defer unlock()
-		if err := a.store.ForgetSource(ctx, id); err != nil {
+		if err := a.store.ForgetSourceRegistration(ctx, id, foundRegistrationToken); err != nil {
 			return "", err
 		}
 		return "Source removed from index; originals are unchanged", nil

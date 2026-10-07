@@ -10,13 +10,15 @@ import (
 
 // Source identifies one explicitly configured collection of documents.
 type Source struct {
-	ID           string `json:"id"`
-	Kind         string `json:"kind"`
-	Name         string `json:"name"`
-	Root         string `json:"root"`
-	MaxTextBytes int64  `json:"max_text_bytes,omitempty"`
-	MaxPDFBytes  int64  `json:"max_pdf_bytes,omitempty"`
-	MaxDOCXBytes int64  `json:"max_docx_bytes,omitempty"`
+	ID                   string `json:"id"`
+	Kind                 string `json:"kind"`
+	Name                 string `json:"name"`
+	Root                 string `json:"root"`
+	MaxTextBytes         int64  `json:"max_text_bytes,omitempty"`
+	MaxPDFBytes          int64  `json:"max_pdf_bytes,omitempty"`
+	MaxDOCXBytes         int64  `json:"max_docx_bytes,omitempty"`
+	RegistrationToken    string `json:"-"`
+	RegistrationRevision int64  `json:"-"`
 }
 
 // Document is an extracted, UTF-8 document with a stable identity.

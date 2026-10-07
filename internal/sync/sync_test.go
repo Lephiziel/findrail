@@ -49,7 +49,7 @@ func TestAutomaticLifecycle(t *testing.T) {
 			}
 			defer s.Close()
 			factory := func(source connector.Source) (*filesystem.Connector, error) {
-				return filesystem.New(source.Root, source.MaxTextBytes, data)
+				return filesystem.NewWithOptions(source.Root, filesystem.Options{MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken, RegistrationRevision: source.RegistrationRevision}, data)
 			}
 			conn, err := filesystem.New(root, 1<<20, data)
 			if err != nil {
@@ -129,7 +129,7 @@ func TestMissingRootPreservesSnapshotAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := syncer.New(s, syncer.Config{Factory: func(source connector.Source) (*filesystem.Connector, error) {
-		return filesystem.New(source.Root, source.MaxTextBytes)
+		return filesystem.NewWithOptions(source.Root, filesystem.Options{MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken, RegistrationRevision: source.RegistrationRevision})
 	}, Interval: 50 * time.Millisecond, PollOnly: true})
 	done := make(chan struct{})
 	go func() { defer close(done); m.Run(ctx) }()

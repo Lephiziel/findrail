@@ -27,6 +27,7 @@ type Status struct {
 	WatchWarning  string `json:"watch_warning,omitempty"`
 	Skipped       int    `json:"skipped"`
 	SkippedPDF    int    `json:"skipped_pdf,omitempty"`
+	SkippedDOCX   int    `json:"skipped_docx,omitempty"`
 }
 type Config struct {
 	Interval          time.Duration
@@ -293,6 +294,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 					s.LastSuccessAt = time.Now().UTC().Format(time.RFC3339Nano)
 					s.Skipped = result.Skipped
 					s.SkippedPDF = result.SkippedPDF
+					s.SkippedDOCX = result.SkippedDOCX
 				})
 			}
 		}

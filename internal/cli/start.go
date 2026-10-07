@@ -87,6 +87,7 @@ func runStartWithManagement(ctx context.Context, args []string, out, stderr io.W
 	factory := func(source connector.Source) (*filesystem.Connector, error) {
 		return filesystem.NewWithOptions(source.Root, filesystem.Options{
 			MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes,
+			RegistrationToken: source.RegistrationToken, RegistrationRevision: source.RegistrationRevision,
 			ExtractPDF: pdfextract.Extractor(executable),
 		}, dir)
 	}

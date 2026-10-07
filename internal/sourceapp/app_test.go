@@ -127,7 +127,7 @@ func TestGitHubAddRefreshOfflinePreservesSnapshotAndStableIdentity(t *testing.T)
 		t.Fatalf("add failed: %+v", done)
 	}
 	sources, err := store.Sources(context.Background())
-	if err != nil || len(sources) != 1 {
+	if err != nil || len(sources) != 1 || sources[0].MaxDOCXBytes != 0 {
 		t.Fatalf("sources: %+v %v", sources, err)
 	}
 	id := sources[0].ID
@@ -489,6 +489,9 @@ func TestRemoveWaitsForSharedWatcherCoordination(t *testing.T) {
 	}
 	if got := await(t, app, added.ID); got.Status != "succeeded" {
 		t.Fatal(got)
+	}
+	if sources := mustSources(t, store); len(sources) != 1 || sources[0].MaxDOCXBytes != 8<<20 {
+		t.Fatalf("new folder DOCX default not saved: %+v", sources)
 	}
 	watcherUnlock, err := coord.Acquire(ctx, added.SourceID)
 	if err != nil {

@@ -47,10 +47,12 @@ func New(root string, maxBytes int64, excluded ...string) (*Connector, error) {
 }
 
 type Options struct {
-	MaxTextBytes int64
-	MaxPDFBytes  int64
-	ExtractPDF   func(context.Context, io.Reader, int64) ([]connector.Page, error)
-	MaxDOCXBytes int64
+	MaxTextBytes         int64
+	MaxPDFBytes          int64
+	ExtractPDF           func(context.Context, io.Reader, int64) ([]connector.Page, error)
+	MaxDOCXBytes         int64
+	RegistrationToken    string
+	RegistrationRevision int64
 }
 
 func NewWithOptions(root string, options Options, excluded ...string) (*Connector, error) {
@@ -91,7 +93,7 @@ func NewWithOptions(root string, options Options, excluded ...string) (*Connecto
 		canonicalExclusions = append(canonicalExclusions, excludedAbs)
 	}
 	id := fmt.Sprintf("fs_%x", sha256.Sum256([]byte(abs)))
-	return &Connector{source: connector.Source{ID: id, Kind: "filesystem", Name: filepath.Base(abs), Root: abs, MaxTextBytes: maxBytes, MaxPDFBytes: options.MaxPDFBytes, MaxDOCXBytes: options.MaxDOCXBytes}, maxBytes: maxBytes, maxPDFBytes: options.MaxPDFBytes, maxDOCXBytes: options.MaxDOCXBytes, extractPDF: options.ExtractPDF, excluded: canonicalExclusions}, nil
+	return &Connector{source: connector.Source{ID: id, Kind: "filesystem", Name: filepath.Base(abs), Root: abs, MaxTextBytes: maxBytes, MaxPDFBytes: options.MaxPDFBytes, MaxDOCXBytes: options.MaxDOCXBytes, RegistrationToken: options.RegistrationToken, RegistrationRevision: options.RegistrationRevision}, maxBytes: maxBytes, maxPDFBytes: options.MaxPDFBytes, maxDOCXBytes: options.MaxDOCXBytes, extractPDF: options.ExtractPDF, excluded: canonicalExclusions}, nil
 }
 
 func (c *Connector) Source() connector.Source { return c.source }

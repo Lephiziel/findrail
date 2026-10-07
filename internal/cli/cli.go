@@ -134,7 +134,7 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 		return err
 	}
 	newConnector := func(source connector.Source) (*filesystem.Connector, error) {
-		return filesystem.NewWithOptions(source.Root, filesystem.Options{MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes, ExtractPDF: pdfextract.Extractor(executable)}, dir)
+		return filesystem.NewWithOptions(source.Root, filesystem.Options{MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken, RegistrationRevision: source.RegistrationRevision, ExtractPDF: pdfextract.Extractor(executable)}, dir)
 	}
 	switch args[0] {
 	case "index":
