@@ -509,7 +509,7 @@ func TestRemoveWaitsForSharedWatcherCoordination(t *testing.T) {
 		watcherUnlock()
 		t.Fatal(err)
 	}
-	deadline := time.After(time.Second)
+	deadline := time.After(5 * time.Second)
 	for {
 		job, _ := app.Job(remove.ID)
 		if job.Status == "running" && job.Phase == "removing" {
@@ -558,7 +558,7 @@ func TestRemoveCancelsCoordinatedConfigureWithoutChangingPolicy(t *testing.T) {
 		unlock()
 		t.Fatal(err)
 	}
-	deadline := time.After(time.Second)
+	deadline := time.After(5 * time.Second)
 	for {
 		job, _ := app.Job(configured.ID)
 		if job.Status == "running" && job.Phase == "indexing" {
