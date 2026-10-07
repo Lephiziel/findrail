@@ -27,13 +27,14 @@ type RefreshStore interface {
 var ErrSourceGone = errors.New("source is no longer registered")
 
 type Result struct {
-	Source     connector.Source `json:"source"`
-	Seen       int              `json:"seen"`
-	Updated    int              `json:"updated"`
-	Unchanged  int              `json:"unchanged"`
-	Removed    int              `json:"removed"`
-	Skipped    int              `json:"skipped"`
-	SkippedPDF int              `json:"skipped_pdf,omitempty"`
+	Source      connector.Source `json:"source"`
+	Seen        int              `json:"seen"`
+	Updated     int              `json:"updated"`
+	Unchanged   int              `json:"unchanged"`
+	Removed     int              `json:"removed"`
+	Skipped     int              `json:"skipped"`
+	SkippedPDF  int              `json:"skipped_pdf,omitempty"`
+	SkippedDOCX int              `json:"skipped_docx,omitempty"`
 }
 
 func Run(ctx context.Context, store Store, source connector.Connector) (Result, error) {
@@ -68,6 +69,7 @@ func run(ctx context.Context, begin func(context.Context, connector.Source) (Sca
 	})
 	result.Seen, result.Skipped = report.Seen, report.Skipped
 	result.SkippedPDF = report.SkippedPDF
+	result.SkippedDOCX = report.SkippedDOCX
 	if err != nil {
 		return result, fmt.Errorf("scan failed; previous index preserved: %w", err)
 	}
