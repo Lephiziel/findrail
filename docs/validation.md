@@ -126,7 +126,7 @@ source removal/original preservation. SQLite lifecycle tests exercise Configure
 rollback, cross-handle revision compare-and-swap, stale refresh rejection and
 forget/re-add ABA prevention. Node checks retain the four polling/invalidation
 regressions and cover pending-preview invalidation after Configure. A
-short extractor fuzz run completed (2-second requested duration; 32,121
+short extractor fuzz run completed (2-second requested duration; 78,133
 executions in the final run). No crash was found.
 
 Resource spot check (Linux, compiled CGO-free binary; elapsed includes fresh
@@ -147,4 +147,5 @@ on the reviewed head; the transient Linux test timeout was rerun successfully.
 
 Configure policy and snapshot share one SQLite transaction. Schema 4
 registration tokens and revisions guard independent handles and forget/re-add
-ABA; GitHub metadata remains under its separate revision guard.
+ABA; GitHub metadata remains under its separate revision guard. Canceled workers
+cannot republish watcher status after a source has been forgotten.
