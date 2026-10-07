@@ -1,7 +1,9 @@
 package http_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
 	"github.com/Lephiziel/findrail/internal/search"
+	"github.com/Lephiziel/findrail/internal/sourceapp"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	transport "github.com/Lephiziel/findrail/internal/transport/http"
 )
@@ -94,6 +97,180 @@ func TestLocalSearchAPIAndBrowserBoundary(t *testing.T) {
 					t.Errorf("citation module missing %s header", header)
 				}
 			}
+		}
+	}
+}
+
+func TestManagementRequiresSameOriginCapabilityAndStrictJSON(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	store, err := sqlite.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	app := sourceapp.New(ctx, store, dir, "/unused")
+	defer func() {
+		c, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		if err := app.Close(c); err != nil {
+			t.Error(err)
+		}
+	}()
+	ready := make(chan string, 1)
+	served := make(chan error, 1)
+	go func() {
+		served <- transport.Serve(ctx, "127.0.0.1:0", store, transport.WithManagement(app), transport.WithReady(func(u string) error { ready <- u; return nil }))
+	}()
+	base := <-ready
+	u, _ := url.Parse(base)
+	origin := "http://" + u.Host
+	defer func() {
+		cancel()
+		select {
+		case err := <-served:
+			if err != nil {
+				t.Errorf("serve: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("server did not stop")
+		}
+	}()
+	client := &http.Client{Timeout: 2 * time.Second}
+	session, err := client.Get(base + "/api/v1/session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var capability struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(session.Body).Decode(&capability); err != nil {
+		t.Fatal(err)
+	}
+	session.Body.Close()
+	if len(capability.Token) < 32 {
+		t.Fatal("missing process token")
+	}
+	if session.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("session was cacheable: %q", session.Header.Get("Cache-Control"))
+	}
+	root := filepath.Join(t.TempDir(), "must-not-open")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"type":"folder","path":"` + root + `"}`)
+	request := func(originValue, token, site, content string, payload []byte) int {
+		r, _ := http.NewRequest("POST", base+"/api/v1/sources", bytes.NewReader(payload))
+		if originValue != "<absent>" {
+			r.Header.Set("Origin", originValue)
+		}
+		if token != "" {
+			r.Header.Set("X-Findrail-Token", token)
+		}
+		if site != "" {
+			r.Header.Set("Sec-Fetch-Site", site)
+		}
+		if content != "" {
+			r.Header.Set("Content-Type", content)
+		}
+		resp, e := client.Do(r)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, tc := range []struct {
+		name, origin, token, site, content string
+		body                               []byte
+		want                               int
+	}{
+		{"foreign origin", "http://evil.invalid", capability.Token, "same-origin", "application/json", body, 403},
+		{"wrong port origin", origin + "9", capability.Token, "same-origin", "application/json", body, 403},
+		{"null origin", "null", capability.Token, "same-origin", "application/json", body, 403},
+		{"missing origin", "<absent>", capability.Token, "same-origin", "application/json", body, 403},
+		{"bad token", origin, "bad", "same-origin", "application/json", body, 403},
+		{"cross site", origin, capability.Token, "cross-site", "application/json", body, 403},
+		{"text plain", origin, capability.Token, "same-origin", "text/plain", body, 400},
+		{"unknown field", origin, capability.Token, "same-origin", "application/json", []byte(`{"type":"folder","path":"x","unknown":true}`), 400},
+		{"trailing json", origin, capability.Token, "same-origin", "application/json", append(append([]byte{}, body...), []byte(` {}`)...), 400},
+		{"oversized", origin, capability.Token, "same-origin", "application/json", bytes.Repeat([]byte("x"), 17<<10), 413},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := request(tc.origin, tc.token, tc.site, tc.content, tc.body); got != tc.want {
+				t.Fatalf("status %d, want %d", got, tc.want)
+			}
+		})
+	}
+	if len(app.Jobs()) != 0 {
+		t.Fatalf("rejected request scheduled work: %+v", app.Jobs())
+	}
+	badHost, _ := http.NewRequest("POST", base+"/api/v1/sources", bytes.NewReader(body))
+	badHost.Host = "localhost:1"
+	badHost.Header.Set("Origin", origin)
+	badHost.Header.Set("Content-Type", "application/json")
+	badHost.Header.Set("X-Findrail-Token", capability.Token)
+	badHost.Header.Set("Sec-Fetch-Site", "same-origin")
+	hostResponse, err := client.Do(badHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostResponse.Body.Close()
+	if hostResponse.StatusCode != 403 {
+		t.Fatalf("spoofed Host status %d", hostResponse.StatusCode)
+	}
+	if len(app.Jobs()) != 0 {
+		t.Fatal("spoofed Host scheduled work")
+	}
+	postCtx, cancelPost := context.WithCancel(context.Background())
+	validRequest, _ := http.NewRequestWithContext(postCtx, http.MethodPost, base+"/api/v1/sources", bytes.NewReader(body))
+	validRequest.Header.Set("Origin", origin)
+	validRequest.Header.Set("Content-Type", "application/json")
+	validRequest.Header.Set("X-Findrail-Token", capability.Token)
+	validRequest.Header.Set("Sec-Fetch-Site", "same-origin")
+	validResponse, err := client.Do(validRequest)
+	if err != nil {
+		cancelPost()
+		t.Fatal(err)
+	}
+	var accepted struct {
+		Job sourceapp.Job `json:"job"`
+	}
+	if err := json.NewDecoder(validResponse.Body).Decode(&accepted); err != nil {
+		validResponse.Body.Close()
+		cancelPost()
+		t.Fatal(err)
+	}
+	validResponse.Body.Close()
+	cancelPost()
+	if validResponse.StatusCode != 202 {
+		t.Fatalf("valid request status %d", validResponse.StatusCode)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if job, ok := app.Job(accepted.Job.ID); ok && job.Status == "succeeded" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("accepted folder job did not finish: %+v", app.Jobs())
+}
+
+func TestReadOnlyHandlerDoesNotExposeMutationController(t *testing.T) {
+	s, err := sqlite.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	handler := transport.Handler(s)
+	for _, path := range []string{"/api/v1/sources", "/api/v1/jobs/anything/cancel"} {
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7766"+path, strings.NewReader(`{"type":"folder"}`))
+		r.Header.Set("Origin", "http://127.0.0.1:7766")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code == http.StatusAccepted {
+			t.Fatalf("read-only handler accepted %s", path)
 		}
 	}
 }

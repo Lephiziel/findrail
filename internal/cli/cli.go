@@ -40,8 +40,8 @@ Usage:
 
 Options must precede positional arguments. Run COMMAND --help for details.
 Local alpha: text, Markdown, source code, text PDFs, preview and automatic refresh.
-Public GitHub file snapshots use explicit indexing and manual refresh. Source builds also include a
-read-only stdio MCP server.
+start includes local source management in source builds; serve and demo are read-only.
+Public GitHub snapshots are manually refreshed. Source builds also include a read-only stdio MCP server.
 `
 
 func Run(ctx context.Context, args []string, out, stderr io.Writer, version string) error {
@@ -63,7 +63,7 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 		return runMCP(ctx, args[1:], out, stderr, version)
 	}
 	if args[0] == "demo" {
-		return runDemo(ctx, args[1:], out, stderr, openBrowser, runStart)
+		return runDemo(ctx, args[1:], out, stderr, openBrowser, runStartReadOnly)
 	}
 	if args[0] == "index-github" || args[0] == "refresh-github" {
 		return runGitHub(ctx, args[0], args[1:], out, stderr)

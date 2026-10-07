@@ -194,7 +194,6 @@ func TestStartRejectsBadInputBeforeCreatingIndex(t *testing.T) {
 		{"text-limit", []string{"--max-bytes", "0", root}},
 		{"pdf-limit", []string{"--max-pdf-bytes", "-1", root}},
 		{"limit-without-folder", []string{"--max-bytes", "100"}},
-		{"first-run-without-folder", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := filepath.Join(t.TempDir(), "new-index")
@@ -213,6 +212,92 @@ func TestStartRejectsBadInputBeforeCreatingIndex(t *testing.T) {
 	}
 	if _, err := os.Stat(data); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("help created an index: %v", err)
+	}
+}
+
+func TestStartCreatesEmptyIndexAndServes(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "empty-index")
+	base, stop, _, _ := startForTest(t, []string{"--data-dir", data, "--addr", "127.0.0.1:0", "--no-open"}, func(string) error {
+		t.Fatal("--no-open launched a browser")
+		return nil
+	})
+	resp, err := http.Get(base + "/api/v1/sources")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sources endpoint: %s", resp.Status)
+	}
+	capability, err := http.Get(base + "/api/v1/capabilities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var enabled map[string]bool
+	if err := json.NewDecoder(capability.Body).Decode(&enabled); err != nil {
+		t.Fatal(err)
+	}
+	capability.Body.Close()
+	if !enabled["management"] {
+		t.Fatal("start did not enable source management")
+	}
+	if _, err := os.Stat(filepath.Join(data, "findrail.db")); err != nil {
+		t.Fatalf("empty index not created: %v", err)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadOnlyStartCompositionHasNoManagement(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	out := &startOutput{urls: make(chan string, 1)}
+	done := make(chan error, 1)
+	data := t.TempDir()
+	go func() {
+		done <- runStartReadOnly(ctx, []string{"--data-dir", data, "--addr", "127.0.0.1:0", "--no-open"}, out, io.Discard, func(string) error { return nil })
+	}()
+	var base string
+	select {
+	case base = <-out.urls:
+	case err := <-done:
+		t.Fatalf("read-only startup failed: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("listener did not start")
+	}
+	defer func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("read-only server did not stop")
+		}
+	}()
+	resp, err := http.Get(base + "/api/v1/capabilities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var caps map[string]bool
+	if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if caps["management"] {
+		t.Fatal("read-only composition enabled management")
+	}
+	r, _ := http.NewRequest(http.MethodPost, base+"/api/v1/sources", strings.NewReader(`{"type":"folder","path":"/tmp"}`))
+	r.Header.Set("Origin", base)
+	r.Header.Set("Content-Type", "application/json")
+	result, err := http.DefaultClient.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.Body.Close()
+	if result.StatusCode == http.StatusAccepted {
+		t.Fatal("read-only composition accepted a source mutation")
 	}
 }
 
