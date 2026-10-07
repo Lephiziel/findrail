@@ -114,3 +114,34 @@ CI runs these alongside the eleven citation tests. All fifteen passed locally.
 Go tests and race checks passed on the original PR head. The review's Chromium
 launch failed with SIGSEGV before loading the page; this run does not claim an
 additional browser validation beyond the author's recorded checks.
+
+## DOCX source-build validation · 2026-10-07
+
+The DOCX fixtures are synthetic ZIP/XML generated in Go tests and in the smoke
+script; no Word/LibreOffice, personal files, or runtime Python dependency is
+required. The compiled Linux smoke uses the production extractor and covers CLI
+search/preview, source-build Add-folder defaults, no-page evidence, a temp-file
+rename save, rollback and source removal/original preservation. The existing
+four UI polling/invalidation regression tests remain unchanged and pass. A
+short extractor fuzz run completed (2-second requested duration; 39,057 and
+140,153 executions in two runs). No crash was found.
+
+Resource spot check (Linux, compiled CGO-free binary; elapsed includes fresh
+SQLite setup and indexing; output is extracted text bytes):
+
+| Fixture | DOCX input bytes | Extracted output bytes | Elapsed | Result |
+|---|---:|---:|---:|---|
+| Valid package near default input cap; ignored stored media | 7,501,120 | 19 | 0.006 s | Indexed |
+| High-ratio package with 16 MiB declared ignored media | 17,187 | 19 | 0.006 s | Indexed; media was not inflated |
+
+Checks run on this working branch: `go test ./...`, `go test -race ./...`,
+`go vet ./...`, `go mod verify`, `CGO_ENABLED=0 go build`, compiled CLI/HTTP
+smoke, MCP smoke, `node --test internal/transport/http/web/*_test.mjs` (15
+tests), `git diff --check`, and bounded `FuzzExtract` smoke all passed. Native
+Windows/macOS execution and browser automation were not performed here; these
+checks do not substitute for platform CI.
+
+**Scope caveat:** existing-folder Configure/re-index API and UI are not included
+in this change yet. DOCX policy can currently be selected on a new folder in the
+UI or by explicitly re-indexing a folder with CLI flags. Do not interpret this
+validation as completion of the full Configure race/rollback acceptance suite.

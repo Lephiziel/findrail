@@ -12,6 +12,8 @@
 - The database is plaintext, protected by local filesystem permissions rather than encryption.
 - Common credential-like names, hidden entries, and symlinks are skipped. This is not a universal secret detector.
 - Document contents are treated as text and never executed.
+- DOCX body extraction is bounded, offline, in-memory and stores plaintext; the
+  index is not a sanitization/redaction tool. Unsupported Word features are omitted.
 - HTTP is loopback-only. `serve` and `demo` remain read-only. `start` additionally
   exposes source mutations guarded by the actual bound authority, exact Origin,
   process-memory CSRF capability, Fetch Metadata and strict bounded JSON. The

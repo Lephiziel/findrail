@@ -1,10 +1,10 @@
 # Data model
 
-## Implemented schema 3
+## Implemented schema 4
 
 | Entity | Identity | Stored fields |
 |---|---|---|
-| Source | Hash of canonical filesystem root | Kind, name, root, last success, text / PDF input limits |
+| Source | Hash of canonical filesystem root | Kind, name, root, last success, text / PDF / DOCX input limits |
 | Document | Hash of source ID and relative path | Title, source ID, original URI, path, content, hash, byte size, modification time, scan token, media type, page count |
 | FTS entry | Document row ID | Tokenized title and content, maintained by triggers |
 | PDF page | Document ID + one-based page number | Plain text for the original page |
@@ -22,7 +22,8 @@ probability. Square brackets mark keyword matches in plain-text snippets.
 
 Migration 3 preserves schema 1/2 documents, FTS and PDF pages and adds GitHub
 metadata with cascade deletion. Migration 2 leaves existing sources text-only until
-explicitly re-indexed. See [upgrade instructions](local-alpha.md#upgrade).
+explicitly re-indexed. Migration 4 adds DOCX policy with a disabled legacy default.
+See [upgrade instructions](local-alpha.md#upgrade).
 
 ## Future entities
 

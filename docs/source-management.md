@@ -26,8 +26,10 @@ Examples:
 - macOS: `/Users/alex/Library/Notes`
 - Windows: `C:\Users\Alex\Documents\Notes`
 
-Folder defaults match the CLI: 1 MiB per text file and 16 MiB per PDF, using the
-existing bounded PDF child process. Hidden entries, symlinks, credential-like
+Folder defaults match the CLI: 1 MiB per text file, 16 MiB per PDF, and 8 MiB
+per DOCX in source builds. DOCX is disabled for existing folders until explicitly
+re-indexed with a DOCX-enabled policy. DOCX is a bounded plain-text body snapshot;
+see [the supported subset](docx.md). Hidden entries, symlinks, credential-like
 filenames and the index directory remain excluded. Originals are read-only from
 Findrail's perspective. Adding the same canonical folder again reports that it
 already exists; use **Refresh** to update it. Watch notifications and periodic

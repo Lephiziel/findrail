@@ -109,6 +109,12 @@ paths:
                 repository: {type: string, maxLength: 300}
                 ref: {type: string, maxLength: 1024}
                 subdirectory: {type: string, maxLength: 1024}
+                max_docx_bytes:
+                  type: integer
+                  minimum: 0
+                  maximum: 16777216
+                  default: 8388608
+                  description: Folder DOCX input budget; 0 disables DOCX.
       responses:
         '202': {description: Job accepted}
         '400': {$ref: '#/components/responses/BadRequest'}
@@ -384,6 +390,9 @@ components:
         max_pdf_bytes:
           type: integer
           description: 0 disables PDF extraction for this source
+        max_docx_bytes:
+          type: integer
+          description: Folder DOCX input limit in bytes; 0 disables DOCX (legacy sources default to 0).
         github:
           type: object
           description: Present only for public GitHub snapshots
