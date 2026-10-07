@@ -12,11 +12,17 @@ remembered word, inspecting the match and recovering its original location.
   author's recording of the running web UI, without added captions or end card.
 - [Short English launch copy](announcement.md): X / Bluesky post and follow-ups.
 - [Contributing](../../CONTRIBUTING.md): small tasks and contribution guidance.
+- [Project facts and media](press-kit.md): descriptions, version boundaries,
+  download links and a reproducible editor walkthrough.
 - [Alpha feedback](https://github.com/Lephiziel/findrail/issues/3),
   [Apple Silicon installation](https://github.com/Lephiziel/findrail/issues/4)
   and [multilingual search examples](https://github.com/Lephiziel/findrail/issues/5).
 
-## First distribution experiment
+## Initial distribution experiment
+
+The following steps describe the first experiment. The author reports that
+the publication step has already happened; use the record below rather than
+treating it as a new posting assignment.
 
 1. Publish one visual launch post from the author's existing X account. Use
    the running-app demo, describe shipped behaviour and link to the repository.
@@ -33,16 +39,19 @@ remembered word, inspecting the match and recovering its original location.
    useful workflow. Expand to another channel when the first experiment gives
    evidence about the audience or message.
 
-The author has an existing X account without an established audience. Its post
-is a public launch reference, not a reliable source of reach on its own. The
-next distribution work is a relevant community submission after checking that
-community's current project-sharing rules and obtaining access to the author's
-account. Choose communities around local notes / developer tools rather than
-posting the same copy everywhere.
+The author has already published on X, Reddit and Product Hunt. The small
+observed reach does not establish a lack of demand. The next experiment is
+three editorial submissions: [Console](https://console.dev/selection-criteria),
+[Terminal Trove](https://terminaltrove.com/submit/) and
+[Changelog](https://changelog.com/news/submit). These channels accept project
+suggestions; inclusion is an editorial decision, not a promised outcome.
+Terminal Trove covers CLI tools, so describe the CLI accurately and show its
+optional local web interface without calling it a TUI. Do not submit the same
+tool by both email and form.
 
-This is a testable starting choice, not a claim that X is the most effective
-channel for every open-source project. No paid promotion is required for this
-first experiment.
+No paid promotion is required for the next editorial experiment. Its purpose
+is to reach relevant readers and observe actual use; it does not predict
+publication, reach or a number of stars.
 
 ## Launch record
 
@@ -51,8 +60,21 @@ first experiment.
 | GitHub description and topics | Set on 2026-10-02; [setup screenshot](../assets/github-launch-setup.jpg) |
 | Demo and English material | In this repository; web recording added on 2026-10-02 |
 | Feedback and first contribution tasks | Issues #3, #4 and #5 opened |
-| External social post | Not published; account access needed |
+| Initial external publication | Reported by the author: [X](https://x.com/lephiziel0/status/2105971042418057666), [r/golang](https://www.reddit.com/r/golang/comments/1wsniww/comment/pdfknf9/?context=3), [r/selfhosted](https://www.reddit.com/r/selfhosted/comments/1wvclw4/comment/pdfiq1o/?context=3), [Product Hunt](https://www.producthunt.com/products/findrail?launch=findrail) |
+| Editorial submissions | Prepared separately; sending and acceptance unverified |
 | User installations / repeat use | Not measured yet |
+
+Some linked public pages could not be independently retrieved during the
+2026-10-07 audit. The publication record follows the author's reports and does
+not assert continued public visibility or platform moderation status. Release
+asset download counts are not unique installations or active users.
+
+## Version boundaries
+
+Promote alpha.2's local workflow first. MCP and public GitHub file snapshots
+require a source build today; do not send binary users to those features
+without that qualification. The MCP client can forward retrieved text to its
+own model provider. See [the facts sheet](press-kit.md#version-boundaries).
 
 ## Platform constraints checked on 2026-10-02
 

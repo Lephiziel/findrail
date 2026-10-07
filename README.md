@@ -23,7 +23,8 @@ GitHub, OCR, DOCX, semantic search and desktop launching remain on the roadmap.
 
 [Try the three-document demo](docs/demo.md) ·
 [Watch / download the 37-second video](docs/assets/demo.mp4) ·
-[Give alpha feedback](https://github.com/Lephiziel/findrail/issues/3)
+[Give alpha feedback](https://github.com/Lephiziel/findrail/issues/3) ·
+[Project facts and media](docs/launch/press-kit.md)
 
 [Try the synthetic Turkish and English search evaluation](docs/search-evaluation.md).
 
@@ -39,6 +40,20 @@ Download the archive for Linux, macOS or Windows from
 These alpha binaries are unsigned; macOS may require an explicit allowance in
 Privacy & Security. Each archive contains installation instructions and license
 notices.
+
+Direct downloads for **`0.1.0-alpha.2`**:
+
+| Platform | Archive |
+|---|---|
+| Linux, x86-64 | [Linux amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.2/findrail_0.1.0-alpha.2_linux-amd64.tar.gz) |
+| Linux, ARM64 | [Linux arm64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.2/findrail_0.1.0-alpha.2_linux-arm64.tar.gz) |
+| macOS, Intel | [macOS amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.2/findrail_0.1.0-alpha.2_darwin-amd64.tar.gz) |
+| macOS, Apple Silicon | [macOS arm64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.2/findrail_0.1.0-alpha.2_darwin-arm64.tar.gz) |
+| Windows, x86-64 | [Windows amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.2/findrail_0.1.0-alpha.2_windows-amd64.zip) |
+
+[Checksums for these archives](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.2/SHA256SUMS.txt).
+These archives cover local search, `demo` and `start`. MCP and public GitHub
+snapshots currently require a source build; see the [version table](docs/launch/press-kit.md#version-boundaries).
 
 ```bash
 # Linux / macOS, inside the extracted directory:
