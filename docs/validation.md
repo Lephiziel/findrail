@@ -122,7 +122,8 @@ script; no Word/LibreOffice, personal files, or runtime Python dependency is
 required. The compiled Linux smoke uses the production extractor and covers CLI
 search/preview, source-build Add-folder policy, authenticated Configure API,
 disable/enable re-index, no-page evidence, temp-file rename save, rollback and
-source removal/original preservation. SQLite lifecycle tests exercise Configure
+source removal/original preservation. MCP smoke retrieves the DOCX snapshot with
+no page attribution through both supported protocols. SQLite lifecycle tests exercise Configure
 rollback, cross-handle revision compare-and-swap, stale refresh rejection and
 forget/re-add ABA prevention. Node checks retain the four polling/invalidation
 regressions and cover pending-preview invalidation after Configure. A

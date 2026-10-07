@@ -12,7 +12,7 @@ import tempfile
 import threading
 
 sys.dont_write_bytecode = True
-from smoke import pdf_fixture
+from smoke import docx_fixture, pdf_fixture
 
 VERSIONS = ("2025-11-25", "2026-07-28")
 META_VERSION = "io.modelcontextprotocol/protocolVersion"
@@ -206,6 +206,8 @@ def main():
         (other / "foreign.md").write_text("idempotency FOREIGN_MCP_MARKER", encoding="utf-8")
         pdf_path = docs / "mcp-runbook.pdf"
         pdf_path.write_bytes(pdf_fixture(["introduction", "webhook idempotency evidence"]))
+        docx_path = docs / "mcp-meeting-notes.docx"
+        docx_path.write_bytes(docx_fixture("mcpdocxphrase fictional meeting snapshot"))
         (docs / "large.md").write_text("mcpbudget " + "🙂" * 32768, encoding="utf-8")
         indexed = run(binary, "index", "--data-dir", data, "--json", docs)
         assert indexed["seen"] >= 1
@@ -243,6 +245,12 @@ def main():
                 assert "webhook idempotency evidence" in evidence["text"] and evidence["uri"].endswith("#page=2"), evidence
                 assert evidence["text_chars"] == len(evidence["text"]) and evidence["page"] == 2, evidence
                 assert evidence["indexed_snapshot"] and evidence["content_untrusted"], evidence
+                docx_result = client.call("findrail_search", query="mcpdocxphrase", source_id=source, limit=5)["structuredContent"]
+                assert docx_result["total"] == 1, docx_result
+                docx_hit = docx_result["results"][0]
+                docx_evidence = client.call("findrail_get_evidence", document_id=docx_hit["id"], source_id=source)["structuredContent"]
+                assert "mcpdocxphrase" in docx_evidence["text"] and docx_evidence.get("page", 0) == 0, docx_evidence
+                assert docx_evidence["uri"].startswith("file:") and "#page=" not in docx_evidence["uri"], docx_evidence
                 default_page = client.call("findrail_get_evidence", document_id=pdf["id"], source_id=source)["structuredContent"]
                 assert default_page["page"] == 1 and "introduction" in default_page["text"], default_page
                 expect_error(client.call("findrail_get_evidence", document_id=pdf["id"], source_id=source, page=3), "invalid_page")
@@ -281,7 +289,7 @@ def main():
                 client.process.terminate()
             finally:
                 client.close()
-    print("Findrail MCP smoke passed: both protocols, scoped counts, PDF snapshots, byte budgets, deletion, EOF and shutdown.")
+    print("Findrail MCP smoke passed: both protocols, scoped DOCX/PDF evidence, source scopes, byte budgets, deletion, EOF and shutdown.")
 
 
 if __name__ == "__main__":
