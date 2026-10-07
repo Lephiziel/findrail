@@ -535,6 +535,62 @@ func TestRemoveWaitsForSharedWatcherCoordination(t *testing.T) {
 	}
 }
 
+func TestRemoveCancelsCoordinatedConfigureWithoutChangingPolicy(t *testing.T) {
+	app, store, _ := openApp(t)
+	root := t.TempDir()
+	note := filepath.Join(root, "note.md")
+	if err := os.WriteFile(note, []byte("configure remove race"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	added, err := app.AddFolder(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job := await(t, app, added.ID); job.Status != "succeeded" {
+		t.Fatal(job)
+	}
+	unlock, err := app.coordinator.Acquire(context.Background(), added.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured, err := app.Configure(added.SourceID, 0)
+	if err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	deadline := time.After(time.Second)
+	for {
+		job, _ := app.Job(configured.ID)
+		if job.Status == "running" && job.Phase == "indexing" {
+			break
+		}
+		select {
+		case <-app.WaitChannel():
+		case <-deadline:
+			unlock()
+			t.Fatal("Configure did not wait for shared source coordinator")
+		}
+	}
+	removed, err := app.Remove(added.SourceID)
+	if err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+	if job := await(t, app, configured.ID); job.Status != "canceled" {
+		t.Fatalf("Configure status: %+v", job)
+	}
+	if job := await(t, app, removed.ID); job.Status != "succeeded" {
+		t.Fatalf("Remove status: %+v", job)
+	}
+	if sources := mustSources(t, store); len(sources) != 0 {
+		t.Fatalf("source survived Remove: %+v", sources)
+	}
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("original changed or removed: %v", err)
+	}
+}
+
 func TestCancelAfterCommitRemainsSucceeded(t *testing.T) {
 	a, _, _ := openApp(t)
 	committed, finish := make(chan struct{}), make(chan struct{})

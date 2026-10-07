@@ -108,6 +108,44 @@ INSERT INTO github_sources(source_id,repository_id,owner,repo,repository_url,ref
 	}
 }
 
+func TestMigrationTwoPreservesPDFPolicyAndPages(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "findrail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"001_init.sql", "002_local_alpha.sql"} {
+		data, e := os.ReadFile(filepath.Join("migrations", name))
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = db.Exec(string(data)); e != nil {
+			t.Fatalf("apply %s: %v", name, e)
+		}
+	}
+	if _, err = db.Exec(`INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes) VALUES('legacy-two','filesystem','Schema two','/legacy',524288,16777216);
+INSERT INTO documents(id,source_id,title,uri,path,content,content_hash,size_bytes,modified_at,scan_token,media_type,page_count) VALUES('legacy-two-doc','legacy-two','paper.pdf','file:///legacy/paper.pdf','paper.pdf','intro pagemarker','hash',10,'2026-01-01T00:00:00Z','old','application/pdf',2);
+INSERT INTO document_pages(document_id,page_number,content) VALUES('legacy-two-doc',1,'intro'),('legacy-two-doc',2,'pagemarker retained page');`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := sqlite.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sources, err := s.Sources(context.Background())
+	if err != nil || len(sources) != 1 || sources[0].MaxTextBytes != 524288 || sources[0].MaxPDFBytes != 16777216 || sources[0].MaxDOCXBytes != 0 {
+		t.Fatalf("schema 2 settings: %+v %v", sources, err)
+	}
+	response := find(t, s, "pagemarker", "legacy-two", 10)
+	if response.Total != 1 || response.Results[0].Page != 2 {
+		t.Fatalf("schema 2 PDF FTS lost: %+v", response)
+	}
+}
+
 func TestDOCXFolderSnapshotDisableAndRemoval(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)

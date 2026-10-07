@@ -125,7 +125,9 @@ disable/enable re-index, no-page evidence, temp-file rename save, rollback and
 source removal/original preservation. MCP smoke retrieves the DOCX snapshot with
 no page attribution through both supported protocols. SQLite lifecycle tests exercise Configure
 rollback, cross-handle revision compare-and-swap, stale refresh rejection and
-forget/re-add ABA prevention. Node checks retain the four polling/invalidation
+forget/re-add ABA prevention. Configure/Remove coordination is exercised with
+barriers; migrations from schema 1/2/3 retain documents, PDF pages and GitHub
+metadata with legacy DOCX disabled. Node checks retain the four polling/invalidation
 regressions and cover pending-preview invalidation after Configure. A
 short extractor fuzz run completed (2-second requested duration; 78,133
 executions in the final run). No crash was found.
