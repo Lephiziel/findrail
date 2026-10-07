@@ -723,7 +723,9 @@ func (s *Store) ForgetSourceRegistration(ctx context.Context, id, token string) 
 	if s.db == nil {
 		return errors.New("index is read-only")
 	}
-	if id == "" || token == "" { return ingest.ErrSourceGone }
+	if id == "" || token == "" {
+		return ingest.ErrSourceGone
+	}
 	r, err := s.db.ExecContext(ctx, "DELETE FROM sources WHERE id=? AND registration_token=?", id, token)
 	if err != nil {
 		return err
