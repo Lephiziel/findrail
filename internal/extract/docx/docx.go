@@ -241,6 +241,9 @@ func parseContentTypes(ctx context.Context, data []byte) (map[string]bool, bool,
 		if e != nil {
 			return nil, false, fmt.Errorf("%w: content types XML", ErrCorrupt)
 		}
+		if _, ok := t.(xml.Directive); ok {
+			return nil, false, fmt.Errorf("%w: XML directives are not allowed", ErrCorrupt)
+		}
 		tokens++
 		if tokens > MaxTokens {
 			return nil, false, ErrLimit
@@ -312,6 +315,9 @@ func mainTarget(ctx context.Context, data []byte) (string, error) {
 		}
 		if e != nil {
 			return "", fmt.Errorf("%w: relationships XML", ErrCorrupt)
+		}
+		if _, ok := t.(xml.Directive); ok {
+			return "", fmt.Errorf("%w: XML directives are not allowed", ErrCorrupt)
 		}
 		tokens++
 		if tokens > MaxTokens {
@@ -387,6 +393,9 @@ func parseBody(ctx context.Context, data []byte) (string, error) {
 		if e != nil {
 			return "", fmt.Errorf("%w: document XML", ErrCorrupt)
 		}
+		if _, ok := t.(xml.Directive); ok {
+			return "", fmt.Errorf("%w: XML directives are not allowed", ErrCorrupt)
+		}
 		tokens++
 		if tokens > MaxTokens {
 			return "", ErrLimit
@@ -425,7 +434,7 @@ func parseBody(ctx context.Context, data []byte) (string, error) {
 						paragraphs++
 						inP = true
 					}
-				case "del", "moveFrom", "instrText", "delText":
+				case "del", "moveFrom", "instrText", "delText", "drawing", "pict", "object", "txbxContent":
 					skip++
 				case "vanish", "webHidden":
 					isVisible := false
@@ -460,7 +469,7 @@ func parseBody(ctx context.Context, data []byte) (string, error) {
 			}
 			if x.Name.Space == wNS {
 				switch x.Name.Local {
-				case "del", "moveFrom", "instrText", "delText":
+				case "del", "moveFrom", "instrText", "delText", "drawing", "pict", "object", "txbxContent":
 					if skip > 0 {
 						skip--
 					}

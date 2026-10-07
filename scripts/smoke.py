@@ -100,6 +100,13 @@ def demo_smoke(binary):
                 raise AssertionError('demo unexpectedly enabled source mutations')
             except urllib.error.HTTPError as error:
                 assert error.code != 202
+            try:
+                request = urllib.request.Request(base + '/api/v1/sources/example/configure', data=b'{"max_docx_bytes":0}', method='POST',
+                                                 headers={'Origin': base, 'Content-Type': 'application/json'})
+                urllib.request.urlopen(request, timeout=3)
+                raise AssertionError('demo unexpectedly exposed Configure')
+            except urllib.error.HTTPError as error:
+                assert error.code == 404
             response = get('/api/v1/search?q=idempotency')
             assert response['total'] == 3, response
             pdf = next(r for r in response['results'] if r['media_type'] == 'application/pdf')
@@ -137,7 +144,7 @@ def source_management_smoke(binary):
         original.write_text('management marker citation fixture', encoding='utf-8')
         pdf_original = notes / 'fixture.pdf'
         pdf_original.write_bytes(pdf_fixture(['first page only', 'managementpdfphrase page evidence']))
-        docx_original = notes / 'fictional.docx'
+        docx_original = notes / 'réunion-черновик.docx'
         docx_original.write_bytes(docx_fixture('managementdocxphrase original snapshot'))
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', 0))
@@ -188,6 +195,11 @@ def source_management_smoke(binary):
             assert token and len(token) >= 32
             assert mutate('/api/v1/sources', 'POST', {'type': 'folder', 'path': str(notes)},
                           origin='http://attacker.invalid', token=token)[0] == 403
+            assert mutate('/api/v1/sources/not-a-source/configure', 'POST', {'max_docx_bytes': 0},
+                          origin='http://attacker.invalid', token=token)[0] == 403
+            assert mutate('/api/v1/sources/not-a-source/configure', 'POST', {'max_docx_bytes': 0, 'extra': 1},
+                          token=token)[0] == 400
+            assert mutate('/api/v1/sources/not-a-source/configure', 'POST', {}, token=token)[0] == 400
             assert get('/api/v1/jobs')['jobs'] == []
             status, accepted = mutate('/api/v1/sources', 'POST', {'type': 'folder', 'path': str(notes), 'max_docx_bytes': 1 << 20}, token=token)
             assert status == 202, (status, accepted)
@@ -205,6 +217,7 @@ def source_management_smoke(binary):
             docx_match = get('/api/v1/search?q=managementdocxphrase')['results'][0]
             docx_preview = get('/api/v1/documents/' + docx_match['id'])
             assert docx_preview.get('page_count', 0) == 0 and '#page=' not in docx_preview['uri'] and 'managementdocxphrase' in docx_preview['text']
+            assert docx_preview['uri'].startswith('file:') and 'черновик' not in docx_preview['uri']
             original.write_text('management marker citation fixture watcherrefresh', encoding='utf-8')
             eventually(lambda: get('/api/v1/search?q=watcherrefresh')['total'] == 1, timeout=12)
             staged = notes / 'word-save.tmp.docx'
@@ -214,6 +227,22 @@ def source_management_smoke(binary):
             status, accepted = mutate('/api/v1/sources/' + source_id + '/refresh', 'POST', token=token)
             assert status == 202, (status, accepted)
             wait_job(accepted['job']['id'])
+            status, accepted = mutate('/api/v1/sources/' + source_id + '/configure', 'POST',
+                                      {'max_docx_bytes': 0}, token=token)
+            assert status == 202, (status, accepted)
+            configured_off = wait_job(accepted['job']['id'])
+            assert '1 DOCX files skipped' in configured_off.get('result', ''), configured_off
+            assert get('/api/v1/search?q=managementdocxphrase')['total'] == 0
+            assert get('/api/v1/search?q=management+marker')['total'] == 1
+            assert get('/api/v1/search?q=managementpdfphrase')['total'] == 1
+            sources = get('/api/v1/sources')['sources']
+            assert sources[0].get('max_docx_bytes', 0) == 0
+            eventually(lambda: any(s.get('skipped_docx') == 1 for s in get('/api/v1/sync')['sources']))
+            status, accepted = mutate('/api/v1/sources/' + source_id + '/configure', 'POST',
+                                      {'max_docx_bytes': 1 << 20}, token=token)
+            assert status == 202, (status, accepted)
+            wait_job(accepted['job']['id'])
+            assert get('/api/v1/search?q=renamedsnapshot')['total'] == 1
             status, accepted = mutate('/api/v1/sources/' + source_id, 'DELETE', token=token)
             assert status == 202, (status, accepted)
             wait_job(accepted['job']['id'])
@@ -227,6 +256,8 @@ def source_management_smoke(binary):
             assert original.read_text(encoding='utf-8') == 'management marker citation fixture watcherrefresh'
             assert pdf_original.exists()
             assert docx_original.exists()
+            with zipfile.ZipFile(docx_original) as archive:
+                assert 'renamedsnapshot' in archive.read('word/document.xml').decode('utf-8')
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -262,6 +293,8 @@ def main():
 
         indexed = run('index', '--max-docx-bytes', str(8 << 20), '--json', str(docs))
         assert indexed['seen'] == 5 and indexed['skipped_pdf'] == 1, indexed
+        stored = run('sources', '--json')['sources']
+        assert len(stored) == 1 and stored[0]['max_docx_bytes'] == 8 << 20, stored
         assert run('search', '--json', 'webhook')['total'] == 1
         assert run('search', '--json', 'поиск')['total'] == 1
         found = run('search', '--json', 'constellation')['results'][0]
@@ -298,6 +331,8 @@ def main():
                     return False
             eventually(ready)
             assert get('/api/v1/sync')['enabled']
+            start_sources = get('/api/v1/sources')['sources']
+            assert len(start_sources) == 1 and start_sources[0]['max_docx_bytes'] == 8 << 20
             evidence = get('/api/v1/documents/' + found['id'] + '?page=2')
             assert evidence['page_count'] == 2 and 'constellation' in evidence['text']
             docx_result = get('/api/v1/search?q=docxsearchphrase')['results'][0]

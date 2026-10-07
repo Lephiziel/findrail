@@ -164,6 +164,30 @@ paths:
         '404': {description: Unknown source}
         '409': {description: Removal already queued}
         '429': {description: Job queue is full}
+  /api/v1/sources/{id}/configure:
+    post:
+      operationId: configureFolder
+      summary: Atomically update DOCX policy and re-index a filesystem source (start only)
+      parameters:
+      - {$ref: '#/components/parameters/SourceID'}
+      - {$ref: '#/components/parameters/ManagementToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [max_docx_bytes]
+              properties:
+                max_docx_bytes: {type: integer, minimum: 0, maximum: 16777216}
+      responses:
+        '202': {description: Configure job accepted; poll its job ID until terminal}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown source}
+        '409': {description: Source changed or another operation is active}
+        '429': {description: Job queue is full}
   /api/v1/jobs:
     get:
       operationId: listJobs

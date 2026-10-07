@@ -204,6 +204,20 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 			job, err := config.management.Refresh(r.PathValue("id"))
 			writeJobResult(w, job, err)
 		})
+		mux.HandleFunc("POST /api/v1/sources/{id}/configure", func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				MaxDOCXBytes *int64 `json:"max_docx_bytes"`
+			}
+			if !mutationAllowed(w, r, config) || !decodeMutation(w, r, &body) {
+				return
+			}
+			if body.MaxDOCXBytes == nil {
+				writeError(w, 400, "max_docx_bytes is required")
+				return
+			}
+			job, err := config.management.Configure(r.PathValue("id"), *body.MaxDOCXBytes)
+			writeJobResult(w, job, err)
+		})
 		mux.HandleFunc("DELETE /api/v1/sources/{id}", func(w http.ResponseWriter, r *http.Request) {
 			if !mutationAllowed(w, r, config) || !emptyBody(w, r) {
 				return

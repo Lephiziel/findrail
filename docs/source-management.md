@@ -35,6 +35,14 @@ Findrail's perspective. Adding the same canonical folder again reports that it
 already exists; use **Refresh** to update it. Watch notifications and periodic
 reconciliation continue through the existing manager.
 
+Filesystem source cards offer **Configure** for the DOCX enabled/input-limit
+policy. Applying the change queues a bounded re-index. The new policy and full
+inventory commit in one SQLite transaction; failure or cancellation preserves
+both the previous policy and searchable snapshot. Configure, watcher refresh,
+manual refresh and removal share the source coordinator. Registration tokens
+and revisions additionally reject stale operations across independent SQLite
+handles and forget/re-add cycles.
+
 ## Public GitHub snapshots
 
 Choose **Add a source → Public GitHub repository** and enter `OWNER/REPO` or a

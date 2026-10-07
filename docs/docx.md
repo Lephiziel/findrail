@@ -24,6 +24,10 @@ are skipped; malformed or ambiguous packages fail the complete scan and preserve
 the prior snapshot. Successful scans prune previously indexed documents that
 are now skipped.
 
+Declared sizes of ignored media/parts count toward the package inventory budget,
+but ignored payload bytes are not inflated or CRC-validated. Integrity checks
+apply to XML parts actually read by extraction.
+
 DOCX search results and previews refer to the indexed text snapshot. Page numbers
 are unavailable; copied citations use the original `file:` URI without a page
 claim. The browser never reads Office XML or the original file for preview.
@@ -41,9 +45,15 @@ findrail index --max-docx-bytes 0 /path/to/text-only
 The limit is persisted with a filesystem source. Existing sources migrate with
 DOCX disabled; updating the binary does not broaden their previous policy. To
 enable DOCX on a legacy folder, explicitly re-index it with `index` or
-`start DIRECTORY`. Refresh without a directory uses stored limits. Schema 4
+`start DIRECTORY`, or use the `start` UI's **Configure** action. Refresh without
+a directory uses stored limits. Schema 4
 migration is transactional; stop Findrail and back up the data directory before
 upgrading. Older binaries reject schema 4.
+
+In the writable `start` UI, use **Configure** on a folder card to change DOCX
+policy for an existing source. This starts a job and publishes its policy and
+full snapshot atomically. A failed extraction keeps the previous policy and
+snapshot; `serve`, `demo`, and MCP do not expose this mutation.
 
 ## Demo guide
 
@@ -51,9 +61,10 @@ Create a small ordinary Word document named `meeting-notes.docx` containing a
 fictional phrase such as “Orchid planning meeting”. Add the containing folder,
 search for `Orchid`, open Preview, and copy its location/citation. Save an edit
 containing a new unique term and wait for watcher refresh (or use Refresh); search
-for the new term. Re-index with `--max-docx-bytes 0` to disable and confirm no
-DOCX match remains while text/PDF results remain. Remove the source and confirm
-the original file is unchanged.
+for the new term. Use **Configure** to disable DOCX and confirm the DOCX match
+disappears while text/PDF results remain; Configure it back on and verify the
+match returns. The CLI equivalent is re-indexing with `--max-docx-bytes 0` or
+`8388608`. Remove the source and confirm the original file is unchanged.
 
 Synthetic ZIP/XML fixtures in Go tests are generated in memory; no personal
 documents or office suite are needed.

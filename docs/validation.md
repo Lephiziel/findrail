@@ -120,11 +120,14 @@ additional browser validation beyond the author's recorded checks.
 The DOCX fixtures are synthetic ZIP/XML generated in Go tests and in the smoke
 script; no Word/LibreOffice, personal files, or runtime Python dependency is
 required. The compiled Linux smoke uses the production extractor and covers CLI
-search/preview, source-build Add-folder defaults, no-page evidence, a temp-file
-rename save, rollback and source removal/original preservation. The existing
-four UI polling/invalidation regression tests remain unchanged and pass. A
-short extractor fuzz run completed (2-second requested duration; 39,057 and
-140,153 executions in two runs). No crash was found.
+search/preview, source-build Add-folder policy, authenticated Configure API,
+disable/enable re-index, no-page evidence, temp-file rename save, rollback and
+source removal/original preservation. SQLite lifecycle tests exercise Configure
+rollback, cross-handle revision compare-and-swap, stale refresh rejection and
+forget/re-add ABA prevention. Node checks retain the four polling/invalidation
+regressions and cover pending-preview invalidation after Configure. A
+short extractor fuzz run completed (2-second requested duration; 32,121
+executions in the final run). No crash was found.
 
 Resource spot check (Linux, compiled CGO-free binary; elapsed includes fresh
 SQLite setup and indexing; output is extracted text bytes):
@@ -136,12 +139,11 @@ SQLite setup and indexing; output is extracted text bytes):
 
 Checks run on this working branch: `go test ./...`, `go test -race ./...`,
 `go vet ./...`, `go mod verify`, `CGO_ENABLED=0 go build`, compiled CLI/HTTP
-smoke, MCP smoke, `node --test internal/transport/http/web/*_test.mjs` (15
+smoke, MCP smoke, `node --test internal/transport/http/web/*_test.mjs` (16
 tests), `git diff --check`, and bounded `FuzzExtract` smoke all passed. Native
 Windows/macOS execution and browser automation were not performed here; these
 checks do not substitute for platform CI.
 
-**Scope caveat:** existing-folder Configure/re-index API and UI are not included
-in this change yet. DOCX policy can currently be selected on a new folder in the
-UI or by explicitly re-indexing a folder with CLI flags. Do not interpret this
-validation as completion of the full Configure race/rollback acceptance suite.
+Configure policy and snapshot share one SQLite transaction. Schema 4
+registration tokens and revisions guard independent handles and forget/re-add
+ABA; GitHub metadata remains under its separate revision guard.
