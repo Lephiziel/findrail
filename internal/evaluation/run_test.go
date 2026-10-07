@@ -2,7 +2,9 @@ package evaluation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -820,6 +822,20 @@ func TestRunInvalidInput(t *testing.T) {
 		cases    []Case
 	}
 
+	tooManyCases := make([]Case, 0, 101)
+	for i := range tooManyCases {
+		tooManyCases[i] = Case{
+			Query:         "hello",
+			ExpectedPaths: []string{},
+		}
+	}
+
+	tooManyExpectedPaths := []string{}
+
+	for i := 0; i < 101; i++ {
+		tooManyExpectedPaths = append(tooManyExpectedPaths, fmt.Sprintf("file%d.md", i+1))
+	}
+
 	ctx := context.Background()
 
 	scenes := []testCase{
@@ -885,7 +901,7 @@ func TestRunInvalidInput(t *testing.T) {
 		{
 			name:     "too_many_cases",
 			sourceID: "test_source",
-			cases:    make([]Case, 101),
+			cases:    tooManyCases,
 		},
 		{
 			name:     "too_many_expected_paths",
@@ -893,11 +909,10 @@ func TestRunInvalidInput(t *testing.T) {
 			cases: []Case{
 				{
 					Query:         "eighth",
-					ExpectedPaths: make([]string, 101),
+					ExpectedPaths: tooManyExpectedPaths,
 				},
 			},
 		},
-		//////////////////////////////////
 		{
 			name:     "empty_path",
 			sourceID: "test_source",
@@ -924,57 +939,57 @@ func TestRunInvalidInput(t *testing.T) {
 			cases: []Case{
 				{
 					Query:         "eleventh",
-					ExpectedPaths: []string{},
+					ExpectedPaths: []string{"."},
 				},
 			},
 		},
 		{
-			name:     "too_many_expected_paths",
+			name:     "two_dot_path",
 			sourceID: "test_source",
 			cases: []Case{
 				{
-					Query:         "eighth",
-					ExpectedPaths: []string{},
+					Query:         "twelfth",
+					ExpectedPaths: []string{".."},
 				},
 			},
 		},
 		{
-			name:     "too_many_expected_paths",
+			name:     "path_with_dots",
 			sourceID: "test_source",
 			cases: []Case{
 				{
-					Query:         "eighth",
-					ExpectedPaths: []string{},
+					Query:         "thirteenth",
+					ExpectedPaths: []string{"folder/../a.md"},
 				},
 			},
 		},
 		{
-			name:     "too_many_expected_paths",
+			name:     "path_with_backslash",
 			sourceID: "test_source",
 			cases: []Case{
 				{
-					Query:         "eighth",
-					ExpectedPaths: []string{},
+					Query:         "fourteenth",
+					ExpectedPaths: []string{"folder\\a.md"},
 				},
 			},
 		},
 		{
-			name:     "too_many_expected_paths",
+			name:     "windows_prefix_path",
 			sourceID: "test_source",
 			cases: []Case{
 				{
-					Query:         "eighth",
-					ExpectedPaths: []string{},
+					Query:         "fifteenth",
+					ExpectedPaths: []string{"C:/a.md"},
 				},
 			},
 		},
 		{
-			name:     "too_many_expected_paths",
+			name:     "windows_path_without_slash",
 			sourceID: "test_source",
 			cases: []Case{
 				{
-					Query:         "eighth",
-					ExpectedPaths: []string{},
+					Query:         "sixteenth",
+					ExpectedPaths: []string{"C:a.md"},
 				},
 			},
 		},
@@ -1000,5 +1015,90 @@ func TestRunInvalidInput(t *testing.T) {
 				t.Errorf("Search calls=%d, want 0", calls)
 			}
 		})
+	}
+}
+
+func TestReportJSON(t *testing.T) {
+	ctx := context.Background()
+
+	sourceID := "test_source"
+
+	cases := []Case{
+		{
+			Query:         "hello",
+			ExpectedPaths: []string{},
+		},
+	}
+
+	engine := fakeEngine(func(ctx context.Context, r search.Request) (search.Response, error) {
+		return search.Response{
+			Total: 0,
+		}, nil
+	})
+
+	report, err := Run(ctx, engine, cases, sourceID)
+	if err != nil {
+		t.Fatalf("Run() error=%v, want nil error", err)
+	}
+
+	data, marshalErr := json.Marshal(report)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal() error=%v, want nil error", marshalErr)
+	}
+
+	fields := make(map[string]json.RawMessage)
+	unmarshalErr := json.Unmarshal(data, &fields)
+	if unmarshalErr != nil {
+		t.Fatalf("json.Unmarshal() error=%v, want nil error", unmarshalErr)
+	}
+
+	names := []string{"source_id", "total", "passed", "failed", "exact_match_rate", "results"}
+	for _, name := range names {
+		if _, ok := fields[name]; !ok {
+			t.Errorf("no key %q", name)
+		}
+	}
+
+	var results []map[string]json.RawMessage
+	resultErr := json.Unmarshal(fields["results"], &results)
+	if resultErr != nil {
+		t.Fatalf("json.Unmarshal() error=%v, want nil error", resultErr)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results)=%d, want 1", len(results))
+	}
+	resultNames := []string{
+		"query", "expected_paths", "actual_paths",
+		"missing_paths", "unexpected_paths", "passed",
+	}
+	for _, name := range resultNames {
+		if _, ok := results[0][name]; !ok {
+			t.Errorf("no key %q", name)
+		}
+	}
+
+	emptyArrays := []string{
+		"expected_paths", "actual_paths", "missing_paths", "unexpected_paths",
+	}
+	for _, name := range emptyArrays {
+		if string(results[0][name]) != "[]" {
+			t.Errorf("array.%s=%s, want []", name, results[0][name])
+		}
+	}
+
+	if string(fields["total"]) != "1" {
+		t.Errorf("fields[total]=%q, want 1", string(fields["total"]))
+	}
+	if string(fields["passed"]) != "1" {
+		t.Errorf("fields[passed]=%q, want 1", string(fields["passed"]))
+	}
+	if string(fields["failed"]) != "0" {
+		t.Errorf("fields[failed]=%q, want 0", string(fields["failed"]))
+	}
+	if string(fields["exact_match_rate"]) != "1" {
+		t.Errorf("fields[exact_match_rate]=%q, want 1", string(fields["exact_match_rate"]))
+	}
+	if string(results[0]["passed"]) != "true" {
+		t.Errorf("results[0][passed]=%q, want true", string(results[0]["passed"]))
 	}
 }
