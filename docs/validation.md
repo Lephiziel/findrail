@@ -102,3 +102,15 @@ fixtures, command or documentation was changed.
    disappear while `weekly-plan.md` remains on disk.
 7. Mention that public GitHub Add/Refresh is explicit and downloads a bounded
    local snapshot; `serve` and `demo` stay read-only.
+
+### PR #13 review fixes (2026-10-07)
+
+Independent review reproduced duplicate inventory polling loops and stale
+evidence arriving after source removal. The UI now coalesces inventory refreshes,
+stops that polling in hidden tabs, and invalidates pending evidence by source ID.
+Management status is visible even when the add-source forms are closed.
+Four event-driven Node regression tests exercise the embedded search client;
+CI runs these alongside the eleven citation tests. All fifteen passed locally.
+Go tests and race checks passed on the original PR head. The review's Chromium
+launch failed with SIGSEGV before loading the page; this run does not claim an
+additional browser validation beyond the author's recorded checks.
