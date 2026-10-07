@@ -378,10 +378,14 @@ func TestQueueBoundsDuplicateCancellationAndShutdown(t *testing.T) {
 func TestRunningCancelWaitsForCleanup(t *testing.T) {
 	a, _, _ := openApp(t)
 	entered := make(chan struct{})
+	cleanupStarted := make(chan struct{})
+	allowCleanup := make(chan struct{})
 	cleaned := make(chan struct{})
 	job, err := a.submit("test", "cancel", "", func(ctx context.Context, _ *Job) (string, error) {
 		close(entered)
 		<-ctx.Done()
+		close(cleanupStarted)
+		<-allowCleanup
 		close(cleaned)
 		return "", ctx.Err()
 	})
@@ -392,7 +396,10 @@ func TestRunningCancelWaitsForCleanup(t *testing.T) {
 	if err := a.Cancel(job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := a.Job(job.ID); got.Status != "running" {
+	<-cleanupStarted
+	got, _ := a.Job(job.ID)
+	close(allowCleanup)
+	if got.Status != "running" {
 		t.Fatalf("marked canceled before cleanup: %+v", got)
 	}
 	select {
