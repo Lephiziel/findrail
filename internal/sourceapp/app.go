@@ -383,13 +383,20 @@ func (a *App) Close(ctx context.Context) error {
 }
 
 func (a *App) AddFolder(path string) (Job, error) {
+	return a.AddFolderWithDOCX(path, 8<<20)
+}
+
+func (a *App) AddFolderWithDOCX(path string, maxDOCXBytes int64) (Job, error) {
 	if len(path) > 4096 {
 		return Job{}, errors.New("invalid_path")
+	}
+	if maxDOCXBytes < 0 || maxDOCXBytes > 16<<20 {
+		return Job{}, errors.New("max_docx_bytes must be 0–16777216")
 	}
 	if !filepathIsAbs(path) {
 		return Job{}, errors.New("folder path must be absolute")
 	}
-	conn, err := a.folder(connector.Source{Root: path, MaxTextBytes: filesystem.DefaultMaxBytes, MaxPDFBytes: 16 << 20})
+	conn, err := a.folder(connector.Source{Root: path, MaxTextBytes: filesystem.DefaultMaxBytes, MaxPDFBytes: 16 << 20, MaxDOCXBytes: maxDOCXBytes})
 	if err != nil {
 		return Job{}, fmt.Errorf("invalid folder: %w", err)
 	}
@@ -423,7 +430,7 @@ func (a *App) AddFolder(path string) (Job, error) {
 }
 func filepathIsAbs(p string) bool { return filepath.IsAbs(p) }
 func (a *App) folder(s connector.Source) (*filesystem.Connector, error) {
-	return filesystem.NewWithOptions(s.Root, filesystem.Options{MaxTextBytes: s.MaxTextBytes, MaxPDFBytes: s.MaxPDFBytes, ExtractPDF: pdfextract.Extractor(a.executable)}, a.dataDir)
+	return filesystem.NewWithOptions(s.Root, filesystem.Options{MaxTextBytes: s.MaxTextBytes, MaxPDFBytes: s.MaxPDFBytes, MaxDOCXBytes: s.MaxDOCXBytes, ExtractPDF: pdfextract.Extractor(a.executable)}, a.dataDir)
 }
 
 func (a *App) AddGitHub(repo, ref, subdir string) (Job, error) {

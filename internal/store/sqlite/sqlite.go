@@ -29,9 +29,12 @@ var alphaSchema string
 //go:embed migrations/003_github_snapshots.sql
 var githubSchema string
 
+//go:embed migrations/004_docx_policy.sql
+var docxSchema string
+
 type Store struct{ db, readers *sql.DB }
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {
 	dataDir, err := filepath.Abs(dataDir)
@@ -169,7 +172,12 @@ func (s *Store) initialize(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, githubSchema); err != nil {
 			return fmt.Errorf("migrate GitHub snapshots: %w", err)
 		}
+		fallthrough
 	case 3:
+		if _, err := tx.ExecContext(ctx, docxSchema); err != nil {
+			return fmt.Errorf("migrate DOCX policy: %w", err)
+		}
+	case 4:
 	default:
 		return fmt.Errorf("unsupported index schema %d; use a compatible Findrail version", version)
 	}
@@ -217,13 +225,13 @@ func (s *Store) begin(ctx context.Context, source connector.Source, create bool)
 		if maxText == 0 {
 			maxText = 1 << 20
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes) VALUES(?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,name=excluded.name,root=excluded.root,max_text_bytes=excluded.max_text_bytes,max_pdf_bytes=excluded.max_pdf_bytes`, source.ID, source.Kind, source.Name, source.Root, maxText, source.MaxPDFBytes); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes,max_docx_bytes) VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,name=excluded.name,root=excluded.root,max_text_bytes=excluded.max_text_bytes,max_pdf_bytes=excluded.max_pdf_bytes,max_docx_bytes=excluded.max_docx_bytes`, source.ID, source.Kind, source.Name, source.Root, maxText, source.MaxPDFBytes, source.MaxDOCXBytes); err != nil {
 			tx.Rollback()
 			return nil, err
 		}
 	} else {
-		r, err := tx.ExecContext(ctx, `UPDATE sources SET name=name WHERE id=? AND kind=? AND root=? AND max_text_bytes=? AND max_pdf_bytes=?`, source.ID, source.Kind, source.Root, source.MaxTextBytes, source.MaxPDFBytes)
+		r, err := tx.ExecContext(ctx, `UPDATE sources SET name=name WHERE id=? AND kind=? AND root=? AND max_text_bytes=? AND max_pdf_bytes=? AND max_docx_bytes=?`, source.ID, source.Kind, source.Root, source.MaxTextBytes, source.MaxPDFBytes, source.MaxDOCXBytes)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
@@ -402,7 +410,7 @@ func (s *Store) Sources(ctx context.Context) ([]SourceStatus, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.kind,s.name,s.root,s.last_indexed_at,COUNT(d.id),s.max_text_bytes,s.max_pdf_bytes
+	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.kind,s.name,s.root,s.last_indexed_at,COUNT(d.id),s.max_text_bytes,s.max_pdf_bytes,s.max_docx_bytes
         FROM sources s LEFT JOIN documents d ON d.source_id=s.id GROUP BY s.id ORDER BY s.name,s.id`)
 	if err != nil {
 		return nil, err
@@ -411,7 +419,7 @@ func (s *Store) Sources(ctx context.Context) ([]SourceStatus, error) {
 	result := []SourceStatus{}
 	for rows.Next() {
 		var source SourceStatus
-		if err := rows.Scan(&source.ID, &source.Kind, &source.Name, &source.Root, &source.LastIndexedAt, &source.Documents, &source.MaxTextBytes, &source.MaxPDFBytes); err != nil {
+		if err := rows.Scan(&source.ID, &source.Kind, &source.Name, &source.Root, &source.LastIndexedAt, &source.Documents, &source.MaxTextBytes, &source.MaxPDFBytes, &source.MaxDOCXBytes); err != nil {
 			return nil, err
 		}
 		result = append(result, source)
@@ -496,7 +504,7 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 		}
 	}
 	maxText := result.Source.MaxTextBytes
-	if _, err = tx.ExecContext(ctx, `INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes) VALUES(?,?,?,?,?,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,root=excluded.root,max_text_bytes=excluded.max_text_bytes WHERE sources.kind='github'`, result.Source.ID, "github", result.Source.Name, result.Source.Root, maxText); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes,max_docx_bytes) VALUES(?,?,?,?,?,0,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,root=excluded.root,max_text_bytes=excluded.max_text_bytes WHERE sources.kind='github'`, result.Source.ID, "github", result.Source.Name, result.Source.Root, maxText); err != nil {
 		return result, GitHubSource{}, err
 	}
 	var token string

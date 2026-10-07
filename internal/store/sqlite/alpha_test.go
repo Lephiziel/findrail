@@ -1,15 +1,20 @@
 package sqlite_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
 	"github.com/Lephiziel/findrail/internal/search"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
@@ -44,12 +49,89 @@ func TestMigrationPreservesSchemaOneIndex(t *testing.T) {
 		t.Fatalf("old index lost: %+v", got)
 	}
 	sources, err := s.Sources(context.Background())
-	if err != nil || len(sources) != 1 || sources[0].MaxTextBytes != 1<<20 || sources[0].MaxPDFBytes != 0 {
+	if err != nil || len(sources) != 1 || sources[0].MaxTextBytes != 1<<20 || sources[0].MaxPDFBytes != 0 || sources[0].MaxDOCXBytes != 0 {
 		t.Fatalf("migration source settings: %+v %v", sources, err)
 	}
 	evidence, err := s.Evidence(context.Background(), "old", 0)
 	if err != nil || evidence.Text != "migration evidence" {
 		t.Fatalf("legacy preview: %+v %v", evidence, err)
+	}
+}
+
+func TestDOCXFolderSnapshotDisableAndRemoval(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	root := t.TempDir()
+	write(t, filepath.Join(root, "words.docx"), "not actually a zip")
+	// A source scan must roll back rather than silently skip malformed DOCX.
+	c, err := filesystem.NewWithOptions(root, filesystem.Options{MaxTextBytes: 128, MaxDOCXBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ingest.Run(ctx, s, c); err == nil {
+		t.Fatal("corrupt DOCX unexpectedly committed")
+	}
+	// Replace the fixture with a valid package using the shared synthetic builder.
+	writeDOCXPackage(t, filepath.Join(root, "words.docx"), "atomicdocx evidence")
+	c, err = filesystem.NewWithOptions(root, filesystem.Options{MaxTextBytes: 128, MaxDOCXBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ingest.Run(ctx, s, c); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := s.Sources(ctx)
+	if err != nil || len(sources) != 1 || sources[0].MaxDOCXBytes != 1<<20 {
+		t.Fatalf("DOCX policy not persisted: %+v %v", sources, err)
+	}
+	if got := find(t, s, "atomicdocx", c.Source().ID, 10); got.Total != 1 {
+		t.Fatalf("DOCX search: %+v", got)
+	}
+	e, err := s.Evidence(ctx, docID(c.Source().ID, "words.docx"), 0)
+	if err != nil || !strings.Contains(e.Text, "atomicdocx") {
+		t.Fatalf("DOCX evidence: %+v %v", e, err)
+	}
+	write(t, filepath.Join(root, "words.docx"), "truncated package")
+	if _, err = ingest.Run(ctx, s, c); err == nil {
+		t.Fatal("corruption did not fail the scan")
+	}
+	if got := find(t, s, "atomicdocx", c.Source().ID, 10); got.Total != 1 {
+		t.Fatalf("failed DOCX scan lost committed evidence: %+v", got)
+	}
+	disabled, err := filesystem.NewWithOptions(root, filesystem.Options{MaxTextBytes: 128, MaxDOCXBytes: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ingest.Run(ctx, s, disabled); err != nil {
+		t.Fatal(err)
+	}
+	if got := find(t, s, "atomicdocx", c.Source().ID, 10); got.Total != 0 {
+		t.Fatalf("disabled source retained DOCX: %+v", got)
+	}
+}
+
+func docID(sourceID, rel string) string {
+	sum := sha256.Sum256([]byte(sourceID + "\x00" + rel))
+	return fmt.Sprintf("doc_%x", sum)
+}
+
+func writeDOCXPackage(t *testing.T, file, text string) {
+	t.Helper()
+	var b bytes.Buffer
+	z := zip.NewWriter(&b)
+	parts := map[string]string{"[Content_Types].xml": `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`, "_rels/.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`, "word/document.xml": `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>` + text + `</w:t></w:r></w:p></w:body></w:document>`}
+	for n, v := range parts {
+		f, e := z.Create(n)
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, _ = f.Write([]byte(v))
+	}
+	if e := z.Close(); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.WriteFile(file, b.Bytes(), 0600); e != nil {
+		t.Fatal(e)
 	}
 }
 

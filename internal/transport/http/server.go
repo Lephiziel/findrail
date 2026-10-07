@@ -175,6 +175,7 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 				Repository   string `json:"repository"`
 				Ref          string `json:"ref"`
 				Subdirectory string `json:"subdirectory"`
+				MaxDOCXBytes *int64 `json:"max_docx_bytes,omitempty"`
 			}
 			if !mutationAllowed(w, r, config) || !decodeMutation(w, r, &body) {
 				return
@@ -183,7 +184,11 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 			var err error
 			switch body.Type {
 			case "folder":
-				job, err = config.management.AddFolder(body.Path)
+				maxDOCX := int64(8 << 20)
+				if body.MaxDOCXBytes != nil {
+					maxDOCX = *body.MaxDOCXBytes
+				}
+				job, err = config.management.AddFolderWithDOCX(body.Path, maxDOCX)
 			case "github":
 				job, err = config.management.AddGitHub(body.Repository, body.Ref, body.Subdirectory)
 			default:
