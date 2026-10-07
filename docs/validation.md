@@ -80,10 +80,11 @@ SQLite guards remain authoritative for separate processes.
 | Chromium headless browser workflow | Passed on local Linux (empty start → Add folder → search → preview → Copy as Markdown → refresh → confirmed remove) |
 
 Browser automation used the locally available Chromium/ChromeDriver through a
-temporary WebDriver harness; it is not a CI dependency. No native Windows or
-macOS runtime QA was performed. Their CI jobs remain necessary; Linux
-cross-compilation alone is not evidence of native platform behavior. No search
-evaluation code, fixtures, command or documentation was changed.
+temporary WebDriver harness; it is not a CI dependency. No manual native Windows
+or macOS QA was performed. The PR's native GitHub Actions jobs passed on Windows
+and macOS, including their compiled smoke tests; Linux cross-compilation alone
+would not establish native platform behavior. No search evaluation code,
+fixtures, command or documentation was changed.
 
 ### 60–90 second demonstration
 
