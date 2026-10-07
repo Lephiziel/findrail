@@ -35,6 +35,57 @@ func write(t *testing.T, path, content string) {
 	}
 }
 
+func TestRefreshTransactionAndForgetAcrossStoreHandles(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	first, err := sqlite.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := sqlite.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	root := t.TempDir()
+	write(t, filepath.Join(root, "note.md"), "race snapshot")
+	c, err := filesystem.New(root, filesystem.DefaultMaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ingest.Run(ctx, first, c); err != nil {
+		t.Fatal(err)
+	}
+	refresh, err := first.BeginRefresh(ctx, c.Source())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	forgotten := make(chan error, 1)
+	go func() { close(started); forgotten <- second.ForgetSource(ctx, c.Source().ID) }()
+	<-started
+	if _, err := refresh.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-forgotten; err != nil {
+		t.Fatal(err)
+	}
+	if sources, err := first.Sources(ctx); err != nil || len(sources) != 0 {
+		t.Fatalf("old refresh resurrected forgotten source: %+v %v", sources, err)
+	}
+	// A genuinely new explicit Add after the forget linearization may register it.
+	if _, err := ingest.Run(ctx, first, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.ForgetSource(ctx, c.Source().ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.BeginRefresh(ctx, c.Source()); !errors.Is(err, ingest.ErrSourceGone) {
+		t.Fatalf("refresh after forget: %v", err)
+	}
+}
+
 func index(t *testing.T, s *sqlite.Store, root string) (ingest.Result, *filesystem.Connector) {
 	t.Helper()
 	c, err := filesystem.New(root, filesystem.DefaultMaxBytes)

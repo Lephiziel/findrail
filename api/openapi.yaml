@@ -2,9 +2,12 @@ openapi: 3.1.0
 info:
   title: Findrail local search API
   version: 0.1.0-alpha.1
-  description: Implemented read-only development API. The server binds to loopback,
-    checks Host and browser Origin, and has no remote authentication mode. It returns
-    indexed text and original local paths; clients must treat them as private data.
+  description: The API binds to loopback and returns indexed text and local paths,
+    which clients must treat as private. `serve` and `demo` expose read-only routes.
+    Only `start` enables the source mutation routes below. Mutations require an exact
+    Origin for the actual bound authority, `X-Findrail-Token` from the no-store
+    session endpoint, non-cross-site Fetch Metadata, and strict JSON up to 16 KiB.
+    This is browser-origin protection, not authentication against same-user processes.
 servers:
 - url: http://127.0.0.1:7766
 paths:
@@ -87,6 +90,101 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Unavailable'
+    post:
+      operationId: addSource
+      summary: Queue an explicitly selected folder or public GitHub source (start only)
+      parameters:
+      - $ref: '#/components/parameters/ManagementToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [type]
+              properties:
+                type: {type: string, enum: [folder, github]}
+                path: {type: string, maxLength: 4096}
+                repository: {type: string, maxLength: 300}
+                ref: {type: string, maxLength: 1024}
+                subdirectory: {type: string, maxLength: 1024}
+      responses:
+        '202': {description: Job accepted}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Duplicate source or busy target}
+        '413': {description: Request exceeds 16 KiB}
+        '429': {description: Job queue is full}
+        '503': {description: Server is stopping}
+  /api/v1/capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Discover whether this composition enables source management
+      responses:
+        '200': {description: Management capability; false for serve and demo}
+  /api/v1/session:
+    get:
+      operationId: getManagementSession
+      summary: Get the process-scoped in-memory mutation capability (start only)
+      responses:
+        '200': {description: No-store session token}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/sources/{id}/refresh:
+    post:
+      operationId: refreshSource
+      summary: Queue a manual refresh using the stored source configuration (start only)
+      parameters:
+      - {$ref: '#/components/parameters/SourceID'}
+      - {$ref: '#/components/parameters/ManagementToken'}
+      description: Send an empty body with Content-Type application/json.
+      responses:
+        '202': {description: Refresh job accepted}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown source}
+        '409': {description: Source already has an operation}
+        '429': {description: Job queue is full}
+  /api/v1/sources/{id}:
+    delete:
+      operationId: removeSource
+      summary: Queue confirmed logical removal from the local index (start only)
+      parameters:
+      - {$ref: '#/components/parameters/SourceID'}
+      - {$ref: '#/components/parameters/ManagementToken'}
+      description: Send an empty body with Content-Type application/json. Original files are untouched.
+      responses:
+        '202': {description: Removal job accepted; poll its job ID until terminal}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown source}
+        '409': {description: Removal already queued}
+        '429': {description: Job queue is full}
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      summary: List bounded process-memory job status (start only)
+      responses:
+        '200': {description: At most one hundred completed jobs plus active jobs}
+  /api/v1/jobs/{id}:
+    get:
+      operationId: getJob
+      summary: Read one process-memory job
+      parameters:
+      - {$ref: '#/components/parameters/JobID'}
+      responses:
+        '200': {description: Job state}
+        '404': {description: Unknown or expired job}
+  /api/v1/jobs/{id}/cancel:
+    post:
+      operationId: cancelJob
+      summary: Cancel a queued/running job (start only)
+      parameters:
+      - {$ref: '#/components/parameters/JobID'}
+      - {$ref: '#/components/parameters/ManagementToken'}
+      description: Send an empty body with Content-Type application/json. Running cancellation returns only after operation cleanup when polled.
+      responses:
+        '204': {description: Cancellation accepted or job already terminal}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown or expired job}
   /api/v1/documents/{id}:
     get:
       operationId: getEvidence
@@ -147,6 +245,23 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 components:
+  parameters:
+    ManagementToken:
+      name: X-Findrail-Token
+      in: header
+      required: true
+      description: In-memory capability returned by GET /api/v1/session; never put it in a URL.
+      schema: {type: string, minLength: 32, maxLength: 64}
+    SourceID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string}
+    JobID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, minLength: 32, maxLength: 32}
   responses:
     BadRequest:
       description: Invalid query, result limit or PDF page
@@ -252,7 +367,7 @@ components:
           type: string
         kind:
           type: string
-          const: filesystem
+          enum: [filesystem, github]
         name:
           type: string
         root:
@@ -269,6 +384,17 @@ components:
         max_pdf_bytes:
           type: integer
           description: 0 disables PDF extraction for this source
+        github:
+          type: object
+          description: Present only for public GitHub snapshots
+          properties:
+            owner: {type: string}
+            repo: {type: string}
+            ref_mode: {type: string, enum: [default, ref, commit]}
+            ref_value: {type: string}
+            selected_path: {type: string}
+            sha: {type: string, pattern: '^[0-9a-f]{40}$'}
+            last_error: {type: string, maxLength: 512}
     Evidence:
       type: object
       required:

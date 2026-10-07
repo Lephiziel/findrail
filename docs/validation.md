@@ -51,3 +51,66 @@ CGO_ENABLED=0 go build -trimpath -o bin/findrail ./cmd/findrail
 python3 scripts/smoke.py bin/findrail
 python3 scripts/package.py
 ```
+
+## Web source-management validation · 2026-10-07
+
+The `feat/web-source-management` source build was checked on Linux. The new
+application-service tests use real SQLite stores and fake GitHub HTTP responses;
+no test calls public GitHub. The compiled smoke exercises empty `start`,
+same-origin API authorization, folder add, the existing PDF child process,
+search/preview, watcher discovery, manual refresh, logical removal, cached
+original files, and the demo read-only boundary. A two-store-handle storage test
+orders filesystem refresh against forget; source-app barriers cover update/remove,
+queue limits, cancellation cleanup, post-commit cancellation, shutdown and
+history retention. `start` and its watcher share per-source process coordination;
+SQLite guards remain authoritative for separate processes.
+
+| Check | Result |
+|---|---|
+| `gofmt` and `git diff --check` | Passed |
+| `go test ./...` | Passed |
+| `go test -race ./...` | Passed |
+| `go vet ./...` | Passed |
+| `go mod verify` | Passed |
+| `CGO_ENABLED=0 go build -o bin/findrail ./cmd/findrail` | Passed |
+| `python3 scripts/smoke.py bin/findrail` | Passed |
+| `python3 scripts/mcp_smoke.py bin/findrail` | Passed |
+| `node --test internal/transport/http/web/citation_test.mjs` | Passed (11 tests) |
+| Embedded module syntax and OpenAPI / CI YAML parse | Passed |
+| Chromium headless browser workflow | Passed on local Linux (empty start → Add folder → search → preview → Copy as Markdown → refresh → confirmed remove) |
+
+Browser automation used the locally available Chromium/ChromeDriver through a
+temporary WebDriver harness; it is not a CI dependency. No manual native Windows
+or macOS QA was performed. The PR's native GitHub Actions jobs passed on Windows
+and macOS, including their compiled smoke tests; Linux cross-compilation alone
+would not establish native platform behavior. No search evaluation code,
+fixtures, command or documentation was changed.
+
+### 60–90 second demonstration
+
+1. Create `notes/weekly-plan.md` containing fictional text: “Orbit project
+   checklist: call the fictional supplier on Thursday.”
+2. Run `findrail start --data-dir ./demo-index --no-open` and open the printed
+   loopback URL. Start with the empty Sources panel.
+3. Choose **Add folder**, enter the absolute path to `notes`, and submit. Point
+   out the queued/indexing job and the source appearing without a page reload.
+4. Search for `fictional supplier`, open **Preview**, and copy the location or
+   **Copy as Markdown** citation.
+5. Edit the note to say “Friday” and use **Refresh** (or wait for folder
+   reconciliation); search for the updated word.
+6. Choose **Remove from index**, confirm the source name, and show search results
+   disappear while `weekly-plan.md` remains on disk.
+7. Mention that public GitHub Add/Refresh is explicit and downloads a bounded
+   local snapshot; `serve` and `demo` stay read-only.
+
+### PR #13 review fixes (2026-10-07)
+
+Independent review reproduced duplicate inventory polling loops and stale
+evidence arriving after source removal. The UI now coalesces inventory refreshes,
+stops that polling in hidden tabs, and invalidates pending evidence by source ID.
+Management status is visible even when the add-source forms are closed.
+Four event-driven Node regression tests exercise the embedded search client;
+CI runs these alongside the eleven citation tests. All fifteen passed locally.
+Go tests and race checks passed on the original PR head. The review's Chromium
+launch failed with SIGSEGV before loading the page; this run does not claim an
+additional browser validation beyond the author's recorded checks.
