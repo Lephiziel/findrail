@@ -141,8 +141,9 @@ Checks run on this working branch: `go test ./...`, `go test -race ./...`,
 `go vet ./...`, `go mod verify`, `CGO_ENABLED=0 go build`, compiled CLI/HTTP
 smoke, MCP smoke, `node --test internal/transport/http/web/*_test.mjs` (16
 tests), `git diff --check`, and bounded `FuzzExtract` smoke all passed. Native
-Windows/macOS execution and browser automation were not performed here; these
-checks do not substitute for platform CI.
+Windows/macOS execution and browser automation were not performed locally. The
+PR CI's native Linux/macOS/Windows compile-and-smoke jobs and race/UI jobs passed
+on the reviewed head; the transient Linux test timeout was rerun successfully.
 
 Configure policy and snapshot share one SQLite transaction. Schema 4
 registration tokens and revisions guard independent handles and forget/re-add
