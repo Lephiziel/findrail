@@ -159,7 +159,13 @@ func TestManagementRequiresSameOriginCapabilityAndStrictJSON(t *testing.T) {
 	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	body := []byte(`{"type":"folder","path":"` + root + `"}`)
+	body, err := json.Marshal(struct {
+		Type string `json:"type"`
+		Path string `json:"path"`
+	}{Type: "folder", Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := func(originValue, token, site, content string, payload []byte) int {
 		r, _ := http.NewRequest("POST", base+"/api/v1/sources", bytes.NewReader(payload))
 		if originValue != "<absent>" {
