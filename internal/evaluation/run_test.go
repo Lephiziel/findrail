@@ -2,6 +2,7 @@ package evaluation
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -328,7 +329,7 @@ func TestRunEmptyResults(t *testing.T) {
 }
 
 func TestRunContinuesAfterMismatch(t *testing.T) {
-	var receivedQuries []string
+	var receivedQueries []string
 
 	ctx := context.Background()
 	sourceID := "test_source"
@@ -344,14 +345,8 @@ func TestRunContinuesAfterMismatch(t *testing.T) {
 	}
 
 	engine := fakeEngine(func(ctx context.Context, req search.Request) (search.Response, error) {
-		receivedQuries = append(receivedQuries, req.Query)
+		receivedQueries = append(receivedQueries, req.Query)
 
-		if req.Query != "first" && req.Query != "second" {
-			t.Errorf(
-				"request.Query=%q, want first or second",
-				req.Query,
-			)
-		}
 		if req.SourceID != sourceID {
 			t.Errorf(
 				"request.SourceID=%q, want %q",
@@ -381,28 +376,63 @@ func TestRunContinuesAfterMismatch(t *testing.T) {
 				},
 			}
 		default:
-			t.Fatalf("unexpected request")
+			t.Fatalf("unexpected request.Query=%q", req.Query)
 		}
 		return response, nil
 	})
 
 	report, err := Run(ctx, engine, cases, sourceID)
 	if err != nil {
-		t.Fatalf("Run() error=%v, want nil", err)
+		t.Fatalf(
+			"Run() error=%v, want nil",
+			err,
+		)
 	}
+	if report.Total != 2 {
+		t.Errorf("report.Total=%d, want 2", report.Total)
+	}
+	if report.Passed != 1 {
+		t.Errorf("report.Passed=%d, want 1", report.Passed)
+	}
+	if report.Failed != 1 {
+		t.Errorf("report.Failed=%d, want 1", report.Failed)
+	}
+	if report.ExactMatchRate != 0.5 {
+		t.Errorf("report.ExactMatchRate=%f, want 0.5", report.ExactMatchRate)
+	}
+	if !reflect.DeepEqual(receivedQueries, []string{"first", "second"}) {
+		t.Errorf(
+			"receivedQueries=%#v, want %#v",
+			receivedQueries, []string{"first", "second"},
+		)
+	}
+
 	if len(report.Results) != 2 {
-		t.Errorf("len(report.Results)=%d, want 2")
+		t.Fatalf(
+			"len(report.Results)=%d, want 2",
+			len(report.Results),
+		)
 	}
 
 	firstResult := report.Results[0]
-	wantMissingPaths := []string{"a.md"}
-	if firstResult.Passed {
-		t.Errorf("firstResult.Passed=%t, want false")
-	}
-	if len(firstResult.ExpectedPaths) != 0 || firstResult.ExpectedPaths == nil {
+	firstMissingPaths := []string{"a.md"}
+	firstExpectedPaths := []string{"a.md"}
+	if firstResult.Query != "first" {
 		t.Errorf(
-			"firstResult.ExpectedPaths=%#v, want empty non-nil slice",
-			firstResult.ExpectedPaths,
+			"firstResult.Query=%q, want first",
+			firstResult.Query,
+		)
+	}
+	if firstResult.Passed {
+		t.Errorf(
+			"firstResult.Passed=%t, want false",
+			firstResult.Passed,
+		)
+	}
+	if !reflect.DeepEqual(firstResult.ExpectedPaths, firstExpectedPaths) {
+		t.Errorf(
+			"firstResult.ExpectedPaths=%#v, want %#v",
+			firstResult.ExpectedPaths, firstExpectedPaths,
 		)
 	}
 	if len(firstResult.ActualPaths) != 0 || firstResult.ActualPaths == nil {
@@ -411,10 +441,10 @@ func TestRunContinuesAfterMismatch(t *testing.T) {
 			firstResult.ActualPaths,
 		)
 	}
-	if !reflect.DeepEqual(firstResult.MissingPaths, wantMissingPaths) {
+	if !reflect.DeepEqual(firstResult.MissingPaths, firstMissingPaths) {
 		t.Errorf(
 			"firstResult.MissingPaths=%#v, want %#v",
-			firstResult.MissingPaths, wantMissingPaths,
+			firstResult.MissingPaths, firstMissingPaths,
 		)
 	}
 	if len(firstResult.UnexpectedPaths) != 0 || firstResult.UnexpectedPaths == nil {
@@ -425,25 +455,36 @@ func TestRunContinuesAfterMismatch(t *testing.T) {
 	}
 
 	secondResult := report.Results[1]
-	if secondResult.Passed {
-		t.Errorf("secondResult.Passed=%t, want false")
-	}
-	if len(secondResult.ExpectedPaths) != 0 || secondResult.ExpectedPaths == nil {
+	secondExpectedPaths := []string{"b.md"}
+	secondActualPaths := []string{"b.md"}
+	if secondResult.Query != "second" {
 		t.Errorf(
-			"secondResult.ExpectedPaths=%#v, want empty non-nil slice",
-			secondResult.ExpectedPaths,
+			"secondResult.Query=%q, want second",
+			secondResult.Query,
 		)
 	}
-	if len(secondResult.ActualPaths) != 0 || secondResult.ActualPaths == nil {
+	if !secondResult.Passed {
 		t.Errorf(
-			"secondResult.ActualPaths=%#v, want empty non-nil slice",
-			secondResult.ActualPaths,
+			"secondResult.Passed=%t, want true",
+			secondResult.Passed,
 		)
 	}
-	if !reflect.DeepEqual(secondResult.MissingPaths, wantMissingPaths) {
+	if !reflect.DeepEqual(secondResult.ExpectedPaths, secondExpectedPaths) {
 		t.Errorf(
-			"secondResult.MissingPaths=%#v, want %#v",
-			secondResult.MissingPaths, wantMissingPaths,
+			"secondResult.ExpectedPaths=%#v, want %#v",
+			secondResult.ExpectedPaths, secondExpectedPaths,
+		)
+	}
+	if !reflect.DeepEqual(secondResult.ActualPaths, secondActualPaths) {
+		t.Errorf(
+			"secondResult.ActualPaths=%#v, want %#v",
+			secondResult.ActualPaths, secondActualPaths,
+		)
+	}
+	if len(secondResult.MissingPaths) != 0 || secondResult.MissingPaths == nil {
+		t.Errorf(
+			"secondResult.MissingPaths=%#v, want empty non-nil slice",
+			secondResult.MissingPaths,
 		)
 	}
 	if len(secondResult.UnexpectedPaths) != 0 || secondResult.UnexpectedPaths == nil {
@@ -451,5 +492,513 @@ func TestRunContinuesAfterMismatch(t *testing.T) {
 			"secondResult.UnexpectedPaths=%#v, want empty non-nil slice",
 			secondResult.UnexpectedPaths,
 		)
+	}
+}
+
+func TestRunStopsOnSearchError(t *testing.T) {
+	var receivedQueries []string
+	var searchErr = errors.New("search error")
+
+	ctx := context.Background()
+	sourceID := "test_source"
+	cases := []Case{
+		{
+			Query:         "first",
+			ExpectedPaths: []string{},
+		},
+		{
+			Query:         "second",
+			ExpectedPaths: []string{},
+		},
+		{
+			Query:         "third",
+			ExpectedPaths: []string{},
+		},
+	}
+
+	engine := fakeEngine(func(ctx context.Context, req search.Request) (search.Response, error) {
+		receivedQueries = append(receivedQueries, req.Query)
+
+		if req.SourceID != sourceID {
+			t.Errorf(
+				"request.SourceID=%q, want %q",
+				req.SourceID, sourceID,
+			)
+		}
+		if req.Limit != 100 {
+			t.Errorf(
+				"request.Limit=%d, want %d",
+				req.Limit, 100,
+			)
+		}
+
+		response := search.Response{}
+
+		switch req.Query {
+		case "first":
+			response.Query = req.Query
+			response.Total = 0
+			return response, nil
+		case "second":
+			return search.Response{}, searchErr
+		case "third":
+			t.Fatalf("third query must not run")
+		default:
+			t.Fatalf("unexpected request.Query=%q", req.Query)
+		}
+		return response, nil
+	})
+
+	report, err := Run(ctx, engine, cases, sourceID)
+	if !errors.Is(err, searchErr) {
+		t.Fatalf(
+			"error=%v, want %v",
+			err, searchErr,
+		)
+	}
+	if !reflect.DeepEqual(receivedQueries, []string{"first", "second"}) {
+		t.Errorf(
+			"receivedQueries=%#v, want %#v",
+			receivedQueries, []string{"first", "second"},
+		)
+	}
+	if !reflect.DeepEqual(report, Report{}) {
+		t.Errorf("report=%#v, want zero Report", report)
+	}
+}
+
+func TestRunIncompleteResults(t *testing.T) {
+	var receivedQueries []string
+
+	ctx := context.Background()
+	sourceID := "test_source"
+	cases := []Case{
+		{
+			Query:         "first",
+			ExpectedPaths: []string{"a.md"},
+		},
+		{
+			Query:         "second",
+			ExpectedPaths: []string{},
+		},
+	}
+
+	engine := fakeEngine(func(ctx context.Context, req search.Request) (search.Response, error) {
+		receivedQueries = append(receivedQueries, req.Query)
+		if req.SourceID != sourceID {
+			t.Errorf(
+				"req.SourceID=%q, want %q",
+				req.SourceID, sourceID,
+			)
+		}
+		if req.Limit != 100 {
+			t.Errorf(
+				"req.Limit=%d, want %d",
+				req.Limit, 100,
+			)
+		}
+
+		response := search.Response{}
+
+		switch req.Query {
+		case "first":
+			response.Query = req.Query
+			response.Total = 2
+			response.Results = append(response.Results, search.Result{
+				Path:     "a.md",
+				SourceID: sourceID,
+			})
+		case "second":
+			t.Fatalf("second query must not run")
+		default:
+			t.Fatalf("unexpected req.Query=%q", req.Query)
+		}
+		return response, nil
+	})
+
+	report, err := Run(ctx, engine, cases, sourceID)
+	if !errors.Is(err, ErrIncompleteResults) {
+		t.Errorf(
+			"Run() error=%v, want %v",
+			err, ErrIncompleteResults,
+		)
+	}
+	if !reflect.DeepEqual(receivedQueries, []string{"first"}) {
+		t.Errorf(
+			"receivedQueries=%#v, want %#v",
+			receivedQueries, []string{"first"},
+		)
+	}
+	if !reflect.DeepEqual(report, Report{}) {
+		t.Errorf("report=%#v, want zero Report", report)
+	}
+}
+
+func TestRunCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cases := []Case{
+		{
+			Query:         "first",
+			ExpectedPaths: []string{},
+		},
+	}
+	sourceID := "test_source"
+
+	engine := fakeEngine(func(ctx context.Context, req search.Request) (search.Response, error) {
+		t.Fatalf("search must not run")
+		return search.Response{}, nil
+	})
+
+	report, err := Run(ctx, engine, cases, sourceID)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Run() error=%v, want %v", err, context.Canceled)
+	}
+	if !reflect.DeepEqual(report, Report{}) {
+		t.Errorf("report=%#v, want %#v", report, Report{})
+	}
+}
+
+func TestRunCanceledBetweenCases(t *testing.T) {
+	receivedQueries := []string{}
+	searchCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cases := []Case{
+		{
+			Query:         "first",
+			ExpectedPaths: []string{},
+		},
+		{
+			Query:         "second",
+			ExpectedPaths: []string{},
+		},
+	}
+	sourceID := "test_source"
+
+	engine := fakeEngine(func(ctx context.Context, req search.Request) (search.Response, error) {
+		receivedQueries = append(receivedQueries, req.Query)
+
+		if req.SourceID != sourceID {
+			t.Errorf(
+				"req.SourceID=%q, want %q",
+				req.SourceID, sourceID,
+			)
+		}
+		if req.Limit != 100 {
+			t.Errorf(
+				"req.Limit=%d, want %d",
+				req.Limit, 100,
+			)
+		}
+
+		response := search.Response{}
+
+		switch req.Query {
+		case "first":
+			cancel()
+			if !errors.Is(searchCtx.Err(), context.Canceled) {
+				t.Errorf(
+					"ctx error=%v, want %v",
+					searchCtx.Err(), context.Canceled,
+				)
+			}
+			return response, nil
+		case "second":
+			t.Fatalf("second query must not run")
+		default:
+			t.Fatalf("unexpected requet.Query=%q", req.Query)
+		}
+		return search.Response{}, nil
+	})
+	report, err := Run(searchCtx, engine, cases, sourceID)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Run() error=%v, want %v", err, context.Canceled)
+	}
+	if !reflect.DeepEqual(receivedQueries, []string{"first"}) {
+		t.Errorf("receivedQueries=%#v, want %#v", receivedQueries, []string{"first"})
+	}
+	if !reflect.DeepEqual(report, Report{}) {
+		t.Errorf("report=%#v, want %#v", report, Report{})
+	}
+}
+
+func TestRunInvalidResponse(t *testing.T) {
+	type testCase struct {
+		name     string
+		response search.Response
+	}
+
+	ctx := context.Background()
+	sourceID := "test_source"
+
+	cases := []Case{
+		{
+			Query:         "first",
+			ExpectedPaths: []string{},
+		},
+	}
+
+	scenes := []testCase{
+		{
+			name: "negative_total",
+			response: search.Response{
+				Total:   -1,
+				Results: []search.Result{},
+			},
+		},
+		{
+			name: "total_less_than_results",
+			response: search.Response{
+				Total: 0,
+				Results: []search.Result{
+					{
+						Path:     "a.md",
+						SourceID: sourceID,
+					},
+				},
+			},
+		},
+		{
+			name: "duplicate_paths",
+			response: search.Response{
+				Total: 2,
+				Results: []search.Result{
+					{
+						Path:     "a.md",
+						SourceID: sourceID,
+					},
+					{
+						Path:     "a.md",
+						SourceID: sourceID,
+					},
+				},
+			},
+		},
+		{
+			name: "wrong_source",
+			response: search.Response{
+				Total: 1,
+				Results: []search.Result{
+					{
+						Path:     "c.md",
+						SourceID: "other_source",
+					},
+				},
+			},
+		},
+	}
+
+	for _, scene := range scenes {
+		t.Run(scene.name, func(t *testing.T) {
+			calls := 0
+
+			engine := fakeEngine(func(ctx context.Context, r search.Request) (search.Response, error) {
+				calls++
+				return scene.response, nil
+			})
+
+			report, err := Run(ctx, engine, cases, sourceID)
+			if err == nil {
+				t.Errorf("Run() error=nil, want not nil")
+			}
+			if !reflect.DeepEqual(report, Report{}) {
+				t.Errorf("report=%#v, want %#v", report, Report{})
+			}
+			if calls != 1 {
+				t.Errorf("Search calls=%d, want 1", calls)
+			}
+		})
+	}
+}
+
+func TestRunInvalidInput(t *testing.T) {
+	type testCase struct {
+		name     string
+		sourceID string
+		cases    []Case
+	}
+
+	ctx := context.Background()
+
+	scenes := []testCase{
+		{
+			name:     "empty_source",
+			sourceID: "",
+			cases: []Case{
+				{
+					Query:         "first",
+					ExpectedPaths: []string{},
+				},
+			},
+		},
+		{
+			name:     "empty_cases",
+			sourceID: "test_source",
+			cases:    []Case{},
+		},
+		{
+			name:     "invalid_query",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "!!!",
+					ExpectedPaths: []string{},
+				},
+			},
+		},
+		{
+			name:     "nil_expected_paths",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "fourth",
+					ExpectedPaths: nil,
+				},
+			},
+		},
+		{
+			name:     "duplicate_expected_paths",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "fifth",
+					ExpectedPaths: []string{"a.md", "a.md"},
+				},
+			},
+		},
+		{
+			name:     "invalid_second_case",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "sixth",
+					ExpectedPaths: []string{},
+				},
+				{
+					Query:         "seventh",
+					ExpectedPaths: []string{"../a.md"},
+				},
+			},
+		},
+		{
+			name:     "too_many_cases",
+			sourceID: "test_source",
+			cases:    make([]Case, 101),
+		},
+		{
+			name:     "too_many_expected_paths",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "eighth",
+					ExpectedPaths: make([]string, 101),
+				},
+			},
+		},
+		//////////////////////////////////
+		{
+			name:     "empty_path",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "nineth",
+					ExpectedPaths: []string{""},
+				},
+			},
+		},
+		{
+			name:     "slash_path",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "tenth",
+					ExpectedPaths: []string{"/a.md"},
+				},
+			},
+		},
+		{
+			name:     "dot_path",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "eleventh",
+					ExpectedPaths: []string{},
+				},
+			},
+		},
+		{
+			name:     "too_many_expected_paths",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "eighth",
+					ExpectedPaths: []string{},
+				},
+			},
+		},
+		{
+			name:     "too_many_expected_paths",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "eighth",
+					ExpectedPaths: []string{},
+				},
+			},
+		},
+		{
+			name:     "too_many_expected_paths",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "eighth",
+					ExpectedPaths: []string{},
+				},
+			},
+		},
+		{
+			name:     "too_many_expected_paths",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "eighth",
+					ExpectedPaths: []string{},
+				},
+			},
+		},
+		{
+			name:     "too_many_expected_paths",
+			sourceID: "test_source",
+			cases: []Case{
+				{
+					Query:         "eighth",
+					ExpectedPaths: []string{},
+				},
+			},
+		},
+	}
+
+	for _, scene := range scenes {
+		t.Run(scene.name, func(t *testing.T) {
+			calls := 0
+
+			engine := fakeEngine(func(ctx context.Context, r search.Request) (search.Response, error) {
+				calls++
+				return search.Response{}, nil
+			})
+
+			report, err := Run(ctx, engine, scene.cases, scene.sourceID)
+			if err == nil {
+				t.Errorf("Run() error=nil, want not nil")
+			}
+			if !reflect.DeepEqual(report, Report{}) {
+				t.Errorf("report=%#v, want %#v", report, Report{})
+			}
+			if calls != 0 {
+				t.Errorf("Search calls=%d, want 0", calls)
+			}
+		})
 	}
 }
