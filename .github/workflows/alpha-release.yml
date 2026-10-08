@@ -44,28 +44,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
+          release_error="$RUNNER_TEMP/findrail-release-query.err"
+          tag_error="$RUNNER_TEMP/findrail-tag-query.err"
           set +e
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" >/dev/null 2>release-error
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" >/dev/null 2>"$release_error"
           release_status=$?
           set -e
           if [[ $release_status -eq 0 ]]; then
             echo 'exists=true' >> "$GITHUB_OUTPUT"
             exit 0
-          elif ! grep -q 'HTTP 404' release-error; then
-            cat release-error >&2
+          elif ! grep -q 'HTTP 404' "$release_error"; then
+            cat "$release_error" >&2
             echo 'Could not determine whether release exists; refusing publication.' >&2
             exit 1
           fi
           set +e
-          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>tag-error
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>"$tag_error"
           tag_status=$?
           set -e
           if [[ $tag_status -eq 0 ]]; then
             echo 'exists=true' >> "$GITHUB_OUTPUT"
-          elif grep -q 'HTTP 404' tag-error; then
+          elif grep -q 'HTTP 404' "$tag_error"; then
             echo 'exists=false' >> "$GITHUB_OUTPUT"
           else
-            cat tag-error >&2
+            cat "$tag_error" >&2
             echo 'Could not determine whether tag exists; refusing publication.' >&2
             exit 1
           fi
