@@ -27,7 +27,9 @@ folder, run:
 ```
 
 The binary includes all three documents; a repository download and Go are not
-needed. Findrail prints the temporary document folder and attempts to open your
+needed. See the [Apple Silicon installation report](platform-installation.md#apple-silicon-010-alpha2)
+for a tested release download path and its unsigned-alpha limitations.
+Findrail prints the temporary document folder and attempts to open your
 browser. If no browser appears, open the printed local URL manually. Use
 `demo --no-open` on a headless machine, or `demo --addr 127.0.0.1:7767` if the
 default port is busy.
