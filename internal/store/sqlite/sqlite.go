@@ -440,6 +440,41 @@ type SourceStatus struct {
 	RegistrationRevision int64         `json:"-"`
 }
 
+// DiagnosticSummary returns a bounded aggregate for offline doctor output.
+// It never selects source names, paths, document titles, or indexed content.
+type DiagnosticSummary struct {
+	Sources           int `json:"sources"`
+	FilesystemSources int `json:"filesystem_sources"`
+	GitHubSources     int `json:"github_sources"`
+	OtherSources      int `json:"other_sources"`
+	CustomTextLimits  int `json:"custom_text_limits"`
+	PDFEnabled        int `json:"pdf_enabled"`
+	DOCXEnabled       int `json:"docx_enabled"`
+	DOCXDisabled      int `json:"docx_disabled"`
+}
+
+// DiagnosticSummary reads scalar policy/count aggregates from the already
+// opened read-only database handle. Its result size is fixed regardless of the
+// number of indexed sources.
+func (s *Store) DiagnosticSummary(ctx context.Context) (DiagnosticSummary, error) {
+	var summary DiagnosticSummary
+	if s == nil || s.readers == nil {
+		return summary, errors.New("index is not open for reading")
+	}
+	err := s.readers.QueryRowContext(ctx, `SELECT COUNT(*),
+        COALESCE(SUM(CASE WHEN kind='filesystem' THEN 1 ELSE 0 END),0),
+        COALESCE(SUM(CASE WHEN kind='github' THEN 1 ELSE 0 END),0),
+        COALESCE(SUM(CASE WHEN kind NOT IN ('filesystem','github') THEN 1 ELSE 0 END),0),
+        COALESCE(SUM(CASE WHEN max_text_bytes<>1048576 THEN 1 ELSE 0 END),0),
+        COALESCE(SUM(CASE WHEN max_pdf_bytes>0 THEN 1 ELSE 0 END),0),
+        COALESCE(SUM(CASE WHEN max_docx_bytes>0 THEN 1 ELSE 0 END),0),
+        COALESCE(SUM(CASE WHEN max_docx_bytes=0 THEN 1 ELSE 0 END),0)
+        FROM sources`).Scan(&summary.Sources, &summary.FilesystemSources, &summary.GitHubSources,
+		&summary.OtherSources, &summary.CustomTextLimits, &summary.PDFEnabled,
+		&summary.DOCXEnabled, &summary.DOCXDisabled)
+	return summary, err
+}
+
 type GitHubSource struct {
 	SourceID          string    `json:"source_id,omitempty"`
 	RepositoryID      int64     `json:"repository_id"`

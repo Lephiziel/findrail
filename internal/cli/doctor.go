@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -133,35 +132,14 @@ func runDoctor(ctx context.Context, args []string, out, stderr io.Writer, versio
 					check("schema", status, code, msg, action)
 				} else {
 					defer store.Close()
-					sources, readErr := store.Sources(ctx)
+					summary, readErr := store.DiagnosticSummary(ctx)
 					if readErr != nil {
 						check("schema", "error", "index_unreadable", "The supported index could not be read safely.", "Preserve a stopped full-directory backup and investigate.")
 					} else {
-						counts := map[string]int{}
-						legacyDOCXDisabled := 0
-						for _, source := range sources {
-							kind := source.Kind
-							if kind != "filesystem" && kind != "github" {
-								kind = "other"
-							}
-							counts[kind]++
-							if source.MaxDOCXBytes == 0 {
-								legacyDOCXDisabled++
-							}
-						}
-						kinds := make([]string, 0, len(counts))
-						for kind := range counts {
-							kinds = append(kinds, kind)
-						}
-						sort.Strings(kinds)
-						var inventory strings.Builder
-						for i, kind := range kinds {
-							if i > 0 {
-								inventory.WriteString(", ")
-							}
-							fmt.Fprintf(&inventory, "%s=%d", kind, counts[kind])
-						}
-						check("schema", "ok", "schema_supported", fmt.Sprintf("Index schema 4 is supported; source counts by type: %s; sources with DOCX disabled: %d.", inventory.String(), legacyDOCXDisabled), "No action needed.")
+						message := fmt.Sprintf("Index schema 4 is supported; sources=%d (filesystem=%d, GitHub=%d, other=%d); policies: custom text limits=%d, PDF enabled=%d, DOCX enabled=%d, DOCX disabled=%d.",
+							summary.Sources, summary.FilesystemSources, summary.GitHubSources, summary.OtherSources,
+							summary.CustomTextLimits, summary.PDFEnabled, summary.DOCXEnabled, summary.DOCXDisabled)
+						check("schema", "ok", "schema_supported", message, "No action needed.")
 					}
 				}
 			}
