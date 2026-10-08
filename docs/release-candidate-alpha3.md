@@ -24,21 +24,25 @@ Current schema: 4 (migrations 1–4); legacy folder DOCX policy defaults disable
 
 | Target | Build | Archive/checksum | Extracted native smoke | Browser QA |
 |---|---|---|---|---|
-| linux-amd64 | built | metadata/checksum passed | smoke.py + mcp_smoke.py + upgrade passed | not run |
-| linux-arm64 | cross-built | metadata/checksum passed | not run (not native QA) | not run |
-| darwin-amd64 | cross-built | metadata/checksum passed | not run (not native QA) | not run |
-| darwin-arm64 | cross-built | metadata/checksum passed | not run (not native QA) | not run |
-| windows-amd64 | cross-built | metadata/checksum passed | not run (not native QA) | not run |
+| linux-amd64 | native build passed | metadata/checksum passed | smoke + MCP + alpha.2 upgrade passed | not run |
+| linux-arm64 | native build passed | metadata/checksum passed | smoke + MCP passed | not run |
+| darwin-amd64 | native build passed (macos-15-intel) | metadata/checksum passed | smoke + MCP passed | not run |
+| darwin-arm64 | native build passed (macos-14) | metadata/checksum passed | smoke + MCP passed | not run |
+| windows-amd64 | native build passed | metadata/checksum passed | smoke + MCP passed | not run |
 
 Repository checks passed locally: `gofmt`, `git diff --check`, `go test ./...`,
 `go test -race ./...`, `go vet ./...`, `go mod verify`, CGO-free build, UI Node
-tests, and packaging unit tests. The required native CI matrix has not run yet.
+tests, and packaging unit tests.
+
+The PR CI and native packaged rehearsal matrix completed successfully on the
+latest implementation; see [package rehearsal run](https://github.com/Lephiziel/findrail/actions/runs/37721626939)
+and [CI run](https://github.com/Lephiziel/findrail/actions/runs/37721626933).
 
 Local artifact staging: `/tmp/opencode/alpha3-candidate-final6` (not committed and
 not uploaded). A repeated native Linux/amd64 package run produced byte-identical
 archive and checksum manifest. These results do not establish Gatekeeper
-approval, Finder behavior, or browser interaction. Native matrix workflow
-results are pending until CI runs.
+approval, Finder behavior, or browser interaction. The native jobs validate
+headless packaged journeys, not end-user desktop/browser behavior.
 
 ## Upgrade / rollback contract and outstanding work
 
@@ -57,12 +61,11 @@ waits for the atomic Configure job, restarts, and verifies the indexed body and
 persisted policy. No reverse migration is supported.
 
 **Release blockers:** simulated migration-failure atomicity is covered by a
-storage test, but not by fault injection in the packaged journey. Doctor has
-canceled-context, busy-timeout, and read-only-permission test coverage; the busy
-case passed locally, while permission enforcement depends on the unprivileged
-CI runner. Native Windows/macOS/ARM64 jobs have not completed. Manual browser
-interaction and macOS Gatekeeper/Finder behavior remain untested. No release
-should be made based on this report.
+storage test, but not by fault injection in the packaged journey. Doctor's
+canceled-context, busy-timeout, and read-only-permission checks pass in local/CI
+coverage. Native packaged checks passed for all five targets. Manual browser
+interaction, macOS Gatekeeper/Finder behavior, and real-user retrieval
+evaluation remain untested. No release should be made based on this report.
 
 ## Future publication checklist
 
