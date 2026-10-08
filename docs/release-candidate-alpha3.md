@@ -15,7 +15,7 @@ DOCX. `findrail doctor` offers read-only, redacted JSON/human diagnostics and
 distinguishes an absent index from unsupported/corrupt data.
 
 Candidate version: `0.1.0-alpha.3` (explicit build override only).
-Source revision: `b414799e3cec45a70275c39bb952e478a065d18c`; candidate was built
+Source revision: `e1ed489e46f463cb25d080833c2cc39a4b13917a`; candidate was built
 from a clean checkout (`BUILD-INFO.json` marks provenance clean). Go toolchain:
 `go version go1.27.1-X:nodwarf5 linux/amd64` (local rehearsal environment).
 Current schema: 4 (migrations 1–4); legacy folder DOCX policy defaults disabled.
@@ -34,7 +34,7 @@ Repository checks passed locally: `gofmt`, `git diff --check`, `go test ./...`,
 `go test -race ./...`, `go vet ./...`, `go mod verify`, CGO-free build, UI Node
 tests, and packaging unit tests. The required native CI matrix has not run yet.
 
-Local artifact staging: `/tmp/opencode/alpha3-candidate-final4` (not committed and
+Local artifact staging: `/tmp/opencode/alpha3-candidate-final5` (not committed and
 not uploaded). A repeated native Linux/amd64 package run produced byte-identical
 archive and checksum manifest. These results do not establish Gatekeeper
 approval, Finder behavior, or browser interaction. Native matrix workflow
