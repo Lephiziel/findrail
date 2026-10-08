@@ -10,6 +10,10 @@ import package
 
 
 class PackageSafetyTests(unittest.TestCase):
+    def test_go_license_fallback_retains_all_three_conditions(self):
+        self.assertIn('Neither the name of Google LLC', package.GO_LICENSE_FALLBACK)
+        self.assertIn('specific prior written permission', package.GO_LICENSE_FALLBACK)
+
     def test_manifest_rejects_paths_duplicates_and_mismatch(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
