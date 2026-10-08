@@ -1,9 +1,14 @@
 Findrail local alpha — https://github.com/Lephiziel/findrail
 
 Choose the archive matching your operating system and CPU (Linux/macOS x86-64
-or ARM64; Windows x86-64). Verify it against SHA256SUMS.txt from the same
-download location before extracting. Keep the archive and BUILD-INFO.json if you
-need to report a problem. Candidate archives are unsigned.
+or ARM64; Windows x86-64). Download SHA256SUMS.txt beside the archive. Compute
+the downloaded archive's hash, then compare it with the row for the exact same
+archive basename in SHA256SUMS.txt:
+  Linux:   sha256sum "findrail_<version>_<target>.tar.gz"
+  macOS:   shasum -a 256 "findrail_<version>_<target>.tar.gz"
+  Windows: (Get-FileHash -Algorithm SHA256 -LiteralPath ".\findrail_<version>_<target>.zip").Hash
+Keep the archive and BUILD-INFO.json if you need to report a problem. Candidate
+archives are unsigned.
 
 Extract the archive to a directory you own. Go, Python, an external database,
 and an installed service are not required at runtime. Options go before
@@ -35,6 +40,12 @@ Use the same `--data-dir DIR` for start, index, search and serve.
 
 Before upgrading, stop every Findrail process. Copy the entire data directory,
 including any SQLite WAL/SHM auxiliary files, to a separate backup location.
+Use the path configured for your installation; these examples quote paths with
+spaces and use a destination separate from the originals:
+  Linux:   cp -a "$HOME/.local/share/findrail" "$HOME/findrail backup"
+  macOS:   cp -a "$HOME/Library/Application Support/Findrail" "$HOME/Findrail backup"
+  Windows PowerShell: Copy-Item -LiteralPath "$env:LOCALAPPDATA\Findrail" -Destination "$env:USERPROFILE\Findrail backup" -Recurse
+
 Then start using the new binary; supported migrations run on first write. To
 roll back, stop Findrail and restore the complete backup directory to a new
 location, then use a binary compatible with that backup's schema. Do not run an
