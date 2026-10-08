@@ -27,6 +27,7 @@ type Status struct {
 	WatchWarning  string `json:"watch_warning,omitempty"`
 	Skipped       int    `json:"skipped"`
 	SkippedPDF    int    `json:"skipped_pdf,omitempty"`
+	SkippedDOCX   int    `json:"skipped_docx,omitempty"`
 }
 type Config struct {
 	Interval          time.Duration
@@ -68,9 +69,12 @@ func (m *Manager) Status() []Status {
 	sort.Slice(result, func(i, j int) bool { return result[i].SourceID < result[j].SourceID })
 	return result
 }
-func (m *Manager) update(id string, change func(*Status)) {
+func (m *Manager) update(ctx context.Context, id string, change func(*Status)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
 	s := m.status[id]
 	s.SourceID = id
 	change(&s)
@@ -152,14 +156,14 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 		var err error
 		watcher, err = fsnotify.NewWatcher()
 		if err != nil {
-			m.update(source.ID, func(s *Status) { s.WatchWarning = err.Error() })
+			m.update(ctx, source.ID, func(s *Status) { s.WatchWarning = err.Error() })
 		}
 	}
 	mode := "polling"
 	if watcher != nil {
 		mode = "events"
 	}
-	m.update(source.ID, func(s *Status) { s.State = "starting"; s.Mode = mode })
+	m.update(ctx, source.ID, func(s *Status) { s.State = "starting"; s.Mode = mode })
 	if watcher != nil {
 		done := make(chan struct{})
 		go func() {
@@ -179,7 +183,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 					if !ok {
 						return
 					}
-					m.update(source.ID, func(s *Status) { s.WatchWarning = err.Error() })
+					m.update(ctx, source.ID, func(s *Status) { s.WatchWarning = err.Error() })
 					signal()
 				}
 			}
@@ -225,7 +229,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 			if ctx.Err() != nil {
 				return
 			}
-			m.update(source.ID, func(s *Status) { s.State = "indexing"; s.LastStartedAt = time.Now().UTC().Format(time.RFC3339Nano) })
+			m.update(ctx, source.ID, func(s *Status) { s.State = "indexing"; s.LastStartedAt = time.Now().UTC().Format(time.RFC3339Nano) })
 			conn, err := m.config.Factory(source)
 			if err == nil && conn.Source() != source {
 				err = errors.New("source identity or extraction settings changed")
@@ -253,7 +257,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 						}
 					}
 				}
-				m.update(source.ID, func(s *Status) {
+				m.update(ctx, source.ID, func(s *Status) {
 					if watchErr != nil {
 						s.Mode = "polling"
 						s.WatchWarning = watchErr.Error()
@@ -279,7 +283,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 				return
 			}
 			if err != nil {
-				m.update(source.ID, func(s *Status) { s.State = "error"; s.LastError = err.Error() })
+				m.update(ctx, source.ID, func(s *Status) { s.State = "error"; s.LastError = err.Error() })
 				schedule(retry)
 				retry *= 2
 				if retry > time.Minute {
@@ -287,12 +291,13 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 				}
 			} else {
 				retry = time.Second
-				m.update(source.ID, func(s *Status) {
+				m.update(ctx, source.ID, func(s *Status) {
 					s.State = "idle"
 					s.LastError = ""
 					s.LastSuccessAt = time.Now().UTC().Format(time.RFC3339Nano)
 					s.Skipped = result.Skipped
 					s.SkippedPDF = result.SkippedPDF
+					s.SkippedDOCX = result.SkippedDOCX
 				})
 			}
 		}

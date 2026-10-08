@@ -114,3 +114,41 @@ CI runs these alongside the eleven citation tests. All fifteen passed locally.
 Go tests and race checks passed on the original PR head. The review's Chromium
 launch failed with SIGSEGV before loading the page; this run does not claim an
 additional browser validation beyond the author's recorded checks.
+
+## DOCX source-build validation · 2026-10-07
+
+The DOCX fixtures are synthetic ZIP/XML generated in Go tests and in the smoke
+script; no Word/LibreOffice, personal files, or runtime Python dependency is
+required. The compiled Linux smoke uses the production extractor and covers CLI
+search/preview, source-build Add-folder policy, authenticated Configure API,
+disable/enable re-index, no-page evidence, temp-file rename save, rollback and
+source removal/original preservation. MCP smoke retrieves the DOCX snapshot with
+no page attribution through both supported protocols. SQLite lifecycle tests exercise Configure
+rollback, cross-handle revision compare-and-swap, stale refresh rejection and
+forget/re-add ABA prevention. Configure/Remove coordination is exercised with
+barriers; migrations from schema 1/2/3 retain documents, PDF pages and GitHub
+metadata with legacy DOCX disabled. Node checks retain the four polling/invalidation
+regressions and cover pending-preview invalidation after Configure. A
+short extractor fuzz run completed (2-second requested duration; 78,133
+executions in the final run). No crash was found.
+
+Resource spot check (Linux, compiled CGO-free binary; elapsed includes fresh
+SQLite setup and indexing; output is extracted text bytes):
+
+| Fixture | DOCX input bytes | Extracted output bytes | Elapsed | Result |
+|---|---:|---:|---:|---|
+| Valid package near default input cap; ignored stored media | 7,501,120 | 19 | 0.006 s | Indexed |
+| High-ratio package with 16 MiB declared ignored media | 17,187 | 19 | 0.006 s | Indexed; media was not inflated |
+
+Checks run on this working branch: `go test ./...`, `go test -race ./...`,
+`go vet ./...`, `go mod verify`, `CGO_ENABLED=0 go build`, compiled CLI/HTTP
+smoke, MCP smoke, `node --test internal/transport/http/web/*_test.mjs` (16
+tests), `git diff --check`, and bounded `FuzzExtract` smoke all passed. Native
+Windows/macOS execution and browser automation were not performed locally. The
+PR CI's native Linux/macOS/Windows compile-and-smoke jobs and race/UI jobs passed
+on the reviewed head; the transient Linux test timeout was rerun successfully.
+
+Configure policy and snapshot share one SQLite transaction. Schema 4
+registration tokens and revisions guard independent handles and forget/re-add
+ABA; GitHub metadata remains under its separate revision guard. Canceled workers
+cannot republish watcher status after a source has been forgotten.

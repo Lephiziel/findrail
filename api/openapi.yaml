@@ -109,6 +109,12 @@ paths:
                 repository: {type: string, maxLength: 300}
                 ref: {type: string, maxLength: 1024}
                 subdirectory: {type: string, maxLength: 1024}
+                max_docx_bytes:
+                  type: integer
+                  minimum: 0
+                  maximum: 16777216
+                  default: 8388608
+                  description: Folder DOCX input budget; 0 disables DOCX.
       responses:
         '202': {description: Job accepted}
         '400': {$ref: '#/components/responses/BadRequest'}
@@ -157,6 +163,30 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {description: Unknown source}
         '409': {description: Removal already queued}
+        '429': {description: Job queue is full}
+  /api/v1/sources/{id}/configure:
+    post:
+      operationId: configureFolder
+      summary: Atomically update DOCX policy and re-index a filesystem source (start only)
+      parameters:
+      - {$ref: '#/components/parameters/SourceID'}
+      - {$ref: '#/components/parameters/ManagementToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [max_docx_bytes]
+              properties:
+                max_docx_bytes: {type: integer, minimum: 0, maximum: 16777216}
+      responses:
+        '202': {description: Configure job accepted; poll its job ID until terminal}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown source}
+        '409': {description: Source changed or another operation is active}
         '429': {description: Job queue is full}
   /api/v1/jobs:
     get:
@@ -384,6 +414,9 @@ components:
         max_pdf_bytes:
           type: integer
           description: 0 disables PDF extraction for this source
+        max_docx_bytes:
+          type: integer
+          description: Folder DOCX input limit in bytes; 0 disables DOCX (legacy sources default to 0).
         github:
           type: object
           description: Present only for public GitHub snapshots

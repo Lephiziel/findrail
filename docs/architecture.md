@@ -13,7 +13,7 @@ flowchart TD
   APP --> C
   APP --> GH["Bounded GitHub snapshot"]
   GH --> D["SQLite and FTS5"]
-  C --> E["Text and PDF extraction"]
+  C --> E["Text, PDF and bounded DOCX extraction"]
   E --> I["Atomic ingestion"]
   I --> D["SQLite and FTS5"]
   CLI["CLI"] --> Q["Search request"]
@@ -39,6 +39,7 @@ indexed-evidence contracts.
 | `internal/connectors/github` | Public ref resolution and bounded commit archive preparation | Connector contract, text extraction, HTTP standard library |
 | `internal/extract/text` | Bounded reads and UTF-8 validation | Standard library |
 | `internal/extract/pdf` | Isolated PDF text worker and page attribution | PDF parser, connector contract |
+| `internal/extract/docx` | Bounded offline WordprocessingML body-to-text extraction | Go ZIP/XML standard library |
 | `internal/sync` | Source discovery, event debounce, retries and health | Filesystem adapter, ingest, store, fsnotify |
 | `internal/sourceapp` | `start`-scoped source operations and bounded process-memory jobs | Connectors, ingest, store |
 | `internal/sourcecoord` | Shared per-source scan/removal exclusion inside one process | Standard library |
@@ -97,8 +98,10 @@ or source removal.
 ## Storage
 
 SQLite FTS5 and a CGO-free Go driver keep installation simple. WAL and foreign
-keys are enabled. Schema migrations 1–3 are transactional and embedded in the binary.
-Schema 3 stores GitHub selection/snapshot metadata and stale-update revision guards.
+keys are enabled. Schema migrations 1–4 are transactional and embedded in the binary.
+Schema 3 stores GitHub selection/snapshot metadata and stale-update revision guards;
+schema 4 stores per-folder DOCX input limits (legacy default disabled) and source
+registration tokens/revisions for guarded configuration and removal.
 Unknown newer schemas are rejected. A one-connection writer pool serializes
 updates; four query-only read connections use WAL snapshots, preserving search
 availability during extraction. PDF pages and their FTS entries commit in the

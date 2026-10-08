@@ -42,6 +42,7 @@ func runStartWithManagement(ctx context.Context, args []string, out, stderr io.W
 	noOpen := fs.Bool("no-open", false, "print the UI URL without opening a browser")
 	maxBytes := fs.Int64("max-bytes", filesystem.DefaultMaxBytes, "maximum bytes per text document in DIRECTORY")
 	maxPDFBytes := fs.Int64("max-pdf-bytes", 16<<20, "maximum bytes per PDF in DIRECTORY; 0 disables PDFs")
+	maxDOCXBytes := fs.Int64("max-docx-bytes", 8<<20, "maximum bytes per DOCX in DIRECTORY; 0 disables DOCX")
 	interval := fs.Duration("sync-interval", 5*time.Minute, "periodic full refresh, at least 1s")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -55,6 +56,9 @@ func runStartWithManagement(ctx context.Context, args []string, out, stderr io.W
 	if *interval < time.Second {
 		return fmt.Errorf("sync interval must be at least 1s")
 	}
+	if *maxDOCXBytes < 0 || *maxDOCXBytes > 16<<20 {
+		return fmt.Errorf("max-docx-bytes must be 0–16777216")
+	}
 	if err := transport.ValidateAddress(*addr); err != nil {
 		return err
 	}
@@ -64,7 +68,7 @@ func runStartWithManagement(ctx context.Context, args []string, out, stderr io.W
 	if fs.NArg() == 0 {
 		var limitSet bool
 		fs.Visit(func(f *flag.Flag) {
-			if f.Name == "max-bytes" || f.Name == "max-pdf-bytes" {
+			if f.Name == "max-bytes" || f.Name == "max-pdf-bytes" || f.Name == "max-docx-bytes" {
 				limitSet = true
 			}
 		})
@@ -82,13 +86,14 @@ func runStartWithManagement(ctx context.Context, args []string, out, stderr io.W
 	}
 	factory := func(source connector.Source) (*filesystem.Connector, error) {
 		return filesystem.NewWithOptions(source.Root, filesystem.Options{
-			MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes,
+			MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes,
+			RegistrationToken: source.RegistrationToken, RegistrationRevision: source.RegistrationRevision,
 			ExtractPDF: pdfextract.Extractor(executable),
 		}, dir)
 	}
 	var selected *filesystem.Connector
 	if fs.NArg() == 1 {
-		selected, err = factory(connector.Source{Root: fs.Arg(0), MaxTextBytes: *maxBytes, MaxPDFBytes: *maxPDFBytes})
+		selected, err = factory(connector.Source{Root: fs.Arg(0), MaxTextBytes: *maxBytes, MaxPDFBytes: *maxPDFBytes, MaxDOCXBytes: *maxDOCXBytes})
 		if err != nil {
 			return fmt.Errorf("choose folder: %w", err)
 		}
@@ -115,6 +120,11 @@ func runStartWithManagement(ctx context.Context, args []string, out, stderr io.W
 		}
 		if result.SkippedPDF > 0 {
 			if _, err := fmt.Fprintf(out, "Skipped %d PDFs: no usable text or extraction limits. OCR is not included.\n", result.SkippedPDF); err != nil {
+				return err
+			}
+		}
+		if result.SkippedDOCX > 0 {
+			if _, err := fmt.Fprintf(out, "Skipped %d DOCX files: disabled, unsupported, no body text, or extraction limit.\n", result.SkippedDOCX); err != nil {
 				return err
 			}
 		}

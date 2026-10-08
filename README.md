@@ -10,8 +10,9 @@ documents. Source builds also provide a scoped, read-only stdio MCP server.
 Connected services and optional semantic retrieval are the next product stages.
 
 **Status: local alpha, `0.1.0-alpha.2`.** It is ready for testing, not a stable
-release. Public GitHub file snapshots are available in source builds. Private
-GitHub, OCR, DOCX, semantic search and desktop launching remain on the roadmap.
+release. Public GitHub file snapshots and bounded local DOCX body extraction are
+available in source builds. Existing release archives do not include DOCX.
+Private GitHub, OCR, semantic search and desktop launching remain on the roadmap.
 
 [Releases](https://github.com/Lephiziel/findrail/releases) ·
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
@@ -128,6 +129,7 @@ stop startup and preserve the prior committed inventory.
 - A built-in three-document demo and one-command startup for your own folders.
 - Explicit local folders containing UTF-8 text, Markdown and common source files.
 - Text PDFs with original page numbers; a bounded extraction child process.
+- Bounded offline DOCX plain-text body snapshots in source builds (no page numbers).
 - Durable SQLite FTS5 search, BM25 ranking, Unicode terms and source filters.
 - Matching passages and plain-text previews of the indexed snapshot.
 - Automatic refresh using directory notifications, debouncing and periodic scans.
@@ -150,6 +152,8 @@ Text input defaults to **1 MiB per file**, configurable up to 32 MiB. PDFs defau
 to **16 MiB input**, with at most 500 pages, 1 MiB of extracted text and a 10-second
 extraction deadline. Image-only / scanned PDFs are skipped: OCR is not included.
 Malformed or encrypted PDFs fail the source scan, preserving its previous index.
+DOCX input defaults to **8 MiB** (0 disables; configurable up to 16 MiB), with
+bounded ZIP/XML parsing and no Office runtime. See [DOCX limits and scope](docs/docx.md).
 
 Hidden entries, symlinks, dependency directories, binary / non-UTF-8 text and
 common credential filenames are skipped. The index directory is excluded. This
@@ -160,9 +164,9 @@ rest**. On Unix, newly created directories and database files use private modes.
 There is no runtime telemetry. See [data handling](docs/data-handling.md).
 
 Upgrading from the foundation migrates the existing index automatically. Existing
-sources retain their text-only policy; re-run `index` to enable PDFs. Back up the
+sources retain their previous policy; re-run `index` to enable formats. Back up the
 data directory while Findrail is stopped before upgrading; the older binary
-cannot read schema 3.
+cannot read schema 4.
 
 ## Commands
 
@@ -195,7 +199,7 @@ Linux; `~/Library/Application Support/Findrail` on macOS;
 
 | Capability | Local alpha | Next stages |
 |---|---|---|
-| Documents | Text / Markdown / code / PDF text | DOCX, optional OCR |
+| Documents | Text / Markdown / code / PDF text / bounded DOCX body text in source builds | optional OCR |
 | Sources | Local folders; public GitHub snapshots in source builds | Private GitHub, bookmarks, work tools |
 | Freshness | File watching and full reconciliation | Resumable remote sync |
 | Retrieval | Literal AND terms, source filter, PDF page attribution | Query evaluation, structured filters, optional semantics |

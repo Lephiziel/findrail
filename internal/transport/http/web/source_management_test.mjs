@@ -87,6 +87,20 @@ test('source removal invalidates evidence that was fetched before removal', asyn
   assert.equal(vm.runInContext('currentEvidence', h.context), null);
 });
 
+test('successful source reconfiguration invalidates pending preview evidence', async () => {
+  const h = harness(); await flush();
+  const preview = vm.runInContext("preview('doc', 0, 'configured-source')", h.context);
+  await flush();
+  h.notify('source-reconfigured', 'configured-source');
+  h.resolveEvidence({id: 'doc', source_id: 'configured-source', title: 'Old snapshot',
+    source_name: 'Folder', path: 'note.docx', text: 'stale DOCX snapshot',
+    source_kind: 'filesystem', modified_at: '2026-01-01T00:00:00Z', uri: 'file:///tmp/note.docx'});
+  await preview;
+  assert.equal(h.element('preview').open, false);
+  assert.equal(h.element('copy-markdown').disabled, true);
+  assert.equal(vm.runInContext('currentEvidence', h.context), null);
+});
+
 test('job polling resumes if the tab is hidden during an active request', async () => {
   const h = harness(); await flush(); h.timers.clear();
   let releaseJobs;
