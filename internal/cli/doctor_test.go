@@ -79,6 +79,39 @@ func TestDoctorCanceledContextReportsJSONWithoutInspecting(t *testing.T) {
 	}
 }
 
+func TestDoctorRejectsNonDirectoryDataPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(path, []byte("synthetic"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	err := cli.Run(context.Background(), []string{"doctor", "--data-dir", path, "--json"}, &out, &stderr, "test")
+	var coded interface{ ExitCode() int }
+	if !errors.As(err, &coded) || coded.ExitCode() != 2 {
+		t.Fatalf("invalid data path exit: %v", err)
+	}
+	var report struct {
+		Checks []struct {
+			Code string `json:"code"`
+		} `json:"checks"`
+	}
+	if e := json.Unmarshal(out.Bytes(), &report); e != nil {
+		t.Fatalf("invalid JSON report: %v", e)
+	}
+	found := false
+	for _, check := range report.Checks {
+		if check.Code == "data_directory_not_directory" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("invalid-path diagnostic missing: %+v", report.Checks)
+	}
+	if strings.Contains(out.String(), path) {
+		t.Fatal("default JSON diagnostic disclosed local path")
+	}
+}
+
 func TestDoctorSupportedSchemaAndCorruptDiagnostic(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
