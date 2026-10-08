@@ -3,6 +3,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import package
@@ -26,6 +27,17 @@ class PackageSafetyTests(unittest.TestCase):
                 import io
                 tf.addfile(info, io.BytesIO(b'x'))
             with self.assertRaises(ValueError): package.extract_verified(archive, root / 'out')
+            with tarfile.open(archive, 'w:gz') as tf:
+                info = tarfile.TarInfo('pkg/link'); info.type = tarfile.SYMTYPE; info.linkname = '../../escape'
+                tf.addfile(info)
+            with self.assertRaises(ValueError): package.extract_verified(archive, root / 'out')
+
+    def test_zip_rejects_windows_separator_traversal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            archive = pathlib.Path(temp) / 'bad.zip'
+            with zipfile.ZipFile(archive, 'w') as zf:
+                zf.writestr('pkg/..\\..\\escape', b'bad')
+            with self.assertRaises(ValueError): package.extract_verified(archive, pathlib.Path(temp) / 'out')
 
     def test_safe_basename(self):
         for name in ('../a', 'a/b', 'C:\\a', ''):

@@ -58,7 +58,7 @@ def extract_verified(archive, destination):
             for item in zf.infolist():
                 p = pathlib.PurePosixPath(item.filename)
                 mode = item.external_attr >> 16
-                if p.is_absolute() or '..' in p.parts or not p.parts or item.filename in seen:
+                if p.is_absolute() or '..' in p.parts or not p.parts or '\\' in item.filename or ':' in item.filename or item.filename in seen:
                     raise ValueError('unsafe archive member')
                 seen.add(item.filename)
                 if mode and (stat.S_ISLNK(mode) or (item.is_dir() and not stat.S_ISDIR(mode)) or
@@ -73,7 +73,7 @@ def extract_verified(archive, destination):
         with tarfile.open(archive, 'r:gz') as tf:
             for item in tf.getmembers():
                 p = pathlib.PurePosixPath(item.name)
-                if p.is_absolute() or '..' in p.parts or not p.parts or item.name in seen or not (item.isfile() or item.isdir()):
+                if p.is_absolute() or '..' in p.parts or not p.parts or '\\' in item.name or ':' in item.name or item.name in seen or not (item.isfile() or item.isdir()):
                     raise ValueError('unsafe archive member')
                 seen.add(item.name)
                 if root is None: root = p.parts[0]
