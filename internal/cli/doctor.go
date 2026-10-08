@@ -108,7 +108,10 @@ func runDoctor(ctx context.Context, args []string, out, stderr io.Writer, versio
 				if openErr != nil {
 					code, status, action := "index_unreadable", "error", "Preserve a stopped full-directory backup, then investigate or restore it."
 					msg := "The index could not be safely inspected; no repair or migration was attempted."
-					if strings.Contains(openErr.Error(), "unsupported index schema") {
+					lowerError := strings.ToLower(openErr.Error())
+					if errors.Is(openErr, context.DeadlineExceeded) || strings.Contains(lowerError, "locked") || strings.Contains(lowerError, "busy") {
+						code, msg, action = "index_busy", "The index is busy; inspection stopped without changing it.", "Stop other Findrail writers and retry doctor."
+					} else if strings.Contains(lowerError, "unsupported index schema") {
 						code, status, action = "schema_unsupported", "error", "Use a compatible Findrail version; do not open a newer index with an older binary."
 						parts := strings.Fields(openErr.Error())
 						schema := "unknown"

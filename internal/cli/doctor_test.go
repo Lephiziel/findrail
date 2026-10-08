@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/Lephiziel/findrail/internal/cli"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
@@ -181,5 +182,86 @@ func TestDoctorOldAndNewerSchemaDoesNotMigrate(t *testing.T) {
 				t.Fatal("doctor changed the index")
 			}
 		})
+	}
+}
+
+func TestDoctorBusyIndexReturnsBoundedDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	store, err := sqlite.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "findrail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("PRAGMA journal_mode=DELETE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA locking_mode=EXCLUSIVE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("BEGIN EXCLUSIVE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO sources(id,kind,name,root) VALUES('busy','filesystem','busy','/busy')"); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = db.Exec("ROLLBACK"); _ = db.Close() }()
+	start := time.Now()
+	var out, stderr bytes.Buffer
+	err = cli.Run(context.Background(), []string{"doctor", "--data-dir", dir, "--json"}, &out, &stderr, "test")
+	if elapsed := time.Since(start); elapsed > 7*time.Second {
+		t.Fatalf("doctor exceeded bounded inspection: %s", elapsed)
+	}
+	var coded interface{ ExitCode() int }
+	if !errors.As(err, &coded) || coded.ExitCode() != 2 {
+		t.Fatalf("busy-index exit: %v", err)
+	}
+	var report struct {
+		Checks []struct {
+			Code string `json:"code"`
+		} `json:"checks"`
+	}
+	if e := json.Unmarshal(out.Bytes(), &report); e != nil {
+		t.Fatalf("invalid JSON %q: %v", out.String(), e)
+	}
+	found := false
+	for _, check := range report.Checks {
+		if check.Code == "index_busy" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("busy diagnostic missing: %+v", report.Checks)
+	}
+}
+
+func TestDoctorReadOnlyPermissionsWhenEnforced(t *testing.T) {
+	if os.PathSeparator == '\\' || os.Geteuid() == 0 {
+		t.Skip("file permission enforcement unavailable in this environment")
+	}
+	dir := t.TempDir()
+	store, err := sqlite.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "findrail.db")
+	if err := os.Chmod(path, 0); err != nil {
+		t.Skipf("chmod unsupported: %v", err)
+	}
+	defer os.Chmod(path, 0600)
+	var out, stderr bytes.Buffer
+	err = cli.Run(context.Background(), []string{"doctor", "--data-dir", dir, "--json"}, &out, &stderr, "test")
+	var coded interface{ ExitCode() int }
+	if !errors.As(err, &coded) || coded.ExitCode() != 2 {
+		t.Fatalf("permission diagnostic exit: %v", err)
 	}
 }

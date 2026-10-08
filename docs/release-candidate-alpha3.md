@@ -54,10 +54,11 @@ persisted policy. No reverse migration is supported.
 
 **Release blockers:** simulated migration-failure atomicity is covered by a
 storage test, but not by fault injection in the packaged journey. Doctor has
-canceled-context coverage but still needs dedicated busy/read-only permission
-tests. Native
-Windows/macOS/ARM64 jobs have not run. No release should be made based on this
-report.
+canceled-context, busy-timeout, and read-only-permission test coverage; the busy
+case passed locally, while permission enforcement depends on the unprivileged
+CI runner. Native Windows/macOS/ARM64 jobs have not completed. Manual browser
+interaction and macOS Gatekeeper/Finder behavior remain untested. No release
+should be made based on this report.
 
 ## Future publication checklist
 
