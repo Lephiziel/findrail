@@ -35,8 +35,8 @@ Repository checks passed locally: `gofmt`, `git diff --check`, `go test ./...`,
 tests, and packaging unit tests.
 
 The PR CI and native packaged rehearsal matrix completed successfully on the
-latest implementation; see [package rehearsal run](https://github.com/Lephiziel/findrail/actions/runs/37721626939)
-and [CI run](https://github.com/Lephiziel/findrail/actions/runs/37721626933).
+latest implementation; see [package rehearsal run](https://github.com/Lephiziel/findrail/actions/runs/37722720804)
+and [CI run](https://github.com/Lephiziel/findrail/actions/runs/37722720869).
 
 Local artifact staging: `/tmp/opencode/alpha3-candidate-final8` (not committed and
 not uploaded). A repeated native Linux/amd64 package run produced byte-identical
