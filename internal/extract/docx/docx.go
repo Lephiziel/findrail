@@ -374,11 +374,18 @@ func parseBody(ctx context.Context, data []byte) (string, error) {
 	d := decoder(data)
 	stack := make([]xml.Name, 0, 32)
 	var b strings.Builder
+	appendSeparator := func(text string) error {
+		if uint64(b.Len()+len(text)) > MaxText {
+			return ErrLimit
+		}
+		b.WriteString(text)
+		return nil
+	}
 	tokens := 0
 	paragraphs := 0
 	inBody := false
 	skip := 0
-	hidden := 0
+	hidden := false
 	inP := false
 	cells := 0
 	rootSeen, bodySeen := false, false
@@ -429,7 +436,9 @@ func parseBody(ctx context.Context, data []byte) (string, error) {
 				case "p":
 					if inBody && skip == 0 {
 						if paragraphs > 0 {
-							b.WriteByte('\n')
+							if err := appendSeparator("\n"); err != nil {
+								return "", err
+							}
 						}
 						paragraphs++
 						inP = true
@@ -437,6 +446,11 @@ func parseBody(ctx context.Context, data []byte) (string, error) {
 				case "del", "moveFrom", "instrText", "delText", "drawing", "pict", "object", "txbxContent":
 					skip++
 				case "vanish", "webHidden":
+					// Only direct run properties are supported. Paragraph/style
+					// properties must not change visibility of later runs.
+					if parent.Space != wNS || parent.Local != "rPr" || len(stack) < 3 || stack[len(stack)-3] != (xml.Name{Space: wNS, Local: "r"}) {
+						break
+					}
 					isVisible := false
 					for _, a := range x.Attr {
 						if a.Name.Space == wNS && a.Name.Local == "val" && (a.Value == "0" || a.Value == "false" || a.Value == "off") {
@@ -444,20 +458,26 @@ func parseBody(ctx context.Context, data []byte) (string, error) {
 						}
 					}
 					if !isVisible {
-						hidden++
+						hidden = true
 					}
 				case "tab":
-					if inBody && skip == 0 && hidden == 0 {
-						b.WriteByte('\t')
+					if inBody && skip == 0 && !hidden {
+						if err := appendSeparator("\t"); err != nil {
+							return "", err
+						}
 					}
 				case "br", "cr":
-					if inBody && skip == 0 && hidden == 0 {
-						b.WriteByte('\n')
+					if inBody && skip == 0 && !hidden {
+						if err := appendSeparator("\n"); err != nil {
+							return "", err
+						}
 					}
 				case "tc":
 					if inBody && skip == 0 {
 						if cells > 0 {
-							b.WriteString(" | ")
+							if err := appendSeparator(" | "); err != nil {
+								return "", err
+							}
 						}
 						cells++
 					}
@@ -475,9 +495,7 @@ func parseBody(ctx context.Context, data []byte) (string, error) {
 					}
 				case "r":
 					// Direct run-level vanish remains active through the run's text.
-					if hidden > 0 {
-						hidden--
-					}
+					hidden = false
 				case "p":
 					inP = false
 				case "body":
@@ -488,7 +506,7 @@ func parseBody(ctx context.Context, data []byte) (string, error) {
 			}
 			stack = stack[:len(stack)-1]
 		case xml.CharData:
-			if inBody && skip == 0 && hidden == 0 && len(stack) > 0 {
+			if inBody && skip == 0 && !hidden && len(stack) > 0 {
 				n := stack[len(stack)-1]
 				if n.Space == wNS && (n.Local == "t" || n.Local == "delText") {
 					for _, r := range string(x) {

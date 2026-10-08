@@ -63,6 +63,41 @@ func TestExtractPlainTextContract(t *testing.T) {
 	}
 }
 
+func TestHiddenFormattingIsScopedToOneRun(t *testing.T) {
+	for name, properties := range map[string]string{
+		"vanish":     `<w:vanish/>`,
+		"web-hidden": `<w:webHidden/>`,
+		"both":       `<w:vanish/><w:webHidden/>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>` +
+				`<w:r><w:rPr>` + properties + `</w:rPr><w:t>hidden</w:t></w:r>` +
+				`<w:r><w:t>visible</w:t></w:r></w:p></w:body></w:document>`
+			got, err := extract(t, packageBytes(document))
+			if err != nil || got != "visible" {
+				t.Fatalf("got %q, %v; want visible text after hidden run", got, err)
+			}
+		})
+	}
+}
+
+func TestStructuralTextCountsTowardOutputBudget(t *testing.T) {
+	for name, extra := range map[string]string{
+		"tab":       `<w:r><w:tab/></w:r>`,
+		"break":     `<w:r><w:br/></w:r>`,
+		"paragraph": `</w:p><w:p><w:r><w:tab/></w:r>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>` +
+				strings.Repeat("x", int(MaxText)) + `</w:t></w:r>` + extra + `</w:p></w:body></w:document>`
+			got, err := extract(t, packageBytes(document))
+			if !errors.Is(err, ErrLimit) || got != "" {
+				t.Fatalf("got %d bytes, %v; want all-or-nothing text limit", len(got), err)
+			}
+		})
+	}
+}
+
 func TestRejectsInvalidPackagesAndNamespacedSpoof(t *testing.T) {
 	for name, body := range map[string]string{
 		"spoof":      `<document xmlns="urn:no"><body><p><t>hello</t></p></body></document>`,
