@@ -68,7 +68,7 @@ jobs:
             "$PYTHON" scripts/smoke.py --expected-version 0.1.0-alpha.3 "$RUNNER_TEMP/install 📦/findrail_0.1.0-alpha.3_${{ matrix.target }}/findrail"
             "$PYTHON" scripts/mcp_smoke.py "$RUNNER_TEMP/install 📦/findrail_0.1.0-alpha.3_${{ matrix.target }}/findrail"
           fi
-      - name: Rehearse schema-3 upgrade and stopped-directory rollback
+      - name: Rehearse alpha.2 schema-2 upgrade and stopped-directory rollback
         if: matrix.target == 'linux-amd64'
         shell: bash
         run: python3 scripts/upgrade_smoke.py "$RUNNER_TEMP/install 📦/findrail_0.1.0-alpha.3_linux-amd64/findrail"

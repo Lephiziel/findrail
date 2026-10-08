@@ -10,5 +10,5 @@ includes empty-index onboarding, local text/PDF/DOCX extraction, public GitHub
 snapshots, evidence previews, and read-only MCP.
 
 Not included: OCR, semantic search, automatic updates, code signing, notarization,
-or a public beta. Upgrade compatibility and remaining platform checks are still
+or a public beta. alpha.2 schema-2 upgrade and remaining platform checks are still
 release blockers; see [the candidate report](release-candidate-alpha3.md).
