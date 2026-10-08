@@ -179,7 +179,11 @@ func runDoctor(ctx context.Context, args []string, out, stderr io.Writer, versio
 			return err
 		}
 	} else {
-		fmt.Fprintf(out, "Findrail doctor report v%d · %s · %s/%s · %s\n", report.ReportVersion, report.Version, report.GOOS, report.GOARCH, report.GoVersion)
+		revision := report.Revision
+		if revision == "" {
+			revision = "unknown"
+		}
+		fmt.Fprintf(out, "Findrail doctor report v%d · %s · %s/%s · %s · revision %s (%s)\n", report.ReportVersion, report.Version, report.GOOS, report.GOARCH, report.GoVersion, revision, report.Provenance)
 		for _, c := range report.Checks {
 			fmt.Fprintf(out, "%s: %s (%s) — %s Next: %s\n", c.ID, c.Status, c.Code, c.Message, c.NextAction)
 		}

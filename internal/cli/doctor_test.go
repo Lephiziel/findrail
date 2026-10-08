@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +37,13 @@ func TestDoctorMissingIsReadOnlyAndJSON(t *testing.T) {
 	}
 	if _, ok := report["data_directory"]; ok {
 		t.Fatal("default report disclosed path")
+	}
+	var human, humanErr bytes.Buffer
+	if err := cli.Run(context.Background(), []string{"doctor", "--data-dir", dir, "--show-paths"}, &human, &humanErr, "test-version"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(human.String(), "revision") || !strings.Contains(human.String(), "not_initialized") || !strings.Contains(human.String(), dir) {
+		t.Fatalf("human report diverged or omitted explicit path: %s", human.String())
 	}
 }
 
