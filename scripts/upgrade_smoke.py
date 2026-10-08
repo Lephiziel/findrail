@@ -106,6 +106,17 @@ def main():
         from smoke import docx_fixture
         (source_root / 'legacy.docx').write_bytes(docx_fixture('legacydocxconfiguredphrase preserved original'))
         dbpath, folder_id = create_schema2(data, source_root)
+        historical = sqlite3.connect(dbpath)
+        before_state = {
+            'sources': historical.execute('SELECT COUNT(*) FROM sources').fetchone()[0],
+            'documents': historical.execute('SELECT COUNT(*) FROM documents').fetchone()[0],
+            'hash': historical.execute("SELECT content_hash FROM documents WHERE id='legacy-pdf-doc'").fetchone()[0],
+            'search': historical.execute("SELECT COUNT(*) FROM documents_fts WHERE documents_fts MATCH 'oldcandidateevidence'").fetchone()[0],
+            'pages': historical.execute("SELECT page_number,content FROM document_pages WHERE document_id='legacy-pdf-doc' ORDER BY page_number").fetchall(),
+        }
+        historical.close()
+        if before_state['sources'] != 1 or before_state['documents'] != 1 or before_state['search'] != 1 or before_state['pages'][1][0] != 2:
+            raise SystemExit('synthetic alpha.2 baseline inventory/search/PDF evidence invalid')
         before = hashlib.sha256(dbpath.read_bytes()).hexdigest()
         backup = root / 'stopped full backup'
         shutil.copytree(data, backup)
@@ -117,9 +128,17 @@ def main():
         if result['total'] != 1 or result['results'][0]['page'] != 2: raise SystemExit('migration lost PDF FTS/page evidence')
         updated = sqlite3.connect(dbpath)
         schema = updated.execute('PRAGMA user_version').fetchone()[0]
+        after_state = {
+            'sources': updated.execute('SELECT COUNT(*) FROM sources').fetchone()[0],
+            'documents': updated.execute('SELECT COUNT(*) FROM documents').fetchone()[0],
+            'hash': updated.execute("SELECT content_hash FROM documents WHERE id='legacy-pdf-doc'").fetchone()[0],
+            'search': updated.execute("SELECT COUNT(*) FROM documents_fts WHERE documents_fts MATCH 'oldcandidateevidence'").fetchone()[0],
+            'pages': updated.execute("SELECT page_number,content FROM document_pages WHERE document_id='legacy-pdf-doc' ORDER BY page_number").fetchall(),
+        }
         policies = updated.execute('SELECT max_docx_bytes FROM sources WHERE id=?', (folder_id,)).fetchone()
         updated.close()
         if schema != 4 or policies != (0,): raise SystemExit('schema-4 migration state mismatch')
+        if before_state != after_state: raise SystemExit('migration changed the recorded inventory, content hash, FTS or PDF pages')
         configure_legacy_docx(binary, data, root, folder_id)
         sources = json.loads(invoke(binary, ['sources', '--data-dir', str(data), '--json']).stdout)['sources']
         legacy = next(source for source in sources if source['id'] == folder_id)
