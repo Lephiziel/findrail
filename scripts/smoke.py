@@ -307,10 +307,19 @@ def source_management_smoke(binary):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary', type=pathlib.Path)
-    binary = parser.parse_args().binary.resolve(strict=True)
+    parser.add_argument('--expected-version')
+    arguments = parser.parse_args()
+    binary = arguments.binary.resolve(strict=True)
     repo = pathlib.Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix='findrail-smoke-') as temporary:
         base_dir = pathlib.Path(temporary)
+        version = subprocess.run([str(binary), 'version'], cwd=base_dir, capture_output=True, text=True, encoding='utf-8', timeout=5, check=True)
+        version_fields = version.stdout.strip().split()
+        assert len(version_fields) == 2 and version_fields[0] == 'findrail', version.stdout
+        if arguments.expected_version:
+            assert version_fields[1] == arguments.expected_version, version.stdout
+        help_result = subprocess.run([str(binary), '--help'], cwd=base_dir, capture_output=True, text=True, encoding='utf-8', timeout=5, check=True)
+        assert 'Usage:' in help_result.stdout, help_result.stdout
         docs, data_dir = base_dir / 'notes', base_dir / 'index'
         shutil.copytree(repo / 'examples' / 'notes', docs)
         pdf_path = docs / 'space.pdf'
