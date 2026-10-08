@@ -10,11 +10,13 @@ documents. Source builds also provide a scoped, read-only stdio MCP server.
 Connected services and optional semantic retrieval are the next product stages.
 
 **Status: local alpha, `0.1.0-alpha.2`.** It is ready for testing, not a stable
-release. Public GitHub file snapshots are available in source builds. Private
-GitHub, OCR, DOCX, semantic search and desktop launching remain on the roadmap.
+release. Public GitHub file snapshots and bounded local DOCX body extraction are
+available in source builds. Existing release archives do not include DOCX.
+Private GitHub, OCR, semantic search and desktop launching remain on the roadmap.
 
 [Releases](https://github.com/Lephiziel/findrail/releases) ·
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
+[Source management](docs/source-management.md) ·
 [MCP integration](docs/mcp.md) ·
 [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) ·
 [Русский](docs/ru/overview.md)
@@ -87,6 +89,13 @@ your registered folders. Ctrl+C stops it. No background daemon
 is installed. You can register another folder using `index` while the server
 runs; it will appear automatically.
 
+Source builds also let `start` create an empty index and manage folder/public
+GitHub sources in the Sources panel. Folder selection uses an absolute path on
+the machine running Findrail; browser file pickers cannot choose a server path.
+Manual GitHub refresh, job cancellation and logical removal are documented in
+[source management](docs/source-management.md). Existing release archives do
+not yet include this new web management flow.
+
 ### Build from source
 
 Requires Go 1.26 or newer. No CGO is required.
@@ -97,7 +106,7 @@ cd findrail
 go build -o bin/findrail ./cmd/findrail
 ./bin/findrail index --data-dir .findrail examples/notes
 ./bin/findrail search --data-dir .findrail "webhook"
-./bin/findrail serve --data-dir .findrail
+./bin/findrail start --data-dir .findrail
 ```
 
 Options precede positional arguments. If you use `--data-dir`, use the same
@@ -135,6 +144,7 @@ stop startup and preserve the prior committed inventory.
 - A built-in three-document demo and one-command startup for your own folders.
 - Explicit local folders containing UTF-8 text, Markdown and common source files.
 - Text PDFs with original page numbers; a bounded extraction child process.
+- Bounded offline DOCX plain-text body snapshots in source builds (no page numbers).
 - Durable SQLite FTS5 search, BM25 ranking, Unicode terms and source filters.
 - Matching passages and plain-text previews of the indexed snapshot.
 - Automatic refresh using directory notifications, debouncing and periodic scans.
@@ -145,6 +155,8 @@ stop startup and preserve the prior committed inventory.
   read-only stdio MCP (`findrail mcp`).
 - Logical source removal, leaving original files untouched.
 - Manual, commit-pinned public GitHub text snapshots with offline preview.
+- Empty-index onboarding and web source management in source builds (`start`);
+  release archives do not yet include these changes.
 
 See [alpha behaviour and limits](docs/local-alpha.md) and the
 [validation report](docs/validation.md).
@@ -155,6 +167,8 @@ Text input defaults to **1 MiB per file**, configurable up to 32 MiB. PDFs defau
 to **16 MiB input**, with at most 500 pages, 1 MiB of extracted text and a 10-second
 extraction deadline. Image-only / scanned PDFs are skipped: OCR is not included.
 Malformed or encrypted PDFs fail the source scan, preserving its previous index.
+DOCX input defaults to **8 MiB** (0 disables; configurable up to 16 MiB), with
+bounded ZIP/XML parsing and no Office runtime. See [DOCX limits and scope](docs/docx.md).
 
 Hidden entries, symlinks, dependency directories, binary / non-UTF-8 text and
 common credential filenames are skipped. The index directory is excluded. This
@@ -165,9 +179,9 @@ rest**. On Unix, newly created directories and database files use private modes.
 There is no runtime telemetry. See [data handling](docs/data-handling.md).
 
 Upgrading from the foundation migrates the existing index automatically. Existing
-sources retain their text-only policy; re-run `index` to enable PDFs. Back up the
+sources retain their previous policy; re-run `index` to enable formats. Back up the
 data directory while Findrail is stopped before upgrading; the older binary
-cannot read schema 3.
+cannot read schema 4.
 
 ## Commands
 
@@ -200,7 +214,7 @@ Linux; `~/Library/Application Support/Findrail` on macOS;
 
 | Capability | Local alpha | Next stages |
 |---|---|---|
-| Documents | Text / Markdown / code / PDF text | DOCX, optional OCR |
+| Documents | Text / Markdown / code / PDF text / bounded DOCX body text in source builds | optional OCR |
 | Sources | Local folders; public GitHub snapshots in source builds | Private GitHub, bookmarks, work tools |
 | Freshness | File watching and full reconciliation | Resumable remote sync |
 | Retrieval | Literal AND terms, source filter, PDF page attribution | Query evaluation, structured filters, optional semantics |
@@ -226,6 +240,7 @@ and [official Go module guidance](https://go.dev/doc/modules/layout).
 | `internal/store/sqlite/`, `internal/search/` | Persistence, FTS and evidence |
 | `internal/sync/` | Source discovery, watchers, retries and health |
 | `internal/transport/` | HTTP, embedded UI and source-built stdio MCP |
+| `internal/sourceapp/` | `start`-only source operations and in-memory jobs |
 | `internal/semantic/` | Future semantic retrieval design |
 | `pkg/connector/` | Experimental public connector contract |
 | `api/`, `docs/` | Implemented API and product documentation |

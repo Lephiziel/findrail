@@ -25,7 +25,7 @@ import (
 const help = `Findrail — find your knowledge, keep your sources.
 
 Usage:
-  findrail index [--data-dir DIR] [--max-bytes N] [--max-pdf-bytes N] [--json] DIRECTORY
+  findrail index [--data-dir DIR] [--max-bytes N] [--max-pdf-bytes N] [--max-docx-bytes N] [--json] DIRECTORY
   findrail index-github [--data-dir DIR] [--ref REF] [--path PATH] [--max-bytes N] [--timeout 2m] [--json] OWNER/REPO
   findrail refresh-github [--data-dir DIR] [--timeout 2m] [--json] SOURCE_ID
   findrail start [--data-dir DIR] [--addr 127.0.0.1:7766] [--no-open] [DIRECTORY]
@@ -40,8 +40,8 @@ Usage:
 
 Options must precede positional arguments. Run COMMAND --help for details.
 Local alpha: text, Markdown, source code, text PDFs, preview and automatic refresh.
-Public GitHub file snapshots use explicit indexing and manual refresh. Source builds also include a
-read-only stdio MCP server.
+start includes local source management in source builds; serve and demo are read-only.
+Public GitHub snapshots are manually refreshed. Source builds also include a read-only stdio MCP server.
 `
 
 func Run(ctx context.Context, args []string, out, stderr io.Writer, version string) error {
@@ -63,7 +63,7 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 		return runMCP(ctx, args[1:], out, stderr, version)
 	}
 	if args[0] == "demo" {
-		return runDemo(ctx, args[1:], out, stderr, openBrowser, runStart)
+		return runDemo(ctx, args[1:], out, stderr, openBrowser, runStartReadOnly)
 	}
 	if args[0] == "index-github" || args[0] == "refresh-github" {
 		return runGitHub(ctx, args[0], args[1:], out, stderr)
@@ -77,12 +77,14 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	var jsonOutput bool
 	maxBytes, limit, sourceID, addr := filesystem.DefaultMaxBytes, 20, "", "127.0.0.1:7766"
 	maxPDFBytes := int64(16 << 20)
+	maxDOCXBytes := int64(8 << 20)
 	noSync := false
 	syncInterval := 5 * time.Minute
 	switch args[0] {
 	case "index":
 		fs.Int64Var(&maxBytes, "max-bytes", maxBytes, "maximum bytes per text document")
 		fs.Int64Var(&maxPDFBytes, "max-pdf-bytes", maxPDFBytes, "maximum bytes per PDF; 0 disables PDFs, maximum 33554432")
+		fs.Int64Var(&maxDOCXBytes, "max-docx-bytes", maxDOCXBytes, "maximum bytes per DOCX; 0 disables DOCX, maximum 16777216")
 		fs.BoolVar(&jsonOutput, "json", false, "output JSON")
 	case "search":
 		fs.IntVar(&limit, "limit", limit, "maximum search results, 1–100")
@@ -132,11 +134,14 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 		return err
 	}
 	newConnector := func(source connector.Source) (*filesystem.Connector, error) {
-		return filesystem.NewWithOptions(source.Root, filesystem.Options{MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, ExtractPDF: pdfextract.Extractor(executable)}, dir)
+		return filesystem.NewWithOptions(source.Root, filesystem.Options{MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken, RegistrationRevision: source.RegistrationRevision, ExtractPDF: pdfextract.Extractor(executable)}, dir)
 	}
 	switch args[0] {
 	case "index":
-		conn, err := newConnector(connector.Source{Root: fs.Arg(0), MaxTextBytes: maxBytes, MaxPDFBytes: maxPDFBytes})
+		if maxDOCXBytes < 0 || maxDOCXBytes > 16<<20 {
+			return fmt.Errorf("max-docx-bytes must be 0–16777216")
+		}
+		conn, err := newConnector(connector.Source{Root: fs.Arg(0), MaxTextBytes: maxBytes, MaxPDFBytes: maxPDFBytes, MaxDOCXBytes: maxDOCXBytes})
 		if err != nil {
 			return err
 		}
@@ -150,6 +155,9 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 		_, err = fmt.Fprintf(out, "Indexed %s: %d documents, %d updated, %d unchanged, %d removed, %d skipped.\nSource: %s\n", result.Source.Name, result.Seen, result.Updated, result.Unchanged, result.Removed, result.Skipped, result.Source.ID)
 		if err == nil && result.SkippedPDF > 0 {
 			_, err = fmt.Fprintf(out, "Skipped %d PDFs: no usable text or extraction limits. OCR is not included.\n", result.SkippedPDF)
+		}
+		if err == nil && result.SkippedDOCX > 0 {
+			_, err = fmt.Fprintf(out, "Skipped %d DOCX files: disabled, unsupported, no body text, or extraction limit.\n", result.SkippedDOCX)
 		}
 		return err
 	case "search":

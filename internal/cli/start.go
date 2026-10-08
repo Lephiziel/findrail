@@ -14,6 +14,8 @@ import (
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	pdfextract "github.com/Lephiziel/findrail/internal/extract/pdf"
 	"github.com/Lephiziel/findrail/internal/ingest"
+	"github.com/Lephiziel/findrail/internal/sourceapp"
+	"github.com/Lephiziel/findrail/internal/sourcecoord"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	syncer "github.com/Lephiziel/findrail/internal/sync"
 	transport "github.com/Lephiziel/findrail/internal/transport/http"
@@ -23,10 +25,16 @@ import (
 // runStart composes the existing index and server workflows. Browser launching
 // is injected so tests and headless clients never launch desktop applications.
 func runStart(ctx context.Context, args []string, out, stderr io.Writer, open func(string) error) error {
+	return runStartWithManagement(ctx, args, out, stderr, open, true)
+}
+func runStartReadOnly(ctx context.Context, args []string, out, stderr io.Writer, open func(string) error) error {
+	return runStartWithManagement(ctx, args, out, stderr, open, false)
+}
+func runStartWithManagement(ctx context.Context, args []string, out, stderr io.Writer, open func(string) error, management bool) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: findrail start [OPTIONS] [DIRECTORY]\nIndex a folder, serve local search, and open the browser.\nWithout DIRECTORY, resume previously registered folders. Options precede DIRECTORY.")
+		fmt.Fprintln(stderr, "Usage: findrail start [OPTIONS] [DIRECTORY]\nIndex a folder, manage sources, serve local search, and open the browser.\nWithout DIRECTORY, resume registered sources or start with an empty index. Options precede DIRECTORY.")
 		fs.PrintDefaults()
 	}
 	dataDir := fs.String("data-dir", "", "directory for Findrail's private index")
@@ -34,6 +42,7 @@ func runStart(ctx context.Context, args []string, out, stderr io.Writer, open fu
 	noOpen := fs.Bool("no-open", false, "print the UI URL without opening a browser")
 	maxBytes := fs.Int64("max-bytes", filesystem.DefaultMaxBytes, "maximum bytes per text document in DIRECTORY")
 	maxPDFBytes := fs.Int64("max-pdf-bytes", 16<<20, "maximum bytes per PDF in DIRECTORY; 0 disables PDFs")
+	maxDOCXBytes := fs.Int64("max-docx-bytes", 8<<20, "maximum bytes per DOCX in DIRECTORY; 0 disables DOCX")
 	interval := fs.Duration("sync-interval", 5*time.Minute, "periodic full refresh, at least 1s")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -47,6 +56,9 @@ func runStart(ctx context.Context, args []string, out, stderr io.Writer, open fu
 	if *interval < time.Second {
 		return fmt.Errorf("sync interval must be at least 1s")
 	}
+	if *maxDOCXBytes < 0 || *maxDOCXBytes > 16<<20 {
+		return fmt.Errorf("max-docx-bytes must be 0–16777216")
+	}
 	if err := transport.ValidateAddress(*addr); err != nil {
 		return err
 	}
@@ -56,7 +68,7 @@ func runStart(ctx context.Context, args []string, out, stderr io.Writer, open fu
 	if fs.NArg() == 0 {
 		var limitSet bool
 		fs.Visit(func(f *flag.Flag) {
-			if f.Name == "max-bytes" || f.Name == "max-pdf-bytes" {
+			if f.Name == "max-bytes" || f.Name == "max-pdf-bytes" || f.Name == "max-docx-bytes" {
 				limitSet = true
 			}
 		})
@@ -74,20 +86,19 @@ func runStart(ctx context.Context, args []string, out, stderr io.Writer, open fu
 	}
 	factory := func(source connector.Source) (*filesystem.Connector, error) {
 		return filesystem.NewWithOptions(source.Root, filesystem.Options{
-			MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes,
+			MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes,
+			RegistrationToken: source.RegistrationToken, RegistrationRevision: source.RegistrationRevision,
 			ExtractPDF: pdfextract.Extractor(executable),
 		}, dir)
 	}
 	var selected *filesystem.Connector
 	if fs.NArg() == 1 {
-		selected, err = factory(connector.Source{Root: fs.Arg(0), MaxTextBytes: *maxBytes, MaxPDFBytes: *maxPDFBytes})
+		selected, err = factory(connector.Source{Root: fs.Arg(0), MaxTextBytes: *maxBytes, MaxPDFBytes: *maxPDFBytes, MaxDOCXBytes: *maxDOCXBytes})
 		if err != nil {
 			return fmt.Errorf("choose folder: %w", err)
 		}
 	} else {
-		if _, err := os.Stat(filepath.Join(dir, "findrail.db")); errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("no folders are indexed; run findrail start DIRECTORY first")
-		} else if err != nil {
+		if _, err := os.Stat(filepath.Join(dir, "findrail.db")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("open index: %w", err)
 		}
 	}
@@ -112,21 +123,26 @@ func runStart(ctx context.Context, args []string, out, stderr io.Writer, open fu
 				return err
 			}
 		}
-	}
-	sources, err := store.Sources(ctx)
-	if err != nil {
-		return err
-	}
-	if len(sources) == 0 {
-		return fmt.Errorf("no folders are indexed; run findrail start DIRECTORY first")
+		if result.SkippedDOCX > 0 {
+			if _, err := fmt.Fprintf(out, "Skipped %d DOCX files: disabled, unsupported, no body text, or extraction limit.\n", result.SkippedDOCX); err != nil {
+				return err
+			}
+		}
 	}
 	child, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	manager := syncer.New(store, syncer.Config{Interval: *interval, Factory: factory})
+	coordinator := sourcecoord.New()
+	manager := syncer.New(store, syncer.Config{Interval: *interval, Factory: factory, Coordinator: coordinator})
 	go func() { defer close(done); manager.Run(child) }()
 	defer func() { cancel(); <-done }()
-	return transport.Serve(ctx, *addr, store,
-		transport.WithSyncStatus(true, manager.Status),
+	var opts []transport.Option
+	opts = append(opts, transport.WithSyncStatus(true, manager.Status))
+	var app *sourceapp.App
+	if management {
+		app = sourceapp.NewWithCoordinator(child, store, dir, executable, coordinator)
+		opts = append(opts, transport.WithManagement(app))
+	}
+	serveErr := transport.Serve(ctx, *addr, store, append(opts,
 		transport.WithReady(func(url string) error {
 			if ctx.Err() != nil {
 				return nil
@@ -141,5 +157,19 @@ func runStart(ctx context.Context, args []string, out, stderr io.Writer, open fu
 			}
 			return nil
 		}),
-	)
+	)...)
+	if app == nil {
+		return serveErr
+	}
+	shutdown, stopShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stopShutdown()
+	if err := app.Close(shutdown); err != nil {
+		// The app has canceled every task. Do not close the store while a bounded
+		// extraction/rollback is still touching it, even if graceful wait elapsed.
+		if waitErr := app.Close(context.Background()); waitErr != nil {
+			return errors.Join(fmt.Errorf("stop source jobs: %w", err), waitErr)
+		}
+		return fmt.Errorf("source jobs exceeded the graceful shutdown window and were drained: %w", err)
+	}
+	return serveErr
 }

@@ -1,6 +1,6 @@
 # Findrail: project facts and media
 
-Checked on 2026-10-07. Findrail is an Apache-2.0 open-source project built in Go.
+Checked on 2026-10-08. Findrail is an Apache-2.0 open-source project built in Go.
 The current published local alpha is `0.1.0-alpha.2`.
 
 ## Short description
@@ -45,7 +45,9 @@ The [demo guide](../demo.md) includes a synthetic live-refresh test.
 | Folder refresh, `start`, three-document `demo` | Included | Included |
 | Scoped read-only stdio MCP | Not included | Included; [configuration](../mcp.md) |
 | Commit-pinned public GitHub text/code file snapshots | Not included | Included; [instructions](../github.md) |
-| OCR, DOCX, semantic retrieval, private GitHub | Not included | Not implemented |
+| Empty-index onboarding and web source management | Not included | Included; [instructions](../source-management.md) |
+| Bounded DOCX body-text indexing and folder policy | Not included | Included; [supported subset](../docx.md) |
+| OCR, semantic retrieval, private GitHub | Not included | Not implemented |
 
 Search is literal keyword retrieval, not an AI answer or a promise of semantic
 recall. The app searches explicitly indexed sources and previews saved text.

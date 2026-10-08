@@ -9,7 +9,11 @@ requiring separate services to run the first useful workflow.
 ```mermaid
 flowchart TD
   F["Selected folders"] --> C["Filesystem connector"]
-  C --> E["Text and PDF extraction"]
+  UI["Local web UI"] --> APP["Source app · start only"]
+  APP --> C
+  APP --> GH["Bounded GitHub snapshot"]
+  GH --> D["SQLite and FTS5"]
+  C --> E["Text, PDF and bounded DOCX extraction"]
   E --> I["Atomic ingestion"]
   I --> D["SQLite and FTS5"]
   CLI["CLI"] --> Q["Search request"]
@@ -19,11 +23,12 @@ flowchart TD
   D --> R["Passages and provenance"]
 ```
 
-This diagram describes the local path. Public GitHub files use a bounded archive
-prepared before the same atomic ingestion boundary. Private adapters, semantic
-retrieval, and desktop launching remain future extensions. The source build also
-has a read-only stdio MCP transport over the same search and indexed-evidence
-contracts.
+Public GitHub files use a bounded archive prepared before the same atomic
+publication boundary. Source management is writable only in `start`; `serve`,
+`demo`, MCP, and the default HTTP handler remain read-only. Private adapters,
+semantic retrieval, and desktop launching remain future extensions. The source
+build also has a read-only stdio MCP transport over the same search and
+indexed-evidence contracts.
 
 ## Boundaries
 
@@ -34,11 +39,14 @@ contracts.
 | `internal/connectors/github` | Public ref resolution and bounded commit archive preparation | Connector contract, text extraction, HTTP standard library |
 | `internal/extract/text` | Bounded reads and UTF-8 validation | Standard library |
 | `internal/extract/pdf` | Isolated PDF text worker and page attribution | PDF parser, connector contract |
+| `internal/extract/docx` | Bounded offline WordprocessingML body-to-text extraction | Go ZIP/XML standard library |
 | `internal/sync` | Source discovery, event debounce, retries and health | Filesystem adapter, ingest, store, fsnotify |
+| `internal/sourceapp` | `start`-scoped source operations and bounded process-memory jobs | Connectors, ingest, store |
+| `internal/sourcecoord` | Shared per-source scan/removal exclusion inside one process | Standard library |
 | `internal/ingest` | Atomic full-source scan orchestration | Connector contract, storage interface |
 | `internal/store/sqlite` | Schema, transactions, content hashes, FTS, sources | SQLite driver and domain contracts |
 | `internal/search` | Retrieval request / response and literal query handling | Standard library |
-| `internal/transport/http` | Loopback HTTP and embedded browser UI | Search interface, source status model |
+| `internal/transport/http` | Loopback HTTP, embedded UI and opt-in `start` mutation boundary | Search, source status and optional source app |
 | `internal/transport/mcp` | Scoped read-only stdio MCP tools and response budgets | Search interface, read-only SQLite evidence |
 | `internal/cli` | Composition, command parsing, presentation | Application modules |
 | `cmd/findrail` | Process entry, signals, version | CLI |
@@ -90,8 +98,10 @@ or source removal.
 ## Storage
 
 SQLite FTS5 and a CGO-free Go driver keep installation simple. WAL and foreign
-keys are enabled. Schema migrations 1–3 are transactional and embedded in the binary.
-Schema 3 stores GitHub selection/snapshot metadata and stale-update revision guards.
+keys are enabled. Schema migrations 1–4 are transactional and embedded in the binary.
+Schema 3 stores GitHub selection/snapshot metadata and stale-update revision guards;
+schema 4 stores per-folder DOCX input limits (legacy default disabled) and source
+registration tokens/revisions for guarded configuration and removal.
 Unknown newer schemas are rejected. A one-connection writer pool serializes
 updates; four query-only read connections use WAL snapshots, preserving search
 availability during extraction. PDF pages and their FTS entries commit in the
@@ -112,10 +122,13 @@ recognized by this baseline policy.
 
 ## Transports and clients
 
-The current server binds only to a loopback address. Host and Origin checks limit
-browser-origin access, and no arbitrary filesystem-reading or mutation endpoint
-is exposed. Indexed text enters the UI through `textContent`, not HTML insertion.
-These boundaries do not protect against a compromised OS account or local malware.
+The current server binds only to a loopback address and retains Host checks. The
+read-only `serve` API and demo remain unchanged; only `start` opts into management
+routes. Mutations require an exact Origin for the actual bound authority, a
+random process-scoped token in a custom header, and non-cross-site Fetch Metadata.
+JSON is strict and size limited; session responses are no-store. The capability
+is not persisted and is not protection from another process running as the same
+OS user. Indexed text enters the UI through `textContent`, not HTML insertion.
 
 Remote serving requires an explicit authentication design, authorization, TLS,
 and operational documentation. Changing the default bind address is not that

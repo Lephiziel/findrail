@@ -11,6 +11,7 @@ import (
 
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
+	"github.com/Lephiziel/findrail/internal/sourcecoord"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	"github.com/Lephiziel/findrail/pkg/connector"
 	"github.com/fsnotify/fsnotify"
@@ -26,6 +27,7 @@ type Status struct {
 	WatchWarning  string `json:"watch_warning,omitempty"`
 	Skipped       int    `json:"skipped"`
 	SkippedPDF    int    `json:"skipped_pdf,omitempty"`
+	SkippedDOCX   int    `json:"skipped_docx,omitempty"`
 }
 type Config struct {
 	Interval          time.Duration
@@ -33,6 +35,7 @@ type Config struct {
 	Debounce          time.Duration
 	PollOnly          bool
 	Factory           func(connector.Source) (*filesystem.Connector, error)
+	Coordinator       *sourcecoord.Locks
 }
 type Manager struct {
 	store  *sqlite.Store
@@ -42,6 +45,9 @@ type Manager struct {
 }
 
 func New(store *sqlite.Store, config Config) *Manager {
+	if config.Coordinator == nil {
+		config.Coordinator = sourcecoord.New()
+	}
 	if config.Interval <= 0 {
 		config.Interval = 5 * time.Minute
 	}
@@ -63,9 +69,12 @@ func (m *Manager) Status() []Status {
 	sort.Slice(result, func(i, j int) bool { return result[i].SourceID < result[j].SourceID })
 	return result
 }
-func (m *Manager) update(id string, change func(*Status)) {
+func (m *Manager) update(ctx context.Context, id string, change func(*Status)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
 	s := m.status[id]
 	s.SourceID = id
 	change(&s)
@@ -147,14 +156,14 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 		var err error
 		watcher, err = fsnotify.NewWatcher()
 		if err != nil {
-			m.update(source.ID, func(s *Status) { s.WatchWarning = err.Error() })
+			m.update(ctx, source.ID, func(s *Status) { s.WatchWarning = err.Error() })
 		}
 	}
 	mode := "polling"
 	if watcher != nil {
 		mode = "events"
 	}
-	m.update(source.ID, func(s *Status) { s.State = "starting"; s.Mode = mode })
+	m.update(ctx, source.ID, func(s *Status) { s.State = "starting"; s.Mode = mode })
 	if watcher != nil {
 		done := make(chan struct{})
 		go func() {
@@ -174,7 +183,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 					if !ok {
 						return
 					}
-					m.update(source.ID, func(s *Status) { s.WatchWarning = err.Error() })
+					m.update(ctx, source.ID, func(s *Status) { s.WatchWarning = err.Error() })
 					signal()
 				}
 			}
@@ -220,7 +229,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 			if ctx.Err() != nil {
 				return
 			}
-			m.update(source.ID, func(s *Status) { s.State = "indexing"; s.LastStartedAt = time.Now().UTC().Format(time.RFC3339Nano) })
+			m.update(ctx, source.ID, func(s *Status) { s.State = "indexing"; s.LastStartedAt = time.Now().UTC().Format(time.RFC3339Nano) })
 			conn, err := m.config.Factory(source)
 			if err == nil && conn.Source() != source {
 				err = errors.New("source identity or extraction settings changed")
@@ -248,7 +257,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 						}
 					}
 				}
-				m.update(source.ID, func(s *Status) {
+				m.update(ctx, source.ID, func(s *Status) {
 					if watchErr != nil {
 						s.Mode = "polling"
 						s.WatchWarning = watchErr.Error()
@@ -260,7 +269,12 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 			}
 			var result ingest.Result
 			if err == nil {
-				result, err = ingest.Refresh(ctx, m.store, conn)
+				var unlock func()
+				unlock, err = m.config.Coordinator.Acquire(ctx, source.ID)
+				if err == nil {
+					result, err = ingest.Refresh(ctx, m.store, conn)
+					unlock()
+				}
 			}
 			if ctx.Err() != nil {
 				return
@@ -269,7 +283,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 				return
 			}
 			if err != nil {
-				m.update(source.ID, func(s *Status) { s.State = "error"; s.LastError = err.Error() })
+				m.update(ctx, source.ID, func(s *Status) { s.State = "error"; s.LastError = err.Error() })
 				schedule(retry)
 				retry *= 2
 				if retry > time.Minute {
@@ -277,12 +291,13 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 				}
 			} else {
 				retry = time.Second
-				m.update(source.ID, func(s *Status) {
+				m.update(ctx, source.ID, func(s *Status) {
 					s.State = "idle"
 					s.LastError = ""
 					s.LastSuccessAt = time.Now().UTC().Format(time.RFC3339Nano)
 					s.Skipped = result.Skipped
 					s.SkippedPDF = result.SkippedPDF
+					s.SkippedDOCX = result.SkippedDOCX
 				})
 			}
 		}

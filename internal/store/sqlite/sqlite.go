@@ -29,9 +29,12 @@ var alphaSchema string
 //go:embed migrations/003_github_snapshots.sql
 var githubSchema string
 
+//go:embed migrations/004_docx_policy.sql
+var docxSchema string
+
 type Store struct{ db, readers *sql.DB }
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {
 	dataDir, err := filepath.Abs(dataDir)
@@ -169,7 +172,12 @@ func (s *Store) initialize(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, githubSchema); err != nil {
 			return fmt.Errorf("migrate GitHub snapshots: %w", err)
 		}
+		fallthrough
 	case 3:
+		if _, err := tx.ExecContext(ctx, docxSchema); err != nil {
+			return fmt.Errorf("migrate DOCX policy: %w", err)
+		}
+	case 4:
 	default:
 		return fmt.Errorf("unsupported index schema %d; use a compatible Findrail version", version)
 	}
@@ -217,13 +225,24 @@ func (s *Store) begin(ctx context.Context, source connector.Source, create bool)
 		if maxText == 0 {
 			maxText = 1 << 20
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes) VALUES(?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,name=excluded.name,root=excluded.root,max_text_bytes=excluded.max_text_bytes,max_pdf_bytes=excluded.max_pdf_bytes`, source.ID, source.Kind, source.Name, source.Root, maxText, source.MaxPDFBytes); err != nil {
+		token, err := registrationToken()
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes,max_docx_bytes,registration_token,revision) VALUES(?,?,?,?,?,?,?,?,1)
+        ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,name=excluded.name,root=excluded.root,max_text_bytes=excluded.max_text_bytes,max_pdf_bytes=excluded.max_pdf_bytes,max_docx_bytes=excluded.max_docx_bytes,registration_token=excluded.registration_token,revision=sources.revision+1`, source.ID, source.Kind, source.Name, source.Root, maxText, source.MaxPDFBytes, source.MaxDOCXBytes, token); err != nil {
 			tx.Rollback()
 			return nil, err
 		}
 	} else {
-		r, err := tx.ExecContext(ctx, `UPDATE sources SET name=name WHERE id=? AND kind=? AND root=? AND max_text_bytes=? AND max_pdf_bytes=?`, source.ID, source.Kind, source.Root, source.MaxTextBytes, source.MaxPDFBytes)
+		query := `UPDATE sources SET name=name WHERE id=? AND kind=? AND root=? AND max_text_bytes=? AND max_pdf_bytes=? AND max_docx_bytes=?`
+		args := []any{source.ID, source.Kind, source.Root, source.MaxTextBytes, source.MaxPDFBytes, source.MaxDOCXBytes}
+		if source.RegistrationToken != "" {
+			query += ` AND registration_token=? AND revision=?`
+			args = append(args, source.RegistrationToken, source.RegistrationRevision)
+		}
+		r, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
@@ -244,6 +263,47 @@ func (s *Store) begin(ctx context.Context, source connector.Source, create bool)
 		return nil, err
 	}
 	return &scan{tx: tx, sourceID: source.ID, token: fmt.Sprintf("%x", b)}, nil
+}
+
+func registrationToken() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", b[:]), nil
+}
+
+func (s *Store) BeginConfigure(ctx context.Context, source connector.Source, token string, revision, previousDOCXLimit int64) (ingest.Scan, error) {
+	if s.db == nil {
+		return nil, errors.New("index is read-only")
+	}
+	if source.MaxDOCXBytes < 0 || source.MaxDOCXBytes > 16<<20 || previousDOCXLimit < 0 || previousDOCXLimit > 16<<20 || token == "" || revision < 1 {
+		return nil, errors.New("invalid source registration or DOCX policy")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	r, err := tx.ExecContext(ctx, `UPDATE sources SET max_docx_bytes=?,revision=revision+1 WHERE id=? AND kind='filesystem' AND root=? AND registration_token=? AND revision=? AND max_docx_bytes=?`, source.MaxDOCXBytes, source.ID, source.Root, token, revision, previousDOCXLimit)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if n != 1 {
+		_ = tx.Rollback()
+		return nil, ingest.ErrSourceGone
+	}
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	return &scan{tx: tx, sourceID: source.ID, token: fmt.Sprintf("%x", b[:])}, nil
 }
 
 func (s *scan) Upsert(ctx context.Context, doc connector.Document) (bool, error) {
@@ -373,9 +433,11 @@ func (s *Store) Search(ctx context.Context, request search.Request) (search.Resp
 
 type SourceStatus struct {
 	connector.Source
-	Documents     int           `json:"documents"`
-	LastIndexedAt string        `json:"last_indexed_at"`
-	GitHub        *GitHubSource `json:"github,omitempty"`
+	Documents            int           `json:"documents"`
+	LastIndexedAt        string        `json:"last_indexed_at"`
+	GitHub               *GitHubSource `json:"github,omitempty"`
+	RegistrationToken    string        `json:"-"`
+	RegistrationRevision int64         `json:"-"`
 }
 
 type GitHubSource struct {
@@ -402,7 +464,7 @@ func (s *Store) Sources(ctx context.Context) ([]SourceStatus, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.kind,s.name,s.root,s.last_indexed_at,COUNT(d.id),s.max_text_bytes,s.max_pdf_bytes
+	rows, err := tx.QueryContext(ctx, `SELECT s.id,s.kind,s.name,s.root,s.last_indexed_at,COUNT(d.id),s.max_text_bytes,s.max_pdf_bytes,s.max_docx_bytes,s.registration_token,s.revision
         FROM sources s LEFT JOIN documents d ON d.source_id=s.id GROUP BY s.id ORDER BY s.name,s.id`)
 	if err != nil {
 		return nil, err
@@ -411,9 +473,11 @@ func (s *Store) Sources(ctx context.Context) ([]SourceStatus, error) {
 	result := []SourceStatus{}
 	for rows.Next() {
 		var source SourceStatus
-		if err := rows.Scan(&source.ID, &source.Kind, &source.Name, &source.Root, &source.LastIndexedAt, &source.Documents, &source.MaxTextBytes, &source.MaxPDFBytes); err != nil {
+		if err := rows.Scan(&source.ID, &source.Kind, &source.Name, &source.Root, &source.LastIndexedAt, &source.Documents, &source.MaxTextBytes, &source.MaxPDFBytes, &source.MaxDOCXBytes, &source.RegistrationToken, &source.RegistrationRevision); err != nil {
 			return nil, err
 		}
+		source.Source.RegistrationToken = source.RegistrationToken
+		source.Source.RegistrationRevision = source.RegistrationRevision
 		result = append(result, source)
 	}
 	if err := rows.Err(); err != nil {
@@ -496,7 +560,11 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 		}
 	}
 	maxText := result.Source.MaxTextBytes
-	if _, err = tx.ExecContext(ctx, `INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes) VALUES(?,?,?,?,?,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,root=excluded.root,max_text_bytes=excluded.max_text_bytes WHERE sources.kind='github'`, result.Source.ID, "github", result.Source.Name, result.Source.Root, maxText); err != nil {
+	sourceToken, err := registrationToken()
+	if err != nil {
+		return result, GitHubSource{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes,max_docx_bytes,registration_token,revision) VALUES(?,?,?,?,?,0,0,?,1) ON CONFLICT(id) DO UPDATE SET name=excluded.name,root=excluded.root,max_text_bytes=excluded.max_text_bytes WHERE sources.kind='github'`, result.Source.ID, "github", result.Source.Name, result.Source.Root, maxText, sourceToken); err != nil {
 		return result, GitHubSource{}, err
 	}
 	var token string
@@ -645,6 +713,29 @@ func (s *Store) ForgetSource(ctx context.Context, id string) error {
 	}
 	if n == 0 {
 		return fmt.Errorf("source not found")
+	}
+	return nil
+}
+
+// ForgetSourceRegistration prevents delayed UI removals from deleting a source
+// that was forgotten and re-added under the same path-derived ID.
+func (s *Store) ForgetSourceRegistration(ctx context.Context, id, token string) error {
+	if s.db == nil {
+		return errors.New("index is read-only")
+	}
+	if id == "" || token == "" {
+		return ingest.ErrSourceGone
+	}
+	r, err := s.db.ExecContext(ctx, "DELETE FROM sources WHERE id=? AND registration_token=?", id, token)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ingest.ErrSourceGone
 	}
 	return nil
 }

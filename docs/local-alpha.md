@@ -43,6 +43,14 @@ and text-budget-exceeding PDFs are skipped and included in skipped totals.
 Invalid / encrypted PDFs fail the source inventory; no partial changes commit.
 OCR and faithful visual PDF rendering are not implemented.
 
+## DOCX text
+
+Source builds extract the bounded main WordprocessingML body as plain text.
+Input defaults to 8 MiB, can be disabled with `--max-docx-bytes 0`, and is
+limited to 16 MiB maximum. DOCX previews and citations have no page numbers.
+Existing sources remain disabled after migration until explicitly re-indexed.
+See [DOCX policy and limits](docx.md).
+
 Search matches all query terms anywhere in a document, including its title.
 For PDFs the returned page is the best matching page for one or more query
 terms. When terms span pages, a single excerpt may not contain every term.
@@ -71,11 +79,11 @@ Markdown client.
 
 ## Upgrade
 
-Stop Findrail and back up its dedicated data directory. Migration 2 preserves
-schema 1 documents, adds media metadata, PDF pages / page FTS and source limits.
-The migration commits atomically. Old sources stay text-only until explicitly
-re-indexed, preserving their previous inclusion policy. The old binary rejects
-schema 3; restore the stopped-directory backup to downgrade.
+Stop Findrail and back up its dedicated data directory. Migrations are embedded
+and transactional: migration 2 adds media metadata, PDF pages / page FTS and
+source limits; migration 4 adds the DOCX limit and registration guards. Legacy
+sources keep DOCX disabled until explicitly configured/re-indexed. The old binary
+rejects schema 4; restore the stopped-directory backup to downgrade.
 
 ## Alpha release scope
 
