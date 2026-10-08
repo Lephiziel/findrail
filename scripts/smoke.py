@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import shutil
+import select
 import socket
 import subprocess
 import sys
@@ -58,6 +59,39 @@ def docx_fixture(text):
     return output.getvalue()
 
 
+def startup_error_smoke(binary):
+    """Check occupied-port failure and a missing opener without launching a browser."""
+    if sys.platform != 'linux':
+        return
+    with tempfile.TemporaryDirectory(prefix='findrail-start-errors-') as temporary:
+        base = pathlib.Path(temporary)
+        with socket.socket() as occupied:
+            occupied.bind(('127.0.0.1', 0)); port = occupied.getsockname()[1]
+            occupied.listen()
+            failed = subprocess.run([str(binary), 'start', '--no-open', '--data-dir', str(base / 'busy-index'),
+                                     '--addr', f'127.0.0.1:{port}'], cwd=base, capture_output=True,
+                                    text=True, encoding='utf-8', timeout=10)
+        assert failed.returncode != 0 and '127.0.0.1' in failed.stderr, failed
+
+        # A private empty PATH makes xdg-open unresolvable; no real browser is run.
+        empty_path = base / 'empty-path'; empty_path.mkdir()
+        probe = socket.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+        process = subprocess.Popen([str(binary), 'start', '--data-dir', str(base / 'browser-index'),
+                                    '--addr', f'127.0.0.1:{port}'], cwd=base,
+                                   env=dict(os.environ, PATH=str(empty_path)), stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, encoding='utf-8')
+        try:
+            ready, _, _ = select.select([process.stdout], [], [], 10)
+            assert ready, 'server did not print its local URL'
+            line = process.stdout.readline()
+            assert line.startswith('Findrail local UI: http://127.0.0.1:'), line
+        finally:
+            if process.poll() is None: process.terminate()
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 0, (line, stdout, stderr)
+        assert 'Could not start the browser opener' in stderr and 'Open http://127.0.0.1:' in stderr, stderr
+
+
 def eventually(condition, timeout=12):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -76,7 +110,7 @@ def demo_smoke(binary):
             port = probe.getsockname()[1]
         process = subprocess.Popen([str(binary), 'demo', '--no-open', '--sync-interval', '1s',
                                     '--addr', f'127.0.0.1:{port}'], env=env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
+                                   cwd=parent, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
         base = f'http://127.0.0.1:{port}'
 
         def get(path):
@@ -151,7 +185,7 @@ def source_management_smoke(binary):
             port = probe.getsockname()[1]
         process = subprocess.Popen([str(binary), 'start', '--no-open', '--data-dir', str(parent / 'index'),
                                     '--addr', f'127.0.0.1:{port}'], stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, text=True, encoding='utf-8')
+                                   stderr=subprocess.PIPE, text=True, encoding='utf-8', cwd=parent)
         base = f'http://127.0.0.1:{port}'
 
         def get(path):
@@ -288,7 +322,7 @@ def main():
 
         def run(command, *arguments):
             result = subprocess.run([str(binary), command, '--data-dir', str(data_dir), *arguments],
-                                    check=True, capture_output=True, text=True, encoding="utf-8", timeout=20)
+                                    check=True, capture_output=True, text=True, encoding="utf-8", timeout=20, cwd=base_dir)
             return json.loads(result.stdout)
 
         indexed = run('index', '--max-docx-bytes', str(8 << 20), '--json', str(docs))
@@ -311,7 +345,7 @@ def main():
         # separate index command exercised above. CI is intentionally headless.
         process = subprocess.Popen([str(binary), 'start', '--no-open', '--data-dir', str(base_dir / 'start-index'),
                                     '--sync-interval', '1s', '--addr', f'127.0.0.1:{port}', str(docs)],
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", cwd=base_dir)
         base = f'http://127.0.0.1:{port}'
 
         def get(path):
@@ -370,6 +404,7 @@ def main():
         # Windows terminate() is an OS kill, not a graceful Unix SIGTERM.
         if sys.platform != 'win32':
             assert process.returncode == 0, process.returncode
+    startup_error_smoke(binary)
     source_management_smoke(binary)
     demo_smoke(binary)
     print('Findrail smoke passed: empty start, source management APIs/jobs, demo read-only boundary, CLI, PDF and DOCX extraction, previews, rename refresh, rollback and HTTP.')

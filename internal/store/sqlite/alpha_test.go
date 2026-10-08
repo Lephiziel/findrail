@@ -108,6 +108,56 @@ INSERT INTO github_sources(source_id,repository_id,owner,repo,repository_url,ref
 	}
 }
 
+func TestFailedMigrationLeavesPriorSchemaVersionAndColumns(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "findrail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sources(id TEXT PRIMARY KEY, max_text_bytes INTEGER); PRAGMA user_version=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.Open(context.Background(), dir); err == nil {
+		t.Fatal("migration with duplicate column unexpectedly succeeded")
+	}
+	db, err = sql.Open("sqlite", filepath.Join(dir, "findrail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 1 {
+		t.Fatalf("failed migration changed schema version: %d", version)
+	}
+	rows, err := db.Query("PRAGMA table_info(sources)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, kind string
+		var def any
+		if err := rows.Scan(&cid, &name, &kind, &notnull, &def, &pk); err != nil {
+			t.Fatal(err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if columns["max_pdf_bytes"] {
+		t.Fatal("failed migration left a partial column")
+	}
+}
+
 func TestMigrationTwoPreservesPDFPolicyAndPages(t *testing.T) {
 	dir := t.TempDir()
 	db, err := sql.Open("sqlite", filepath.Join(dir, "findrail.db"))

@@ -22,8 +22,9 @@ META_SERVER = "io.modelcontextprotocol/serverInfo"
 
 
 def run(binary, *args):
+    cwd = pathlib.Path(args[args.index('--data-dir') + 1]).parent
     result = subprocess.run([str(binary), *map(str, args)], capture_output=True,
-                            text=True, encoding="utf-8", timeout=20)
+                            text=True, encoding="utf-8", timeout=20, cwd=cwd)
     if result.returncode:
         raise AssertionError(f"Findrail {args[0]} failed: {result.stderr}")
     return json.loads(result.stdout) if result.stdout.strip().startswith("{") else None
@@ -52,13 +53,13 @@ def result_byte_size(line):
 
 
 class MCP:
-    def __init__(self, binary, data, source, version):
+    def __init__(self, binary, data, source, version, cwd):
         self.version = version
         self.process = subprocess.Popen(
             [str(binary), "mcp", "--data-dir", str(data), "--source", source,
              "--max-text-chars", "32768"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", bufsize=1)
+            text=True, encoding="utf-8", bufsize=1, cwd=cwd)
         self.lines = queue.Queue()
         self.request_id = 0
         self.reader = threading.Thread(target=self.read_stdout, daemon=True)
@@ -139,7 +140,7 @@ def blocked_output_shutdown(binary, data, source, document, cause):
     process = subprocess.Popen(
         [str(binary), "mcp", "--data-dir", str(data), "--source", source,
          "--max-text-chars", "32768"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=pathlib.Path(data).parent)
     readers = []
     try:
         def read_with_timeout(read):
@@ -221,7 +222,7 @@ def main():
         pdf_path.unlink()
 
         for version in VERSIONS:
-            client = MCP(binary, data, source, version)
+            client = MCP(binary, data, source, version, base)
             try:
                 client.initialize()
                 tools = client.request("tools/list")["tools"]
@@ -280,10 +281,10 @@ def main():
 
         missing = base / "missing-index"
         failed = subprocess.run([str(binary), "mcp", "--data-dir", str(missing), "--source", source],
-                                input="", capture_output=True, text=True, encoding="utf-8", timeout=10)
+                                input="", capture_output=True, text=True, encoding="utf-8", timeout=10, cwd=base)
         assert failed.returncode != 0 and failed.stdout == "" and failed.stderr and not missing.exists(), failed
         if os.name != "nt":
-            client = MCP(binary, data, foreign_source, VERSIONS[1])
+            client = MCP(binary, data, foreign_source, VERSIONS[1], base)
             try:
                 client.initialize()
                 client.process.terminate()

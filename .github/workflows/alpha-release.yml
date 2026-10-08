@@ -44,24 +44,60 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" >/dev/null 2>release-error
+          release_status=$?
+          set -e
+          if [[ $release_status -eq 0 ]]; then
             echo 'exists=true' >> "$GITHUB_OUTPUT"
-          else
+            exit 0
+          elif ! grep -q 'HTTP 404' release-error; then
+            cat release-error >&2
+            echo 'Could not determine whether release exists; refusing publication.' >&2
+            exit 1
+          fi
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>tag-error
+          tag_status=$?
+          set -e
+          if [[ $tag_status -eq 0 ]]; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+          elif grep -q 'HTTP 404' tag-error; then
             echo 'exists=false' >> "$GITHUB_OUTPUT"
+          else
+            cat tag-error >&2
+            echo 'Could not determine whether tag exists; refusing publication.' >&2
+            exit 1
           fi
       - name: Build archives and license notices
         if: steps.existing.outputs.exists == 'false'
-        run: python3 scripts/package.py
+        run: python3 scripts/package.py --require-clean
       - name: Smoke test the packaged Linux executable
         if: steps.existing.outputs.exists == 'false'
         run: |
-          mkdir -p /tmp/findrail-release-smoke
-          tar -xzf dist/*linux-amd64.tar.gz -C /tmp/findrail-release-smoke
-          python3 scripts/smoke.py /tmp/findrail-release-smoke/*/findrail
+          python3 scripts/package.py --verify-only --output dist
+          python3 - <<'PY'
+          import pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import package
+          version = pathlib.Path('build/package/VERSION').read_text().strip()
+          archive = pathlib.Path('dist') / f'findrail_{version}_linux-amd64.tar.gz'
+          package.verify_archive(archive, 'linux-amd64', version)
+          root = package.extract_verified(archive, pathlib.Path('/tmp/findrail-release-smoke'))
+          print(root / 'findrail')
+          PY
+          VERSION=$(cat build/package/VERSION)
+          python3 scripts/smoke.py "/tmp/findrail-release-smoke/findrail_${VERSION}_linux-amd64/findrail"
+          python3 scripts/mcp_smoke.py "/tmp/findrail-release-smoke/findrail_${VERSION}_linux-amd64/findrail"
       - name: Publish alpha archives
         if: steps.existing.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           COMMIT: ${{ github.event.workflow_run.head_sha }}
-        run: gh release create "$TAG" dist/* --target "$COMMIT" --prerelease --title "Findrail $TAG" --notes-file docs/release-notes.md
+        run: |
+          mapfile -t files < <(python3 scripts/package.py --verify-only --output dist)
+          assets=()
+          for file in "${files[@]}"; do assets+=("dist/$file"); done
+          assets+=(dist/SHA256SUMS.txt)
+          gh release create "$TAG" "${assets[@]}" --target "$COMMIT" --prerelease --title "Findrail $TAG" --notes-file docs/release-notes.md

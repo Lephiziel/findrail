@@ -17,6 +17,8 @@ jobs:
           node-version: '22.x'
       - name: Web UI regression tests
         run: node --test internal/transport/http/web/*_test.mjs
+      - name: Packaging safety tests
+        run: python3 scripts/test_package.py
   check:
     strategy:
       fail-fast: false

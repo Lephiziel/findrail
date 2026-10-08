@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -17,6 +18,10 @@ func main() {
 	defer stop()
 	if err := cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr, version); err != nil {
 		fmt.Fprintln(os.Stderr, "findrail:", err)
+		var exit interface{ ExitCode() int }
+		if errors.As(err, &exit) {
+			os.Exit(exit.ExitCode())
+		}
 		os.Exit(1)
 	}
 }
