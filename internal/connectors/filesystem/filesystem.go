@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	docxextract "github.com/Lephiziel/findrail/internal/extract/docx"
 	"github.com/Lephiziel/findrail/internal/extract/text"
 	"github.com/Lephiziel/findrail/pkg/connector"
 )
@@ -33,11 +34,12 @@ var ignoredDirs = map[string]bool{
 }
 
 type Connector struct {
-	source      connector.Source
-	maxBytes    int64
-	maxPDFBytes int64
-	extractPDF  func(context.Context, io.Reader, int64) ([]connector.Page, error)
-	excluded    []string
+	source       connector.Source
+	maxBytes     int64
+	maxPDFBytes  int64
+	maxDOCXBytes int64
+	extractPDF   func(context.Context, io.Reader, int64) ([]connector.Page, error)
+	excluded     []string
 }
 
 func New(root string, maxBytes int64, excluded ...string) (*Connector, error) {
@@ -45,9 +47,12 @@ func New(root string, maxBytes int64, excluded ...string) (*Connector, error) {
 }
 
 type Options struct {
-	MaxTextBytes int64
-	MaxPDFBytes  int64
-	ExtractPDF   func(context.Context, io.Reader, int64) ([]connector.Page, error)
+	MaxTextBytes         int64
+	MaxPDFBytes          int64
+	ExtractPDF           func(context.Context, io.Reader, int64) ([]connector.Page, error)
+	MaxDOCXBytes         int64
+	RegistrationToken    string
+	RegistrationRevision int64
 }
 
 func NewWithOptions(root string, options Options, excluded ...string) (*Connector, error) {
@@ -57,6 +62,9 @@ func NewWithOptions(root string, options Options, excluded ...string) (*Connecto
 	}
 	if options.MaxPDFBytes < 0 || options.MaxPDFBytes > 32<<20 || (options.MaxPDFBytes > 0 && options.ExtractPDF == nil) {
 		return nil, fmt.Errorf("PDF limit must be 0–33554432 with an extractor when enabled")
+	}
+	if options.MaxDOCXBytes < 0 || options.MaxDOCXBytes > 16<<20 {
+		return nil, fmt.Errorf("DOCX limit must be 0–16777216")
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -85,7 +93,7 @@ func NewWithOptions(root string, options Options, excluded ...string) (*Connecto
 		canonicalExclusions = append(canonicalExclusions, excludedAbs)
 	}
 	id := fmt.Sprintf("fs_%x", sha256.Sum256([]byte(abs)))
-	return &Connector{source: connector.Source{ID: id, Kind: "filesystem", Name: filepath.Base(abs), Root: abs, MaxTextBytes: maxBytes, MaxPDFBytes: options.MaxPDFBytes}, maxBytes: maxBytes, maxPDFBytes: options.MaxPDFBytes, extractPDF: options.ExtractPDF, excluded: canonicalExclusions}, nil
+	return &Connector{source: connector.Source{ID: id, Kind: "filesystem", Name: filepath.Base(abs), Root: abs, MaxTextBytes: maxBytes, MaxPDFBytes: options.MaxPDFBytes, MaxDOCXBytes: options.MaxDOCXBytes, RegistrationToken: options.RegistrationToken, RegistrationRevision: options.RegistrationRevision}, maxBytes: maxBytes, maxPDFBytes: options.MaxPDFBytes, maxDOCXBytes: options.MaxDOCXBytes, extractPDF: options.ExtractPDF, excluded: canonicalExclusions}, nil
 }
 
 func (c *Connector) Source() connector.Source { return c.source }
@@ -126,8 +134,17 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 			return nil
 		}
 		isPDF := strings.EqualFold(filepath.Ext(name), ".pdf") && c.maxPDFBytes > 0
-		if entry.Type()&os.ModeSymlink != 0 || strings.HasPrefix(name, ".") || sensitive(name) || (!isPDF && !supported(name)) {
+		docxFile := strings.EqualFold(filepath.Ext(name), ".docx")
+		isDOCX := docxFile && c.maxDOCXBytes > 0
+		if strings.HasPrefix(name, "~$") && strings.EqualFold(filepath.Ext(name), ".docx") {
 			report.Skipped++
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 || strings.HasPrefix(name, ".") || sensitive(name) || (!isPDF && !isDOCX && !supported(name)) {
+			report.Skipped++
+			if docxFile {
+				report.SkippedDOCX++
+			}
 			return nil
 		}
 		info, err := entry.Info()
@@ -137,6 +154,9 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		limit := c.maxBytes
 		if isPDF {
 			limit = c.maxPDFBytes
+		}
+		if isDOCX {
+			limit = c.maxDOCXBytes
 		}
 		if !info.Mode().IsRegular() || info.Size() > limit {
 			report.Skipped++
@@ -173,15 +193,20 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 				joined.WriteByte('\n')
 			}
 			body = joined.String()
+		} else if isDOCX {
+			body, readErr = docxextract.Extract(ctx, file, info.Size(), c.maxDOCXBytes)
 		} else {
 			body, readErr = text.Read(file, c.maxBytes)
 		}
 		finalInfo, finalStatErr := file.Stat()
 		closeErr := file.Close()
-		if errors.Is(readErr, text.ErrUnsupported) || errors.Is(readErr, text.ErrTooLarge) {
+		if errors.Is(readErr, text.ErrUnsupported) || errors.Is(readErr, text.ErrTooLarge) || errors.Is(readErr, docxextract.ErrSkip) || errors.Is(readErr, docxextract.ErrLimit) || errors.Is(readErr, docxextract.ErrNoText) {
 			report.Skipped++
 			if isPDF {
 				report.SkippedPDF++
+			}
+			if isDOCX {
+				report.SkippedDOCX++
 			}
 			return nil
 		}
@@ -219,6 +244,13 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 				fmt.Fprintf(h, "%d:%d:", p.Number, len(p.Text))
 				io.WriteString(h, p.Text)
 			}
+			doc.Hash = fmt.Sprintf("%x", h.Sum(nil))
+		}
+		if isDOCX {
+			doc.MediaType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+			h := sha256.New()
+			io.WriteString(h, "docx-body-v1\x00")
+			io.WriteString(h, body)
 			doc.Hash = fmt.Sprintf("%x", h.Sum(nil))
 		}
 		if err := emit(doc); err != nil {

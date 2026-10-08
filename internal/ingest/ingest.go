@@ -24,16 +24,21 @@ type RefreshStore interface {
 	BeginRefresh(context.Context, connector.Source) (Scan, error)
 }
 
+type ConfigureStore interface {
+	BeginConfigure(context.Context, connector.Source, string, int64, int64) (Scan, error)
+}
+
 var ErrSourceGone = errors.New("source is no longer registered")
 
 type Result struct {
-	Source     connector.Source `json:"source"`
-	Seen       int              `json:"seen"`
-	Updated    int              `json:"updated"`
-	Unchanged  int              `json:"unchanged"`
-	Removed    int              `json:"removed"`
-	Skipped    int              `json:"skipped"`
-	SkippedPDF int              `json:"skipped_pdf,omitempty"`
+	Source      connector.Source `json:"source"`
+	Seen        int              `json:"seen"`
+	Updated     int              `json:"updated"`
+	Unchanged   int              `json:"unchanged"`
+	Removed     int              `json:"removed"`
+	Skipped     int              `json:"skipped"`
+	SkippedPDF  int              `json:"skipped_pdf,omitempty"`
+	SkippedDOCX int              `json:"skipped_docx,omitempty"`
 }
 
 func Run(ctx context.Context, store Store, source connector.Connector) (Result, error) {
@@ -43,6 +48,14 @@ func Run(ctx context.Context, store Store, source connector.Connector) (Result, 
 // Refresh never registers a missing source; forgetting a source stops future refreshes.
 func Refresh(ctx context.Context, store RefreshStore, source connector.Connector) (Result, error) {
 	return run(ctx, store.BeginRefresh, source)
+}
+
+// Configure atomically changes source policy and replaces its snapshot. The
+// storage guard binds publication to the source registration observed by the UI.
+func Configure(ctx context.Context, store ConfigureStore, source connector.Connector, token string, revision, previousDOCXLimit int64) (Result, error) {
+	return run(ctx, func(ctx context.Context, s connector.Source) (Scan, error) {
+		return store.BeginConfigure(ctx, s, token, revision, previousDOCXLimit)
+	}, source)
 }
 
 func run(ctx context.Context, begin func(context.Context, connector.Source) (Scan, error), source connector.Connector) (Result, error) {
@@ -68,6 +81,7 @@ func run(ctx context.Context, begin func(context.Context, connector.Source) (Sca
 	})
 	result.Seen, result.Skipped = report.Seen, report.Skipped
 	result.SkippedPDF = report.SkippedPDF
+	result.SkippedDOCX = report.SkippedDOCX
 	if err != nil {
 		return result, fmt.Errorf("scan failed; previous index preserved: %w", err)
 	}

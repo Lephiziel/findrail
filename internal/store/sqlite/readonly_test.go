@@ -150,7 +150,7 @@ func TestOpenReadOnlyPreservesDatabaseAndPermissions(t *testing.T) {
 	if !bytes.Equal(before, after) || info.Mode().Perm() != newInfo.Mode().Perm() {
 		t.Fatal("read-only open changed database bytes or permissions")
 	}
-	for _, version := range []int{0, 1, 2, 4} {
+	for _, version := range []int{0, 1, 2, 5} {
 		t.Run(fmt.Sprintf("schema%d", version), func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "findrail.db")

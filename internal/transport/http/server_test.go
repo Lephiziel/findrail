@@ -133,7 +133,8 @@ func TestManagementRequiresSameOriginCapabilityAndStrictJSON(t *testing.T) {
 			if err != nil {
 				t.Errorf("serve: %v", err)
 			}
-		case <-time.After(3 * time.Second):
+		// Serve uses a five-second graceful-shutdown deadline before forcing close.
+		case <-time.After(7 * time.Second):
 			t.Error("server did not stop")
 		}
 	}()

@@ -1,6 +1,8 @@
 package filesystem_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -10,6 +12,57 @@ import (
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/pkg/connector"
 )
+
+func writeDOCX(t *testing.T, path string) {
+	t.Helper()
+	var b bytes.Buffer
+	zw := zip.NewWriter(&b)
+	parts := map[string]string{
+		"[Content_Types].xml": `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
+		"_rels/.rels":         `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
+		"word/document.xml":   `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>folder docx searchable</w:t></w:r></w:p></w:body></w:document>`,
+	}
+	for n, v := range parts {
+		f, e := zw.Create(n)
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, _ = f.Write([]byte(v))
+	}
+	if e := zw.Close(); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.WriteFile(path, b.Bytes(), 0600); e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestDOCXEnableDisableAndWordLockPolicy(t *testing.T) {
+	root := t.TempDir()
+	writeDOCX(t, filepath.Join(root, "Notes.DOCX"))
+	if e := os.WriteFile(filepath.Join(root, "~$Notes.DOCX"), []byte("lock"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	newConn := func(limit int64) *filesystem.Connector {
+		c, e := filesystem.NewWithOptions(root, filesystem.Options{MaxTextBytes: 128, MaxDOCXBytes: limit})
+		if e != nil {
+			t.Fatal(e)
+		}
+		return c
+	}
+	var docs []connector.Document
+	r, e := newConn(8<<20).Scan(context.Background(), func(d connector.Document) error { docs = append(docs, d); return nil })
+	if e != nil || r.Seen != 1 || len(docs) != 1 || docs[0].MediaType != "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || docs[0].Content != "folder docx searchable" {
+		t.Fatalf("enabled scan: %+v %+v %v", r, docs, e)
+	}
+	if docs[0].URI == "" || docs[0].Pages != nil {
+		t.Fatalf("bad DOCX provenance: %+v", docs[0])
+	}
+	r, e = newConn(0).Scan(context.Background(), func(connector.Document) error { t.Fatal("disabled DOCX emitted"); return nil })
+	if e != nil || r.Seen != 0 || r.SkippedDOCX == 0 {
+		t.Fatalf("disabled scan: %+v %v", r, e)
+	}
+}
 
 func TestScanBoundsAndExclusions(t *testing.T) {
 	root := t.TempDir()

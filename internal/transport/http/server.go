@@ -175,6 +175,7 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 				Repository   string `json:"repository"`
 				Ref          string `json:"ref"`
 				Subdirectory string `json:"subdirectory"`
+				MaxDOCXBytes *int64 `json:"max_docx_bytes,omitempty"`
 			}
 			if !mutationAllowed(w, r, config) || !decodeMutation(w, r, &body) {
 				return
@@ -183,7 +184,11 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 			var err error
 			switch body.Type {
 			case "folder":
-				job, err = config.management.AddFolder(body.Path)
+				maxDOCX := int64(8 << 20)
+				if body.MaxDOCXBytes != nil {
+					maxDOCX = *body.MaxDOCXBytes
+				}
+				job, err = config.management.AddFolderWithDOCX(body.Path, maxDOCX)
 			case "github":
 				job, err = config.management.AddGitHub(body.Repository, body.Ref, body.Subdirectory)
 			default:
@@ -197,6 +202,20 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 				return
 			}
 			job, err := config.management.Refresh(r.PathValue("id"))
+			writeJobResult(w, job, err)
+		})
+		mux.HandleFunc("POST /api/v1/sources/{id}/configure", func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				MaxDOCXBytes *int64 `json:"max_docx_bytes"`
+			}
+			if !mutationAllowed(w, r, config) || !decodeMutation(w, r, &body) {
+				return
+			}
+			if body.MaxDOCXBytes == nil {
+				writeError(w, 400, "max_docx_bytes is required")
+				return
+			}
+			job, err := config.management.Configure(r.PathValue("id"), *body.MaxDOCXBytes)
 			writeJobResult(w, job, err)
 		})
 		mux.HandleFunc("DELETE /api/v1/sources/{id}", func(w http.ResponseWriter, r *http.Request) {
