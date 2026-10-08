@@ -1,0 +1,12 @@
+[
+  {"query":"kahve", "expected_paths":["kahve.md"], "language":"tr", "reason":"Exact Turkish word appears in the title and body."},
+  {"query":"kahve mercan", "expected_paths":["kahve.md"], "language":"tr", "reason":"Both literal terms occur in the same document."},
+  {"query":"yürüyüş", "expected_paths":["yuruyus.md"], "language":"tr", "reason":"Accented Turkish word matches its title and body."},
+  {"query":"zümrüt parkta", "expected_paths":["yuruyus.md"], "language":"tr", "reason":"Both terms occur in the walking note."},
+  {"query":"kahve zümrüt", "expected_paths":[], "language":"tr", "reason":"The terms occur in different documents; search uses AND."},
+  {"query":"garden silver", "expected_paths":["garden.md"], "language":"en", "reason":"Both literal English terms occur in the garden note."},
+  {"query":"notebook copper", "expected_paths":["notebook.md"], "language":"en", "reason":"The compound word is stored as one token."},
+  {"query":"paper-prototype", "expected_paths":["notebook.md"], "language":"en", "reason":"The query hyphen separates two literal AND terms."},
+  {"query":"note copper", "expected_paths":[], "language":"en", "reason":"A partial token does not match notebook; this is not substring search."},
+  {"query":"silver copper", "expected_paths":[], "language":"en", "reason":"Markers occur in different documents, so the AND query has no match."}
+]

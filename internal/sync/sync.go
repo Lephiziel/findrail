@@ -11,6 +11,7 @@ import (
 
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
+	"github.com/Lephiziel/findrail/internal/sourcecoord"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	"github.com/Lephiziel/findrail/pkg/connector"
 	"github.com/fsnotify/fsnotify"
@@ -33,6 +34,7 @@ type Config struct {
 	Debounce          time.Duration
 	PollOnly          bool
 	Factory           func(connector.Source) (*filesystem.Connector, error)
+	Coordinator       *sourcecoord.Locks
 }
 type Manager struct {
 	store  *sqlite.Store
@@ -42,6 +44,9 @@ type Manager struct {
 }
 
 func New(store *sqlite.Store, config Config) *Manager {
+	if config.Coordinator == nil {
+		config.Coordinator = sourcecoord.New()
+	}
 	if config.Interval <= 0 {
 		config.Interval = 5 * time.Minute
 	}
@@ -260,7 +265,12 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 			}
 			var result ingest.Result
 			if err == nil {
-				result, err = ingest.Refresh(ctx, m.store, conn)
+				var unlock func()
+				unlock, err = m.config.Coordinator.Acquire(ctx, source.ID)
+				if err == nil {
+					result, err = ingest.Refresh(ctx, m.store, conn)
+					unlock()
+				}
 			}
 			if ctx.Err() != nil {
 				return

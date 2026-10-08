@@ -1,22 +1,36 @@
 # Findrail
 
-**You remember the idea. Find the original.**
+**You remember a word. Find the original.**
 
 Findrail is an open-source, local-first search app built in Go. Choose folders
 of notes, code and text PDFs; search remembered words, preview the matching
 source and copy its original location. Changes in those folders refresh the
 index while the app runs. Keyword search needs no AI account and uploads no
-documents. Connected services and optional semantic retrieval are the next
-product stages.
+documents. Source builds also provide a scoped, read-only stdio MCP server.
+Connected services and optional semantic retrieval are the next product stages.
 
-**Status: local alpha, `0.1.0-alpha.1`.** It is ready for testing, not a stable
-release. GitHub ingestion, OCR, DOCX, semantic search, desktop launching and MCP
-remain on the roadmap.
+**Status: local alpha, `0.1.0-alpha.2`.** It is ready for testing, not a stable
+release. Public GitHub file snapshots are available in source builds. Private
+GitHub, OCR, DOCX, semantic search and desktop launching remain on the roadmap.
 
 [Releases](https://github.com/Lephiziel/findrail/releases) ·
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
+[Source management](docs/source-management.md) ·
+[MCP integration](docs/mcp.md) ·
 [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) ·
 [Русский](docs/ru/overview.md)
+
+[![Findrail screen recording: keyword search and PDF page preview](docs/assets/demo.gif)](docs/assets/demo.mp4)
+
+[Try the three-document demo](docs/demo.md) ·
+[Watch / download the 37-second video](docs/assets/demo.mp4) ·
+[Give alpha feedback](https://github.com/Lephiziel/findrail/issues/3)
+
+[Try the synthetic Turkish and English search evaluation](docs/search-evaluation.md).
+
+Recorded from the running web interface using the fictional demo documents.
+The video shows search, PDF page 2 and an automatic refresh after a note edit.
+The GIF is a short preview; use the MP4 for the full recording and larger text.
 
 ## Install and try
 
@@ -29,24 +43,42 @@ notices.
 
 ```bash
 # Linux / macOS, inside the extracted directory:
-./findrail index /path/to/your/notes
-./findrail serve
+./findrail demo
+# After the demo, stop with Ctrl+C and choose your own folder:
+./findrail start /path/to/your/notes
 ```
 
 ```powershell
 # Windows, inside the extracted directory:
-.\findrail.exe index "C:\Users\YOU\Documents\Notes"
-.\findrail.exe serve
+.\findrail.exe demo
+# After the demo, stop with Ctrl+C and choose your own folder:
+.\findrail.exe start "C:\Users\YOU\Documents\Notes"
 ```
 
-Open **http://127.0.0.1:7766**. Search, select **Preview**, and use the page
+Findrail attempts to open the browser after the local listener is ready. If it
+does not, open the
+URL printed in the terminal (normally **http://127.0.0.1:7766**). In the demo,
+search **idempotency** to find three fictional documents. The PDF match is on
+page 2. [Try a live edit](docs/demo.md#watch-an-edit-appear) without sharing your
+own files. The temporary demo workspace is removed on a normal stop; your
+normal index is separate. A forced process kill can leave temporary files.
+
+Search, select **Preview**, and use the page
 controls for a PDF. **Copy location** gives the original file URI, including
 `#page=N` for PDF matches. Browsers restrict `file:` navigation; the web client
 provides location copying rather than a desktop file opener.
 
-Keep `serve` running for automatic refresh. Ctrl+C stops it. No background daemon
+Keep `start` running for automatic refresh. Later, `./findrail start` resumes
+your registered folders. Ctrl+C stops it. No background daemon
 is installed. You can register another folder using `index` while the server
 runs; it will appear automatically.
+
+Source builds also let `start` create an empty index and manage folder/public
+GitHub sources in the Sources panel. Folder selection uses an absolute path on
+the machine running Findrail; browser file pickers cannot choose a server path.
+Manual GitHub refresh, job cancellation and logical removal are documented in
+[source management](docs/source-management.md). Existing release archives do
+not yet include this new web management flow.
 
 ### Build from source
 
@@ -58,14 +90,42 @@ cd findrail
 go build -o bin/findrail ./cmd/findrail
 ./bin/findrail index --data-dir .findrail examples/notes
 ./bin/findrail search --data-dir .findrail "webhook"
-./bin/findrail serve --data-dir .findrail
+./bin/findrail start --data-dir .findrail
 ```
 
 Options precede positional arguments. If you use `--data-dir`, use the same
-value for index, search and serve.
+value for start, index, search and serve. `demo` always uses its own temporary
+index and does not accept `--data-dir`.
+
+The older `0.1.0-alpha.1` archives do not include `start` or `demo`. Download
+`0.1.0-alpha.2` for the commands above, or use `index` followed by `serve` on the
+older release.
+
+### Start options
+
+`start` indexes a folder and launches search in one command:
+
+```bash
+./bin/findrail start --data-dir .findrail /path/to/your/notes
+# Later, resume the same registered folders:
+./bin/findrail start --data-dir .findrail
+```
+
+The first command indexes the selected folder, starts automatic refresh and
+attempts to open the local UI in your default browser. The terminal prints the
+actual URL once the listener is bound. Keep it running; Ctrl+C stops the server.
+Use `--no-open` on a headless machine, or open the printed URL manually if no
+browser appears. Browser-opener startup failures do not stop search.
+
+Options precede the folder. `--addr 127.0.0.1:7767` selects another local port;
+network-facing addresses are rejected. Repeating `start DIRECTORY` applies the
+chosen document-size limits to that folder, just like `index`; omitting DIRECTORY
+resumes stored sources with their existing limits. Initial extraction errors
+stop startup and preserve the prior committed inventory.
 
 ## What works today
 
+- A built-in three-document demo and one-command startup for your own folders.
 - Explicit local folders containing UTF-8 text, Markdown and common source files.
 - Text PDFs with original page numbers; a bounded extraction child process.
 - Durable SQLite FTS5 search, BM25 ranking, Unicode terms and source filters.
@@ -74,8 +134,12 @@ value for index, search and serve.
 - Source health: current refresh state, last success, errors and watcher fallback.
 - Atomic full-source scans: failures preserve the previous inventory.
 - Search reads the last committed snapshot while an update is in progress.
-- CLI / JSON output, loopback web UI and a read-only HTTP API.
+- CLI / JSON output, loopback web UI, read-only HTTP API and source-built
+  read-only stdio MCP (`findrail mcp`).
 - Logical source removal, leaving original files untouched.
+- Manual, commit-pinned public GitHub text snapshots with offline preview.
+- Empty-index onboarding and web source management in source builds (`start`);
+  release archives do not yet include these changes.
 
 See [alpha behaviour and limits](docs/local-alpha.md) and the
 [validation report](docs/validation.md).
@@ -98,12 +162,16 @@ There is no runtime telemetry. See [data handling](docs/data-handling.md).
 Upgrading from the foundation migrates the existing index automatically. Existing
 sources retain their text-only policy; re-run `index` to enable PDFs. Back up the
 data directory while Findrail is stopped before upgrading; the older binary
-cannot read schema 2.
+cannot read schema 3.
 
 ## Commands
 
 ```bash
 findrail index /path/to/notes
+findrail index-github --path docs OWNER/REPO
+findrail refresh-github SOURCE_ID
+findrail start --no-open /path/to/notes
+findrail start
 findrail index --max-pdf-bytes 0 /path/to/text-only
 findrail search --limit 10 "payment webhook"
 findrail search --source SOURCE_ID --json "architecture"
@@ -128,10 +196,10 @@ Linux; `~/Library/Application Support/Findrail` on macOS;
 | Capability | Local alpha | Next stages |
 |---|---|---|
 | Documents | Text / Markdown / code / PDF text | DOCX, optional OCR |
-| Sources | Local folders | Read-only GitHub, bookmarks, work tools |
+| Sources | Local folders; public GitHub snapshots in source builds | Private GitHub, bookmarks, work tools |
 | Freshness | File watching and full reconciliation | Resumable remote sync |
 | Retrieval | Literal AND terms, source filter, PDF page attribution | Query evaluation, structured filters, optional semantics |
-| Clients | CLI, local web UI, HTTP | Desktop launcher, read-only MCP, editors |
+| Clients | CLI, local web UI, HTTP, read-only stdio MCP | Desktop launcher, editors |
 | Extensions | Experimental connector contract | Versioned SDK and conformance harness |
 
 The advantage to validate is easy installation, useful retrieval, inspectable
@@ -152,7 +220,8 @@ and [official Go module guidance](https://go.dev/doc/modules/layout).
 | `internal/extract/`, `internal/ingest/` | Text / PDF extraction and atomic indexing |
 | `internal/store/sqlite/`, `internal/search/` | Persistence, FTS and evidence |
 | `internal/sync/` | Source discovery, watchers, retries and health |
-| `internal/transport/` | HTTP and embedded UI; planned MCP |
+| `internal/transport/` | HTTP, embedded UI and source-built stdio MCP |
+| `internal/sourceapp/` | `start`-only source operations and in-memory jobs |
 | `internal/semantic/` | Future semantic retrieval design |
 | `pkg/connector/` | Experimental public connector contract |
 | `api/`, `docs/` | Implemented API and product documentation |

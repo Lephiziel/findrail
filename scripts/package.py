@@ -17,7 +17,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def modules(go):
-    raw = subprocess.check_output([go, 'list', '-m', '-json', 'all'], cwd=ROOT, text=True)
+    # Module metadata may exist without source archives on a clean CI runner.
+    # Populate the complete graph before collecting dependency license notices.
+    subprocess.run([go, 'mod', 'download', 'all'], cwd=ROOT, check=True)
+    raw = subprocess.check_output([go, 'list', '-m', '-json', 'all'], cwd=ROOT, text=True, encoding="utf-8")
     decoder = json.JSONDecoder()
     while raw.strip():
         item, end = decoder.raw_decode(raw.lstrip())
@@ -48,7 +51,7 @@ def main():
         shutil.copy2(ROOT / 'build/package/INSTALL.txt', common / 'INSTALL.txt')
         licenses = common / 'licenses'
         licenses.mkdir()
-        goroot = pathlib.Path(subprocess.check_output([go, 'env', 'GOROOT'], text=True).strip())
+        goroot = pathlib.Path(subprocess.check_output([go, 'env', 'GOROOT'], text=True, encoding="utf-8").strip())
         shutil.copy2(goroot / 'LICENSE', licenses / 'Go-LICENSE.txt')
         dependencies = []
         for item in modules(go):

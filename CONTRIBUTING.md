@@ -4,6 +4,12 @@ Findrail is an early open-source project. Start with the runnable demo, the
 product specification, architecture, and implementation plan. Work that improves
 the real retrieval workflow is welcome.
 
+Try the [three-document demo](docs/demo.md), then browse
+[good first issues](https://github.com/Lephiziel/findrail/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22)
+or [help wanted](https://github.com/Lephiziel/findrail/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22help%20wanted%22).
+For a small task, leave a comment before starting so contributors do not duplicate
+work. Installation feedback is welcome even if you do not write Go.
+
 ## Development
 
 Use Go 1.26 or newer. Run `go mod download`, `go test ./...`, `go vet ./...`, and

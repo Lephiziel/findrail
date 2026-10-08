@@ -2,7 +2,7 @@
 
 ## Automatic refresh
 
-`serve` starts refresh workers for registered filesystem sources. It scans at
+`start` and `serve` start refresh workers for registered filesystem sources. It scans at
 startup, listens to native directory notifications and reconciles every five
 minutes by default. New folders are watched after discovery. Events are
 coalesced with a 350 ms debounce and a two-second maximum debounce window.
@@ -59,13 +59,23 @@ file. The UI displays plain text, safely highlights query words and offers PDF
 page navigation. If files change before reindexing, the preview still shows the
 version that was indexed.
 
+`Copy location` copies only the original address. `Copy as Markdown` copies the
+selected passage from the current preview, or the whole current preview when
+nothing useful is selected. For PDFs, both the citation text and its `file:`
+source retain the current page. The result is always an indexed snapshot; the
+browser does not read the original file again. A truncated preview is marked in
+the citation, and the same Markdown is shown in a read-only field when the
+Clipboard API is unavailable or refuses the copy. The local `file:` address
+preserves provenance, but it is not a public link and may not open in every
+Markdown client.
+
 ## Upgrade
 
 Stop Findrail and back up its dedicated data directory. Migration 2 preserves
 schema 1 documents, adds media metadata, PDF pages / page FTS and source limits.
 The migration commits atomically. Old sources stay text-only until explicitly
 re-indexed, preserving their previous inclusion policy. The old binary rejects
-schema 2; restore the stopped-directory backup to downgrade.
+schema 3; restore the stopped-directory backup to downgrade.
 
 ## Alpha release scope
 
@@ -74,3 +84,17 @@ amd64. Cross-compilation is not full runtime certification. CI runs tests and
 the compiled journey on Linux, macOS and Windows; inspect the linked workflow
 for its actual outcome. Binaries are unsigned and unnotarized. Search relevance,
 100k-document scale, OCR and cloud sources are not established by these checks.
+
+## Built-in demo
+
+`demo` embeds three fictional documents and copies them to a new private
+temporary workspace. Documents and the demo index are sibling directories,
+so the index is excluded from ingestion. It delegates indexing, refresh and
+serving to `start`. It never resolves the normal data directory and accepts
+no personal folder or `--data-dir` override. Each invocation starts fresh.
+
+A normal shutdown stops HTTP and refresh workers, closes the store, and then
+removes the workspace. A forced kill or power loss can leave it in the OS
+temporary directory. Its path is printed so you can edit the synthetic note
+while recording or testing. Demo edits are discarded when the workspace is
+removed. Use `start DIRECTORY` for persistent personal sources.
