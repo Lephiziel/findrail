@@ -10,8 +10,9 @@ documents. Source builds also provide a scoped, read-only stdio MCP server.
 Connected services and optional semantic retrieval are the next product stages.
 
 **Status: local alpha, `0.1.0-alpha.2`.** It is ready for testing, not a stable
-release. Public GitHub file snapshots and bounded local DOCX body extraction are
-available in source builds. Existing release archives do not include DOCX.
+release. Public GitHub snapshots, bounded local DOCX extraction, MCP, and the
+new Advanced query/filter behavior are source-build features. Existing alpha.2
+release archives do not include DOCX, MCP, or these search additions.
 Private GitHub, OCR, semantic search and desktop launching remain on the roadmap.
 
 [Releases](https://github.com/Lephiziel/findrail/releases) ·
@@ -146,6 +147,7 @@ stop startup and preserve the prior committed inventory.
 - Text PDFs with original page numbers; a bounded extraction child process.
 - Bounded offline DOCX plain-text body snapshots in source builds (no page numbers).
 - Durable SQLite FTS5 search, BM25 ranking, Unicode terms and source filters.
+- Opt-in Advanced queries and server-side format, indexed-path and title filters in source builds.
 - Matching passages and plain-text previews of the indexed snapshot.
 - Automatic refresh using directory notifications, debouncing and periodic scans.
 - Source health: current refresh state, last success, errors and watcher fallback.
@@ -217,7 +219,7 @@ Linux; `~/Library/Application Support/Findrail` on macOS;
 | Documents | Text / Markdown / code / PDF text / bounded DOCX body text in source builds | optional OCR |
 | Sources | Local folders; public GitHub snapshots in source builds | Private GitHub, bookmarks, work tools |
 | Freshness | File watching and full reconciliation | Resumable remote sync |
-| Retrieval | Literal AND terms, source filter, PDF page attribution | Query evaluation, structured filters, optional semantics |
+| Retrieval | Literal search, opt-in Advanced queries, source/format/path/title filters, PDF evidence | Query evaluation, optional semantics |
 | Clients | CLI, local web UI, HTTP, read-only stdio MCP | Desktop launcher, editors |
 | Extensions | Experimental connector contract | Versioned SDK and conformance harness |
 

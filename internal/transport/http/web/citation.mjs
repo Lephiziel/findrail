@@ -105,12 +105,13 @@ export function formatCitation(evidence, options = {}) {
   const excerpt = selectedText(text, options.excerpt);
   const uri = sourceURI(evidence.uri);
   const isPDF = evidence.media_type === PDF_MEDIA_TYPE;
-  if (isPDF && (!Number.isInteger(evidence.page) || evidence.page < 1)) {
-    throw new TypeError('evidence.page must be a positive integer for PDF citations');
+  if (isPDF && (!Number.isInteger(evidence.page) || evidence.page < 0)) {
+    throw new TypeError('evidence.page must be a non-negative integer for PDF citations');
   }
 
-  const heading = isPDF ? `${title} — page ${evidence.page}` : title;
-  const linkLabel = isPDF ? `${title}, page ${evidence.page}` : title;
+  const hasPage = isPDF && evidence.page > 0;
+  const heading = hasPage ? `${title} — page ${evidence.page}` : title;
+  const linkLabel = hasPage ? `${title}, page ${evidence.page}` : title;
   const fence = fenceFor(excerpt);
   const note = evidence.truncated === true
     ? (options.excerpt === undefined || options.excerpt === null

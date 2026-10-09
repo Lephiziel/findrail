@@ -95,8 +95,15 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /api/v1/search", func(w http.ResponseWriter, r *http.Request) {
+		values := r.URL.Query()
+		for _, key := range []string{"q", "source", "limit", "mode", "format", "path_prefix", "title_contains"} {
+			if len(values[key]) > 1 {
+				writeError(w, 400, "repeated search parameter")
+				return
+			}
+		}
 		limit := 20
-		if raw := r.URL.Query().Get("limit"); raw != "" {
+		if raw := values.Get("limit"); raw != "" {
 			var err error
 			limit, err = strconv.Atoi(raw)
 			if err != nil {
@@ -104,10 +111,22 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 				return
 			}
 		}
-		request := search.Request{Query: r.URL.Query().Get("q"), SourceID: r.URL.Query().Get("source"), Limit: limit}
+		request := search.Request{Query: values.Get("q"), SourceID: values.Get("source"), Limit: limit, Mode: values.Get("mode"), Format: values.Get("format"), PathPrefix: values.Get("path_prefix"), TitleContains: values.Get("title_contains")}
+		if err := search.ValidateRequest(request); err != nil {
+			var validation *search.ValidationError
+			if errors.As(err, &validation) {
+				writeJSON(w, 400, map[string]any{"error": validation.Message, "code": validation.Code, "position": validation.Position})
+			} else {
+				writeError(w, 400, err.Error())
+			}
+			return
+		}
 		response, err := backend.Search(r.Context(), request)
 		if err != nil {
-			if errors.Is(err, search.ErrQuery) || errors.Is(err, search.ErrLimit) {
+			var validation *search.ValidationError
+			if errors.As(err, &validation) {
+				writeJSON(w, 400, map[string]any{"error": validation.Message, "code": validation.Code, "position": validation.Position})
+			} else if errors.Is(err, search.ErrQuery) || errors.Is(err, search.ErrLimit) {
 				writeError(w, http.StatusBadRequest, err.Error())
 			} else {
 				writeError(w, http.StatusInternalServerError, "search unavailable")
@@ -129,9 +148,12 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 		if raw := r.URL.Query().Get("page"); raw != "" {
 			var err error
 			page, err = strconv.Atoi(raw)
-			if err != nil || page < 1 {
+			if err != nil || page < 0 {
 				writeError(w, 400, "invalid page number")
 				return
+			}
+			if page == 0 {
+				page = -1
 			}
 		}
 		evidence, err := backend.Evidence(r.Context(), r.PathValue("id"), page)

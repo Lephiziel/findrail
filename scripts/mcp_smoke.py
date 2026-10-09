@@ -93,7 +93,10 @@ class MCP:
         if method == "tools/call":
             assert result_byte_size(line) <= 256 << 10, "serialized tool result exceeds byte budget"
             assert len(result["content"]) == 1 and result["content"][0]["type"] == "text", result
-            assert json.loads(result["content"][0]["text"]) == result["structuredContent"], result
+            if "structuredContent" in result:
+                assert json.loads(result["content"][0]["text"]) == result["structuredContent"], result
+            else:
+                assert result.get("isError"), result
         return result
 
     def initialize(self):
@@ -131,7 +134,7 @@ class MCP:
 
 
 def expect_error(result, code):
-    assert result.get("isError") and result["structuredContent"]["error"]["code"] == code, result
+    assert result.get("isError") and result.get("structuredContent", {}).get("error", {}).get("code") == code, result
     assert "FOREIGN_MCP_MARKER" not in json.dumps(result), result
 
 
@@ -216,6 +219,10 @@ def main():
         sources = run(binary, "sources", "--data-dir", data, "--json")["sources"]
         source = next(s["id"] for s in sources if s["name"] == "notes")
         foreign_source = next(s["id"] for s in sources if s["name"] == "other")
+        cli_filtered = run(binary, "search", "--data-dir", data, "--source", source,
+                           "--mode", "advanced", "--format", "pdf", "--path-prefix", "mcp-runbook.pdf",
+                           "--title-contains", "mcp-runbook", "--json", "idempot*")
+        assert cli_filtered["total"] == 1, cli_filtered
         foreign_id = run(binary, "search", "--data-dir", data, "--source", foreign_source,
                          "--json", "idempotency")["results"][0]["id"]
         # MCP must retrieve the indexed PDF even when its original no longer exists.
@@ -240,6 +247,14 @@ def main():
                 assert result["total"] == 4 and result["returned"] == len(result["results"]), result
                 assert all(item["source_id"] == source for item in result["results"]), result
                 assert "FOREIGN_MCP_MARKER" not in json.dumps(result), result
+                filtered = client.call("findrail_search", query="idempot*", source_id=source, limit=5,
+                                       mode="advanced", format="pdf", path_prefix="mcp-runbook.pdf",
+                                       title_contains="mcp-runbook")["structuredContent"]
+                assert filtered["total"] == 1 and filtered["results"][0]["path"] == "mcp-runbook.pdf", filtered
+                assert filtered["results"][0]["id"] == cli_filtered["results"][0]["id"], filtered
+                invalid_mode = client.call("findrail_search", query="idempotency", source_id=source,
+                                           mode="unknown")
+                assert invalid_mode.get("isError"), invalid_mode
                 pdf = next(item for item in result["results"] if item["title"] == "mcp-runbook.pdf")
                 assert pdf["page"] == 2 and pdf["uri"].endswith("#page=2"), pdf
                 evidence = client.call("findrail_get_evidence", document_id=pdf["id"], source_id=source, page=2)["structuredContent"]

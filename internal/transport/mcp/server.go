@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 	"time"
 	"unicode"
 
@@ -141,6 +140,10 @@ func (s *Server) addTools() error {
 	searchInputSchema.Properties["limit"].Types = nil
 	searchInputSchema.Properties["limit"].Minimum = floatPtr(1)
 	searchInputSchema.Properties["limit"].Maximum = floatPtr(float64(s.config.MaxResults))
+	searchInputSchema.Properties["mode"] = &jsonschema.Schema{Type: "string", Enum: []any{"", "literal", "advanced"}, Default: json.RawMessage(`"literal"`), Description: "Literal by default; advanced enables phrases, OR branches, exclusions and token prefixes."}
+	searchInputSchema.Properties["format"] = &jsonschema.Schema{Type: "string", Enum: []any{"", "all", "text", "pdf", "docx"}, Default: json.RawMessage(`"all"`)}
+	searchInputSchema.Properties["path_prefix"] = &jsonschema.Schema{Type: "string", MaxLength: intPtr(512), Description: "Relative slash-separated indexed path prefix."}
+	searchInputSchema.Properties["title_contains"] = &jsonschema.Schema{Type: "string", MaxLength: intPtr(128), Description: "Literal case-sensitive indexed title substring."}
 	searchOutputSchema, err := jsonschema.For[searchOutput](nil)
 	if err != nil {
 		return err
@@ -175,7 +178,7 @@ func (s *Server) addTools() error {
 	}, s.listSources)
 	mcp.AddTool[searchInput, any](s.server, &mcp.Tool{
 		Name: "findrail_search", Title: "Search indexed Findrail documents",
-		Description: "Search one permitted Findrail source using the existing literal indexed search.",
+		Description: "Search one permitted source. Literal mode is the default; optional advanced mode and format/path/title filters follow the shared Findrail query contract.",
 		Annotations: annotation("Search indexed Findrail documents"), InputSchema: searchInputSchema, OutputSchema: searchOutputSchema,
 	}, s.search)
 	mcp.AddTool[evidenceInput, any](s.server, &mcp.Tool{
@@ -188,9 +191,13 @@ func (s *Server) addTools() error {
 
 type listSourcesInput struct{}
 type searchInput struct {
-	Query    string `json:"query"`
-	SourceID string `json:"source_id"`
-	Limit    *int   `json:"limit,omitempty"`
+	Query         string `json:"query"`
+	SourceID      string `json:"source_id"`
+	Limit         *int   `json:"limit,omitempty"`
+	Mode          string `json:"mode,omitempty"`
+	Format        string `json:"format,omitempty"`
+	PathPrefix    string `json:"path_prefix,omitempty"`
+	TitleContains string `json:"title_contains,omitempty"`
 }
 type evidenceInput struct {
 	DocumentID string `json:"document_id"`
@@ -286,8 +293,9 @@ func (s *Server) listSources(ctx context.Context, _ *mcp.CallToolRequest, _ list
 }
 
 func (s *Server) search(ctx context.Context, _ *mcp.CallToolRequest, input searchInput) (*mcp.CallToolResult, any, error) {
-	if _, err := search.Expression(input.Query); err != nil || strings.TrimSpace(input.Query) == "" {
-		return s.errorResult(toolError{"invalid_arguments", "Search query must contain letters or numbers and be at most 256 characters."})
+	request := search.Request{Query: input.Query, SourceID: input.SourceID, Limit: 1, Mode: input.Mode, Format: input.Format, PathPrefix: input.PathPrefix, TitleContains: input.TitleContains}
+	if err := search.ValidateRequest(request); err != nil {
+		return s.errorResult(toolError{"invalid_arguments", "Search query or filters are invalid."})
 	}
 	limit := 10
 	if limit > s.config.MaxResults {
@@ -305,7 +313,8 @@ func (s *Server) search(ctx context.Context, _ *mcp.CallToolRequest, input searc
 	var response search.Response
 	err := s.withBackend(ctx, func(ctx context.Context) error {
 		var err error
-		response, err = s.backend.Search(ctx, search.Request{Query: input.Query, SourceID: input.SourceID, Limit: limit})
+		request.Limit = limit
+		response, err = s.backend.Search(ctx, request)
 		return err
 	})
 	if err != nil {

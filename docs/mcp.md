@@ -62,8 +62,8 @@ there is no all-sources search, file reader, shell tool, or write tool.
 The server exposes exactly three tools:
 
 - `findrail_list_sources` returns only allowed sources that are still registered.
-- `findrail_search` searches one allowed source using Findrail's existing literal
-  AND query language and preserves its result order.
+- `findrail_search` searches one allowed source using Literal mode by default;
+  optional mode and filters use the shared query contract in [search-query.md](search-query.md).
 - `findrail_get_evidence` returns one bounded indexed snapshot. For a PDF, pass
   a positive `page` to obtain page text and a URI ending in `#page=N`.
 

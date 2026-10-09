@@ -33,12 +33,12 @@ paths:
   /api/v1/search:
     get:
       operationId: search
-      summary: Search literal terms joined with AND semantics
+      summary: Search indexed documents in Literal or opt-in Advanced mode
       parameters:
       - name: q
         in: query
         required: true
-        description: Must contain letters or numbers; punctuation separates terms
+        description: Literal mode tokenizes punctuation as separators. Advanced mode uses the restricted grammar documented in docs/search-query.md; user input is compiled to safe FTS expressions, not passed through as SQL or raw MATCH syntax.
         schema:
           type: string
           minLength: 1
@@ -55,6 +55,22 @@ paths:
           minimum: 1
           maximum: 100
           default: 20
+      - name: mode
+        in: query
+        description: Literal is the compatible default; Advanced enables the restricted query grammar in docs/search-query.md.
+        schema: {type: string, enum: ['', literal, advanced], default: literal}
+      - name: format
+        in: query
+        description: Server-side media type filter.
+        schema: {type: string, enum: ['', all, text, pdf, docx], default: all}
+      - name: path_prefix
+        in: query
+        description: Relative indexed slash path; literal prefix with directory boundary.
+        schema: {type: string, maxLength: 512}
+      - name: title_contains
+        in: query
+        description: Literal, case-sensitive title substring.
+        schema: {type: string, maxLength: 128}
       responses:
         '200':
           description: Ranked matches and total match count
@@ -227,10 +243,10 @@ paths:
           type: string
       - name: page
         in: query
-        description: PDF page; omitted means page 1. Text documents must omit it.
+        description: PDF page; omitted means page 1. Page 0 requests a PDF title-only result without a page claim. Text documents must omit it.
         schema:
           type: integer
-          minimum: 1
+          minimum: 0
       responses:
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -294,11 +310,15 @@ components:
       schema: {type: string, minLength: 32, maxLength: 32}
   responses:
     BadRequest:
-      description: Invalid query, result limit or PDF page
+      description: Invalid query, mode, search filter, result limit or PDF page
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+          examples:
+            invalidAdvancedQuery:
+              summary: An OR branch has no positive term
+              value: {error: "Each OR branch needs a positive term.", code: missing_positive_term, position: 9}
     Forbidden:
       description: Non-local Host or a browser Origin that differs from the request
         Host
@@ -320,6 +340,14 @@ components:
       properties:
         error:
           type: string
+        code:
+          type: string
+          enum: [syntax, missing_positive_term, query_too_large, invalid_mode, invalid_filter]
+          description: Stable search validation category; present for search validation errors.
+        position:
+          type: integer
+          minimum: 0
+          description: Zero-based Unicode code-point offset when the error points into the query.
     SearchResponse:
       type: object
       required:
@@ -377,9 +405,8 @@ components:
           type: string
         page: &id008
           type: integer
-          minimum: 1
-          description: Best matching PDF page; may match a subset of document query
-            terms
+          minimum: 0
+          description: Positive-evidence PDF page, or 0 when Advanced matches only the title.
         page_count: &id009
           type: integer
           minimum: 1

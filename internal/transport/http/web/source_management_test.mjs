@@ -11,6 +11,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 function harness() {
   const elements = new Map(), handlers = new Map(), timers = new Map();
   let nextTimer = 0, requests = 0, pendingEvidence;
+  const pendingSearches = [], searchURLs = [];
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
       value: '', textContent: '', hidden: false, disabled: false, open: false,
@@ -38,6 +39,10 @@ function harness() {
     Option: function(text, value) { this.text = text; this.value = value; },
     async fetch(url) {
       requests++;
+      if (url.startsWith('/api/v1/search?')) {
+        searchURLs.push(url);
+        return new Promise(resolve => pendingSearches.push(data => resolve({ok: true, json: async () => data})));
+      }
       if (url.startsWith('/api/v1/documents/')) return new Promise(resolve => {
         pendingEvidence = data => resolve({ok: true, json: async () => data});
       });
@@ -49,7 +54,8 @@ function harness() {
   return {context, timers, element, document, handlers,
     notify: (type, detail) => handlers.get(`window:${type}`)?.({detail}),
     get requests() { return requests; },
-    resolveEvidence: data => pendingEvidence(data)};
+    resolveEvidence: data => pendingEvidence(data),
+    resolveSearch: (index, data) => pendingSearches[index](data), searchURLs};
 }
 
 test('inventory notifications retain one poll and pause in a hidden tab', async () => {
@@ -120,4 +126,28 @@ test('job polling resumes if the tab is hidden during an active request', async 
   assert.equal(h.timers.size, 0, 'an in-flight poll must not leave a hidden-tab timer');
   h.document.hidden = false; h.handlers.get('document:visibilitychange')();
   assert.equal(h.timers.size, 1, 'showing the tab must restart job polling');
+});
+
+test('newer search response wins when an older fetch completes late', async () => {
+  const h=harness();await flush();h.element('query').value='retry';
+  const submit=()=>h.handlers.get('search-form:submit')({preventDefault(){}});
+  submit();await flush();submit();await flush();
+  h.resolveSearch(1,{total:2,results:[]});await flush();
+  h.resolveSearch(0,{total:99,results:[]});await flush();
+  assert.match(h.element('status').textContent,/2 matching documents/);
+});
+
+test('filter reset issues a new server request from a coherent form snapshot', async () => {
+  const h=harness();await flush();h.element('query').value='retry';h.element('mode').value='advanced';
+  h.element('format').value='pdf';h.element('path-prefix').value='docs';h.element('title-contains').value='runbook';
+  h.handlers.get('search-form:submit')({preventDefault(){}});await flush();
+  const first=new URLSearchParams(h.searchURLs[0].split('?')[1]);
+  assert.equal(first.get('mode'),'advanced');assert.equal(first.get('format'),'pdf');
+  assert.equal(first.get('path_prefix'),'docs');assert.equal(first.get('title_contains'),'runbook');
+  h.resolveSearch(0,{total:0,results:[]});await flush();
+  h.handlers.get('reset-filters:click')();await flush();
+  const reset=new URLSearchParams(h.searchURLs[1].split('?')[1]);
+  assert.equal(reset.get('format'),'all');assert.equal(reset.has('path_prefix'),false);
+  assert.equal(reset.has('title_contains'),false);assert.equal(h.element('query').value,'retry');
+  assert.equal(h.element('active-filters').textContent,'');
 });

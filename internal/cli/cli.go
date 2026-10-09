@@ -30,7 +30,7 @@ Usage:
   findrail refresh-github [--data-dir DIR] [--timeout 2m] [--json] SOURCE_ID
   findrail start [--data-dir DIR] [--addr 127.0.0.1:7766] [--no-open] [DIRECTORY]
   findrail demo [--addr 127.0.0.1:7766] [--no-open]
-  findrail search [--data-dir DIR] [--limit N] [--source ID] [--json] QUERY
+  findrail search [--data-dir DIR] [--limit N] [--source ID] [--mode MODE] [--format FORMAT] [--path-prefix PATH] [--title-contains TEXT] [--json] QUERY
   findrail sources [--data-dir DIR] [--json]
   findrail forget [--data-dir DIR] SOURCE_ID
   findrail serve [--data-dir DIR] [--addr 127.0.0.1:7766] [--no-sync]
@@ -80,6 +80,7 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	dataDir := fs.String("data-dir", "", "directory for Findrail's private index")
 	var jsonOutput bool
 	maxBytes, limit, sourceID, addr := filesystem.DefaultMaxBytes, 20, "", "127.0.0.1:7766"
+	mode, format, pathPrefix, titleContains := "literal", "all", "", ""
 	maxPDFBytes := int64(16 << 20)
 	maxDOCXBytes := int64(8 << 20)
 	noSync := false
@@ -93,6 +94,10 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	case "search":
 		fs.IntVar(&limit, "limit", limit, "maximum search results, 1–100")
 		fs.StringVar(&sourceID, "source", "", "filter results by source ID")
+		fs.StringVar(&mode, "mode", "literal", "query mode: literal or advanced")
+		fs.StringVar(&format, "format", "all", "format: all, text, pdf, docx")
+		fs.StringVar(&pathPrefix, "path-prefix", "", "relative indexed path prefix")
+		fs.StringVar(&titleContains, "title-contains", "", "literal title substring")
 		fs.BoolVar(&jsonOutput, "json", false, "output JSON")
 	case "sources":
 		fs.BoolVar(&jsonOutput, "json", false, "output JSON")
@@ -117,6 +122,16 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	}
 	if args[0] == "search" && fs.NArg() == 0 {
 		return fmt.Errorf("search requires a query")
+	}
+	searchRequest := search.Request{}
+	if args[0] == "search" {
+		searchRequest = search.Request{Query: strings.Join(fs.Args(), " "), SourceID: sourceID, Limit: limit, Mode: mode, Format: format, PathPrefix: pathPrefix, TitleContains: titleContains}
+		if limit < 1 || limit > 100 {
+			return search.ErrLimit
+		}
+		if err := search.ValidateRequest(searchRequest); err != nil {
+			return err
+		}
 	}
 	if (args[0] == "sources" || args[0] == "serve" || args[0] == "watch") && fs.NArg() != 0 {
 		return fmt.Errorf("%s does not accept positional arguments", args[0])
@@ -165,9 +180,13 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 		}
 		return err
 	case "search":
-		response, err := store.Search(ctx, search.Request{Query: strings.Join(fs.Args(), " "), SourceID: sourceID, Limit: limit})
+		response, err := store.Search(ctx, searchRequest)
 		if err != nil {
-			return err
+			var validation *search.ValidationError
+			if errors.As(err, &validation) || errors.Is(err, search.ErrQuery) || errors.Is(err, search.ErrLimit) {
+				return err
+			}
+			return fmt.Errorf("search unavailable")
 		}
 		if jsonOutput {
 			return json.NewEncoder(out).Encode(response)

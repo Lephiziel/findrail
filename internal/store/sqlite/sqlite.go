@@ -369,18 +369,48 @@ func (s *scan) Rollback() error { return s.tx.Rollback() }
 
 func (s *Store) Search(ctx context.Context, request search.Request) (search.Response, error) {
 	response := search.Response{Query: request.Query, Results: []search.Result{}}
-	expression, err := search.Expression(request.Query)
-	if err != nil {
+	if err := search.ValidateRequest(request); err != nil {
 		return response, err
 	}
 	if request.Limit < 1 || request.Limit > 100 {
 		return response, search.ErrLimit
 	}
+	advanced := request.Mode == "advanced"
+	expression, _ := search.Expression(request.Query)
+	if advanced {
+		plan, _ := search.ParseAdvanced(request.Query)
+		expression = compilePositivePlan(plan)
+	}
 	where := "documents_fts MATCH ?"
 	args := []any{expression}
+	if advanced {
+		plan, _ := search.ParseAdvanced(request.Query)
+		predicate, predicateArgs := advancedPredicate(plan)
+		where += " AND (" + predicate + ")"
+		args = append(args, predicateArgs...)
+	}
 	if request.SourceID != "" {
 		where += " AND d.source_id=?"
 		args = append(args, request.SourceID)
+	}
+	if request.Format != "" && request.Format != "all" {
+		switch request.Format {
+		case "pdf":
+			where += " AND d.media_type='application/pdf'"
+		case "docx":
+			where += " AND d.media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'"
+		case "text":
+			where += " AND d.media_type NOT IN ('application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document')"
+		}
+	}
+	if request.PathPrefix != "" {
+		p := strings.TrimSuffix(request.PathPrefix, "/")
+		where += " AND (d.path=? OR substr(d.path,1,length(?)+1)=?||'/')"
+		args = append(args, p, p, p)
+	}
+	if request.TitleContains != "" {
+		where += " AND instr(d.title,?)>0"
+		args = append(args, request.TitleContains)
 	}
 	tx, err := s.readers.BeginTx(ctx, nil)
 	if err != nil {
@@ -413,14 +443,60 @@ func (s *Store) Search(ctx context.Context, request search.Request) (search.Resp
 		return response, err
 	}
 	pageExpression := strings.ReplaceAll(expression, " AND ", " OR ")
+	var advancedPlan search.Plan
+	if advanced {
+		advancedPlan, _ = search.ParseAdvanced(request.Query)
+		pageExpression = compilePositivePlan(advancedPlan)
+	}
 	for i := range response.Results {
 		r := &response.Results[i]
 		if r.PageCount == 0 {
 			continue
 		}
+		queryPageExpression := pageExpression
+		pageAlreadySelected := false
+		if advanced {
+			queryPageExpression = ""
+			for _, branch := range advancedPlan {
+				predicate, predicateArgs := advancedPredicate(search.Plan{branch})
+				candidate := compilePositivePlan(search.Plan{branch})
+				var found int
+				checkArgs := append([]any{candidate}, predicateArgs...)
+				checkArgs = append(checkArgs, r.ID)
+				checkErr := tx.QueryRowContext(ctx, `SELECT 1 FROM documents_fts JOIN documents d ON d.rowid=documents_fts.rowid WHERE documents_fts MATCH ? AND (`+predicate+`) AND d.id=? LIMIT 1`, checkArgs...).Scan(&found)
+				if errors.Is(checkErr, sql.ErrNoRows) {
+					continue
+				}
+				if checkErr != nil {
+					return response, checkErr
+				}
+				queryPageExpression = candidate
+				fullErr := tx.QueryRowContext(ctx, `SELECT p.page_number,snippet(pages_fts,0,'[',']','…',32) FROM pages_fts JOIN document_pages p ON p.rowid=pages_fts.rowid WHERE pages_fts MATCH ? AND p.document_id=? ORDER BY bm25(pages_fts),p.page_number LIMIT 1`, candidate, r.ID).Scan(&r.Page, &r.Snippet)
+				if fullErr == nil {
+					pageAlreadySelected = true
+					break
+				}
+				if !errors.Is(fullErr, sql.ErrNoRows) {
+					return response, fullErr
+				}
+				queryPageExpression = branchPositiveAlternatives(branch)
+				break
+			}
+			if pageAlreadySelected {
+				r.URI += fmt.Sprintf("#page=%d", r.Page)
+				continue
+			}
+			if queryPageExpression == "" {
+				r.Page = 0
+				continue
+			}
+		}
 		err := tx.QueryRowContext(ctx, `SELECT p.page_number,snippet(pages_fts,0,'[',']','…',32)
             FROM pages_fts JOIN document_pages p ON p.rowid=pages_fts.rowid
-            WHERE pages_fts MATCH ? AND p.document_id=? ORDER BY bm25(pages_fts),p.page_number LIMIT 1`, pageExpression, r.ID).Scan(&r.Page, &r.Snippet)
+            WHERE pages_fts MATCH ? AND p.document_id=? ORDER BY bm25(pages_fts),p.page_number LIMIT 1`, queryPageExpression, r.ID).Scan(&r.Page, &r.Snippet)
+		if errors.Is(err, sql.ErrNoRows) && advanced {
+			r.Page = 0
+		}
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return response, err
 		}
@@ -429,6 +505,70 @@ func (s *Store) Search(ctx context.Context, request search.Request) (search.Resp
 		}
 	}
 	return response, nil
+}
+
+func ftsAtom(a search.Atom) string {
+	x := strings.ReplaceAll(a.Text, `"`, `""`)
+	if a.Prefix {
+		return `"` + x + `"*`
+	}
+	return `"` + x + `"`
+}
+
+// advancedPredicate applies each branch independently. Phrase checks against the
+// document title or one actual PDF page; negative checks cover title and pages.
+func advancedPredicate(plan search.Plan) (string, []any) {
+	branches := make([]string, 0, len(plan))
+	args := []any{}
+	for _, branch := range plan {
+		terms := make([]string, 0, len(branch))
+		for _, atom := range branch {
+			expr := ftsAtom(atom)
+			var condition string
+			if atom.Phrase {
+				title := `(EXISTS (SELECT 1 FROM documents_fts WHERE documents_fts MATCH ? AND rowid=d.rowid))`
+				pages := `(EXISTS (SELECT 1 FROM pages_fts JOIN document_pages p ON p.rowid=pages_fts.rowid WHERE pages_fts MATCH ? AND p.document_id=d.id))`
+				body := `(d.page_count=0 AND EXISTS (SELECT 1 FROM documents_fts WHERE documents_fts MATCH ? AND rowid=d.rowid))`
+				args = append(args, `title : `+expr, expr, expr)
+				if atom.Exclude {
+					condition = "NOT (" + title + " OR " + pages + " OR (" + body + "))"
+				} else {
+					condition = "(" + title + " OR " + pages + " OR (" + body + "))"
+				}
+			} else {
+				condition = `(EXISTS (SELECT 1 FROM documents_fts WHERE documents_fts MATCH ? AND rowid=d.rowid))`
+				args = append(args, expr)
+				if atom.Exclude {
+					condition = `NOT ` + condition
+				}
+			}
+			terms = append(terms, condition)
+		}
+		branches = append(branches, `(`+strings.Join(terms, ` AND `)+`)`)
+	}
+	return strings.Join(branches, ` OR `), args
+}
+func compilePositivePlan(plan search.Plan) string {
+	xs := []string{}
+	for _, b := range plan {
+		ps := []string{}
+		for _, a := range b {
+			if !a.Exclude {
+				ps = append(ps, ftsAtom(a))
+			}
+		}
+		xs = append(xs, "("+strings.Join(ps, " AND ")+")")
+	}
+	return strings.Join(xs, " OR ")
+}
+func branchPositiveAlternatives(branch search.Branch) string {
+	terms := []string{}
+	for _, atom := range branch {
+		if !atom.Exclude {
+			terms = append(terms, ftsAtom(atom))
+		}
+	}
+	return strings.Join(terms, " OR ")
 }
 
 type SourceStatus struct {
@@ -690,7 +830,7 @@ func (s *Store) EvidenceForSource(ctx context.Context, sourceID, id string, page
 
 func (s *Store) evidence(ctx context.Context, sourceID, id string, page int) (search.Evidence, error) {
 	var e search.Evidence
-	if page < 0 {
+	if page < -1 {
 		return e, search.ErrPage
 	}
 	tx, err := s.readers.BeginTx(ctx, nil)
@@ -713,6 +853,12 @@ func (s *Store) evidence(ctx context.Context, sourceID, id string, page int) (se
 		return e, err
 	}
 	if e.PageCount > 0 {
+		if page == -1 {
+			if err := tx.QueryRowContext(ctx, "SELECT substr(content,1,65536),length(content)>65536 FROM documents WHERE id=?", e.ID).Scan(&e.Text, &e.Truncated); err != nil {
+				return e, err
+			}
+			return e, nil
+		}
 		if page == 0 {
 			page = 1
 		}
