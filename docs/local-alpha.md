@@ -51,10 +51,13 @@ limited to 16 MiB maximum. DOCX previews and citations have no page numbers.
 Existing sources remain disabled after migration until explicitly re-indexed.
 See [DOCX policy and limits](docx.md).
 
-Search matches all query terms anywhere in a document, including its title.
+Literal search matches all query terms anywhere in a document, including its title.
+Source builds also provide opt-in Advanced query syntax and server-side filters;
+see [search query semantics](search-query.md).
 For PDFs the returned page is the best matching page for one or more query
 terms. When terms span pages, a single excerpt may not contain every term.
-A title-only match has no matching page and opens page 1 by default.
+Legacy Literal title-only matches open page 1 by default. Advanced title-only PDF
+matches retain the original URI and report no page claim.
 
 ## Preview
 

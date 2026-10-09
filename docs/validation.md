@@ -1,5 +1,35 @@
 # Local-alpha validation
 
+## Exact search / server filters branch validation · 2026-10-09
+
+Advanced SQLite regression fixtures use synthetic text and PDF-page records.
+They verify phrase separation, OR/exclusion branches, prefixes, server filters,
+count-before-limit, title-only page 0, page-local phrase exclusions, positive
+page evidence and snapshot cancellation. MCP smoke checks the same filtered
+request through CLI/MCP while a second source contains identical terms; results
+remain constrained to the configured source. No migration or evaluation files
+were changed.
+
+| Check | Result |
+|---|---|
+| `go test ./...`, race, vet, module verification | Passed locally on Go 1.27.2 linux/amd64 |
+| Bounded `FuzzParseAdvanced` smoke (3s requested) | Passed; 145,278 executions |
+| CGO-free trimpath build and compiled CLI/HTTP/search smoke | Passed |
+| Compiled MCP smoke (both supported protocols) | Passed |
+| `node --test internal/transport/http/web/*_test.mjs` | Passed (18 tests) |
+| Chromium / browser journey | Not run; Chromium is installed, but no browser automation driver is available |
+
+The local resource spot check used 512 synthetic Markdown files (same body
+shape, 16 logical CPUs, Intel i7-10700KF, Linux amd64, Go 1.27.2). One process invocation
+per request, including startup, measured: Literal `retry` 4.76 ms (512 total,
+5 returned); Advanced `retry -deprecat* OR alertprefix*` 51.37 ms (439 total,
+5 returned); `--format text --path-prefix docs/ --title-contains note-00 retry`
+7.71 ms (100 total, 5 returned). These small-corpus wall-clock values are not
+large-index performance claims. SQL applies filters/count/limit in SQLite; Go
+does not load the matching corpus. SQLite work uses request contexts, but no
+in-flight cancellation latency benchmark was performed. No interactive browser,
+native Windows/macOS runtime, or remote CI result is claimed here.
+
 Local checks performed on 2026-10-05 for alpha.2, Linux amd64. This report describes a
 working alpha, not production certification or a security audit.
 

@@ -45,7 +45,7 @@ indexed-evidence contracts.
 | `internal/sourcecoord` | Shared per-source scan/removal exclusion inside one process | Standard library |
 | `internal/ingest` | Atomic full-source scan orchestration | Connector contract, storage interface |
 | `internal/store/sqlite` | Schema, transactions, content hashes, FTS, sources | SQLite driver and domain contracts |
-| `internal/search` | Retrieval request / response and literal query handling | Standard library |
+| `internal/search` | Retrieval request / response, literal mode and restricted Advanced parser | Standard library |
 | `internal/transport/http` | Loopback HTTP, embedded UI and opt-in `start` mutation boundary | Search, source status and optional source app |
 | `internal/transport/mcp` | Scoped read-only stdio MCP tools and response budgets | Search interface, read-only SQLite evidence |
 | `internal/cli` | Composition, command parsing, presentation | Application modules |
@@ -83,15 +83,16 @@ remain recoverable; logical deletion is not a cryptographic erasure claim.
 
 ## Retrieval
 
-The foundation tokenizes user input into quoted literal FTS terms joined with
-AND. SQL parameters carry all user values. BM25 ranks titles and content with a
-higher title weight. Responses contain a bounded excerpt, source, original URI,
-relative path, total count, and stable ID. PDF results select a best-matching
-page and append its number to the URI. Preview retrieves a bounded indexed
-snapshot by document ID, never an arbitrary filesystem path.
+Literal mode tokenizes user input into quoted FTS terms joined with AND and
+remains the default. An opt-in restricted Advanced grammar supports phrases,
+OR branches, exclusions and token prefixes; shared server-side format, path and
+title filters apply before count and limit. SQL parameters carry user values.
+BM25 retains the title weight and deterministic document-ID tie-break. PDF
+Advanced phrase evidence is page-local; preview retrieves a bounded indexed
+snapshot by document ID, never an arbitrary filesystem path. See
+[search query semantics](search-query.md).
 
-Future search will add passage chunks, structured filters, deduplication, language
-analysis, and optional semantic candidates. Store a chunk-to-document mapping and
+Future search may add passage chunks, deduplication, language analysis, and optional semantic candidates. Store a chunk-to-document mapping and
 content hash for citations; stale embeddings must never survive a document update
 or source removal.
 

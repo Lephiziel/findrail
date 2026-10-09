@@ -43,6 +43,12 @@ jobs:
       - name: Compiled alpha smoke (Windows)
         if: runner.os == 'Windows'
         run: python scripts/smoke.py ./findrail.exe
+      - name: Compiled search query smoke (Unix)
+        if: runner.os != 'Windows'
+        run: python3 scripts/search_smoke.py ./findrail
+      - name: Compiled search query smoke (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/search_smoke.py ./findrail.exe
       - name: Compiled MCP smoke (Unix)
         if: runner.os != 'Windows'
         run: python3 scripts/mcp_smoke.py ./findrail

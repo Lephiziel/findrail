@@ -52,16 +52,16 @@ and the connected / AI journeys remain planned.
 
 ## Search experience
 
-The completed UI includes a launcher, a search field, source and format filters,
+The completed UI includes a launcher, a search field, source and server-side format/path/title filters,
 keyboard navigation, evidence previews, freshness markers, and a source health
 page. Results show title, source, matched passage, original location, and indexing
 time. Similarity scores must not be described as factual certainty.
 
-Keyword matching comes first. Later hybrid retrieval combines keyword candidates
+Literal search remains the default. Source builds also offer opt-in exact token
+phrases, OR, exclusions and token-prefix search; phrases follow the bundled
+tokenizer and are not byte substrings. Later hybrid retrieval combines keyword candidates
 and semantic candidates, with explicit rank explanations and reproducible
-evaluation. Exact phrases, language-specific morphology, typo tolerance, and
-custom source filters are staged additions rather than claims about the current
-literal-term query language.
+evaluation. Language-specific morphology and typo tolerance remain future work.
 
 ## Capability map
 
