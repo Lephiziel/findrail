@@ -1,7 +1,8 @@
 # Findrail: project facts and media
 
-Checked on 2026-10-08. Findrail is an Apache-2.0 open-source project built in Go.
+Checked on 2026-10-09. Findrail is an Apache-2.0 open-source project built in Go.
 The current published local alpha is `0.1.0-alpha.2`.
+The merged alpha.3 preparation work has not published a new release.
 
 ## Short description
 
@@ -36,6 +37,20 @@ No Go installation is needed for these archives. They are unsigned alpha
 binaries; macOS may require an explicit allowance in Privacy & Security.
 The [demo guide](../demo.md) includes a synthetic live-refresh test.
 
+## Current source-build development
+
+Main now includes web source management in `start`, bounded DOCX body-text
+indexing, opt-in Advanced lexical queries and server-side format/path/title
+filters, offline `doctor` diagnostics, public GitHub file snapshots and
+read-only MCP. Existing alpha.2 archives do not include these additions.
+See the [9 October status update](update-2026-10-09.md).
+
+The stronger next release demonstration is a selected folder with notes, code,
+text PDFs and DOCX, with inspectable source evidence and explicit search
+controls. DOCX previews are plain body text without pages or Word layout.
+Advanced phrases follow FTS tokenization; they are not byte-exact or semantic
+matches. Literal remains the default query mode.
+
 ## Version boundaries
 
 | Capability | Published alpha.2 archives | Current source build |
@@ -43,10 +58,13 @@ The [demo guide](../demo.md) includes a synthetic live-refresh test.
 | Local text, Markdown and common code files | Included | Included |
 | Text PDFs, page attribution, snapshot preview, Copy location | Included | Included |
 | Folder refresh, `start`, three-document `demo` | Included | Included |
+| Copy preview text as Markdown with its source | Not included | Included |
 | Scoped read-only stdio MCP | Not included | Included; [configuration](../mcp.md) |
 | Commit-pinned public GitHub text/code file snapshots | Not included | Included; [instructions](../github.md) |
 | Empty-index onboarding and web source management | Not included | Included; [instructions](../source-management.md) |
 | Bounded DOCX body-text indexing and folder policy | Not included | Included; [supported subset](../docx.md) |
+| Opt-in Advanced queries; format/path/title filters | Not included | Included; [query semantics](../search-query.md) |
+| Read-only offline `doctor` diagnostics | Not included | Included |
 | OCR, semantic retrieval, private GitHub | Not included | Not implemented |
 
 Search is literal keyword retrieval, not an AI answer or a promise of semantic
@@ -67,6 +85,8 @@ The recording uses synthetic documents and illustrates the local search
 workflow. It is not a performance benchmark, a customer testimonial or a demo
 of the source-only MCP / GitHub features. The older UI wording in the recording
 does not override the version table above.
+The same recording does not show the new DOCX, source-management or Advanced
+workflow; use it as the released local-demo reference.
 
 ## Links and feedback
 
