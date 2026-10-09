@@ -37,6 +37,7 @@ Usage:
   findrail watch [--data-dir DIR] [--sync-interval 5m]
   findrail mcp --data-dir DIR --source ID [--source ID ...]
   findrail version
+  findrail doctor [--data-dir DIR] [--json] [--show-paths]
 
 Options must precede positional arguments. Run COMMAND --help for details.
 Local alpha: text, Markdown, source code, text PDFs, preview and automatic refresh.
@@ -55,6 +56,9 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	if args[0] == "version" {
 		_, err := fmt.Fprintln(out, "findrail", version)
 		return err
+	}
+	if args[0] == "doctor" {
+		return runDoctor(ctx, args[1:], out, stderr, version)
 	}
 	if args[0] == "start" {
 		return runStart(ctx, args[1:], out, stderr, openBrowser)

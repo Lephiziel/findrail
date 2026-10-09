@@ -1,0 +1,74 @@
+name: Package rehearsal (no release)
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  packaged-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-latest
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: darwin-amd64
+            runner: macos-15-intel
+          - target: darwin-arm64
+            runner: macos-14
+          - target: windows-amd64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Build candidate archive through production packager
+        shell: bash
+        run: |
+          PYTHON=python3
+          if [[ '${{ runner.os }}' == Windows ]]; then PYTHON=python; fi
+          "$PYTHON" scripts/package.py --version 0.1.0-alpha.3 --target '${{ matrix.target }}' --output "$RUNNER_TEMP/findrail-candidate"
+      - name: Verify candidate checksum manifest
+        shell: bash
+        run: |
+          PYTHON=python3
+          if [[ '${{ runner.os }}' == Windows ]]; then PYTHON=python; fi
+          "$PYTHON" scripts/package.py --verify-only --output "$RUNNER_TEMP/findrail-candidate"
+      - name: Extract and smoke tested archive
+        shell: bash
+        run: |
+          PYTHON=python3
+          if [[ '${{ runner.os }}' == Windows ]]; then PYTHON=python; fi
+          "$PYTHON" - "$RUNNER_TEMP/findrail-candidate" "$RUNNER_TEMP/install 📦" <<'PY'
+          import pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import package
+          d, target = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          archive = next(p for p in d.iterdir() if p.name.endswith(('.zip', '.tar.gz')))
+          expected = 'findrail_0.1.0-alpha.3_${{ matrix.target }}'
+          if archive.name != expected + ('.zip' if archive.suffix == '.zip' else '.tar.gz'): raise SystemExit('unexpected archive name')
+          package.verify_archive(archive, '${{ matrix.target }}', '0.1.0-alpha.3')
+          root = package.extract_verified(archive, target)
+          import json
+          info = json.loads((root / 'BUILD-INFO.json').read_text())
+          if info['version'] != '0.1.0-alpha.3' or info['target'] != '${{ matrix.target }}' or not info['revision']:
+              raise SystemExit('candidate metadata mismatch')
+          binary = root / ('findrail.exe' if 'windows' in archive.name else 'findrail')
+          if not binary.is_file(): raise SystemExit('extracted executable missing')
+          PY
+          if [[ '${{ matrix.target }}' == windows-* ]]; then
+            "$PYTHON" scripts/smoke.py --expected-version 0.1.0-alpha.3 "$RUNNER_TEMP/install 📦/findrail_0.1.0-alpha.3_${{ matrix.target }}/findrail.exe"
+            "$PYTHON" scripts/mcp_smoke.py "$RUNNER_TEMP/install 📦/findrail_0.1.0-alpha.3_${{ matrix.target }}/findrail.exe"
+          else
+            "$PYTHON" scripts/smoke.py --expected-version 0.1.0-alpha.3 "$RUNNER_TEMP/install 📦/findrail_0.1.0-alpha.3_${{ matrix.target }}/findrail"
+            "$PYTHON" scripts/mcp_smoke.py "$RUNNER_TEMP/install 📦/findrail_0.1.0-alpha.3_${{ matrix.target }}/findrail"
+          fi
+      - name: Rehearse alpha.2 schema-2 upgrade and stopped-directory rollback
+        if: matrix.target == 'linux-amd64'
+        shell: bash
+        run: python3 scripts/upgrade_smoke.py "$RUNNER_TEMP/install 📦/findrail_0.1.0-alpha.3_linux-amd64/findrail"

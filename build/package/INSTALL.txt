@@ -1,51 +1,60 @@
 Findrail local alpha — https://github.com/Lephiziel/findrail
 
-1. Extract the archive into a directory you own. Go is not required.
-2. Open a terminal in the extracted directory.
-3. Try the included fictional documents first:
+Choose the archive matching your operating system and CPU (Linux/macOS x86-64
+or ARM64; Windows x86-64). Download SHA256SUMS.txt beside the archive. Compute
+the downloaded archive's hash, then compare it with the row for the exact same
+archive basename in SHA256SUMS.txt:
+  Linux:   sha256sum "findrail_<version>_<target>.tar.gz"
+  macOS:   shasum -a 256 "findrail_<version>_<target>.tar.gz"
+  Windows: (Get-FileHash -Algorithm SHA256 -LiteralPath ".\findrail_<version>_<target>.zip").Hash
+Keep the archive and BUILD-INFO.json if you need to report a problem. Candidate
+archives are unsigned.
 
-   Linux / macOS:
-     ./findrail demo
+Extract the archive to a directory you own. Go, Python, an external database,
+and an installed service are not required at runtime. Options go before
+positional arguments.
 
-   Windows (PowerShell):
-     .\findrail.exe demo
+Try the fictional demo first:
+  Linux/macOS: ./findrail demo --no-open
+  Windows PowerShell: .\findrail.exe demo --no-open
+Search for “idempotency”; the PDF evidence is on page 2. Ctrl+C stops the demo.
 
-   Search for idempotency, then preview webhook-runbook.pdf on page 2. The terminal
-   prints the demo document folder so you can edit retry-notes.md and try refresh.
-   Ctrl+C stops the demo and removes its temporary documents and index on a normal
-   shutdown. A forced kill can leave temporary files. Your normal index is separate.
+Start an empty local index and open the printed loopback URL:
+  ./findrail start --no-open
+Then use Add folder or Add GitHub in Sources. GitHub snapshots are public,
+commit-pinned and refreshed manually. Supported local inputs include bounded
+text, text PDFs (no OCR), and bounded DOCX body text. Legacy folders upgraded
+from older indexes keep DOCX disabled until explicitly enabled in Configure.
+Original files are never altered. serve and MCP are read-only.
 
-4. After stopping the demo, search your own folder in one command:
+Run `findrail doctor --json` for a shareable diagnostic with local paths
+redacted. `--show-paths` explicitly includes your data-directory path. The index
+contains plaintext extracted text and original paths; protect it like your
+documents. No telemetry is sent.
 
-   Linux / macOS:
-     ./findrail start /absolute/path/to/notes
+Default index directory:
+  Linux:   $XDG_DATA_HOME/findrail, or ~/.local/share/findrail
+  macOS:   ~/Library/Application Support/Findrail
+  Windows: %LOCALAPPDATA%\Findrail
+Use the same `--data-dir DIR` for start, index, search and serve.
 
-   Windows (PowerShell):
-     .\findrail.exe start "C:\Users\YOU\Documents\Notes"
+Before upgrading, stop every Findrail process. Copy the entire data directory,
+including any SQLite WAL/SHM auxiliary files, to a separate backup location.
+Use the path configured for your installation; these examples quote paths with
+spaces and use a destination separate from the originals:
+  Linux:   cp -a "$HOME/.local/share/findrail" "$HOME/findrail backup"
+  macOS:   cp -a "$HOME/Library/Application Support/Findrail" "$HOME/Findrail backup"
+  Windows PowerShell: Copy-Item -LiteralPath "$env:LOCALAPPDATA\Findrail" -Destination "$env:USERPROFILE\Findrail backup" -Recurse
 
-5. Findrail attempts to open your browser after indexing and binding its local
-   listener. If no browser appears, open the printed URL manually.
-   Keep the server running for automatic refresh. Ctrl+C stops it.
+Then start using the new binary; supported migrations run on first write. To
+roll back, stop Findrail and restore the complete backup directory to a new
+location, then use a binary compatible with that backup's schema. Do not run an
+older binary against a schema-4 index; reverse migrations are not supported.
 
-On later runs, use ./findrail start (or .\findrail.exe start) to resume the same
-folders. --no-open skips browser opening on a headless machine. Use
---addr 127.0.0.1:7767 before the folder if the default port is already in use.
+To uninstall, stop Findrail and remove the extracted application directory.
+Optionally remove the index directory separately if you no longer want its
+plaintext indexed copy. This does not remove or alter original files.
 
-Keyword search, PDF text extraction and preview work without an AI account.
-Scanned / image-only PDFs require OCR, which is not included. PDFs are limited
-by default to 16 MiB, 500 pages and 1 MiB extracted text; extraction has a 10s
-deadline. The child process has a soft Go memory target, not an OS sandbox.
-
-On macOS, an unsigned downloaded binary may require opening Privacy & Security
-and explicitly allowing this application according to your system policy.
-These alpha binaries are not notarized or code-signed.
-
-Use the same --data-dir DIR for start, index, search and serve if overriding defaults.
-Sources from the original foundation remain text-only until you re-run index.
-The index stores plaintext copies of extracted text. Select folders deliberately.
-findrail forget SOURCE_ID removes that source from the index and leaves originals.
-
-Options precede the folder or query. Run findrail --help for all commands.
-No background daemon is installed; stopping start, serve or watch stops refresh.
-To uninstall, stop Findrail and remove the executable. See docs/data-handling.md
-in the repository for default index directories and optional index removal.
+macOS packages are unsigned and unnotarized; platform security may warn or block
+them. Do not disable system-wide protections. Alpha limitations include no OCR,
+manual GitHub refresh and a plaintext local index. No daemon is installed.

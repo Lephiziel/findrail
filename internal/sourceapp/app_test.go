@@ -511,12 +511,13 @@ func TestRemoveWaitsForSharedWatcherCoordination(t *testing.T) {
 	}
 	deadline := time.After(5 * time.Second)
 	for {
+		changed := app.WaitChannel()
 		job, _ := app.Job(remove.ID)
 		if job.Status == "running" && job.Phase == "removing" {
 			break
 		}
 		select {
-		case <-app.WaitChannel():
+		case <-changed:
 		case <-deadline:
 			watcherUnlock()
 			t.Fatal("remove did not enter coordinated phase")
@@ -560,12 +561,13 @@ func TestRemoveCancelsCoordinatedConfigureWithoutChangingPolicy(t *testing.T) {
 	}
 	deadline := time.After(5 * time.Second)
 	for {
+		changed := app.WaitChannel()
 		job, _ := app.Job(configured.ID)
 		if job.Status == "running" && job.Phase == "indexing" {
 			break
 		}
 		select {
-		case <-app.WaitChannel():
+		case <-changed:
 		case <-deadline:
 			unlock()
 			t.Fatal("Configure did not wait for shared source coordinator")

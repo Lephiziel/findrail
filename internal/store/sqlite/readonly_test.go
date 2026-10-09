@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -41,6 +42,41 @@ func TestOpenReadOnlyDoesNotCreateOrMigrate(t *testing.T) {
 	}
 	if _, err := sqlite.OpenReadOnly(context.Background(), dir); err == nil || !strings.Contains(err.Error(), "open or update") {
 		t.Fatalf("schema 1 error = %v", err)
+	}
+}
+
+func TestDiagnosticSummaryAggregatesOnlyBoundedPolicyCounts(t *testing.T) {
+	dir, root := t.TempDir(), t.TempDir()
+	store, err := sqlite.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index(t, store, root)
+	source := connector.Source{ID: "synthetic-other", Kind: "other", Name: "must not be reported", Root: "/private/root", MaxTextBytes: 2 << 20, MaxPDFBytes: 16 << 20, MaxDOCXBytes: 8 << 20}
+	scan, err := store.BeginScan(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scan.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := store.DiagnosticSummary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Sources != 2 || summary.FilesystemSources != 1 || summary.GitHubSources != 0 || summary.OtherSources != 1 ||
+		summary.CustomTextLimits != 1 || summary.PDFEnabled != 1 || summary.DOCXEnabled != 1 || summary.DOCXDisabled != 1 {
+		t.Fatalf("unexpected aggregate summary: %+v", summary)
+	}
+	encoded, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("must not be reported")) || bytes.Contains(encoded, []byte("/private/root")) {
+		t.Fatalf("summary exposed source data: %s", encoded)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
