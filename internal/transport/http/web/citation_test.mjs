@@ -86,7 +86,11 @@ test('rejects unsafe metadata, URIs, and excerpts', () => {
     assert.throws(() => formatCitation(note, { excerpt }), /excerpt/);
   }
   assert.throws(() => formatCitation({ ...note, title: ' \n ' }), /title/);
-  assert.throws(() => formatCitation({ ...pdf, page: 0 }), /page/);
+  const titleOnly = formatCitation({ ...pdf, page: 0, uri: 'file:///home/user/reference/webhook-runbook.pdf' });
+  assert.match(titleOnly, /^## webhook-runbook\.pdf\n/);
+  assert.match(titleOnly, /Source: \[webhook-runbook\.pdf\]\(<file:\/\/\/home\/user\/reference\/webhook-runbook\.pdf>\)/);
+  assert.doesNotMatch(titleOnly, /page 0/);
+  assert.throws(() => formatCitation({ ...pdf, page: -1 }), /page/);
 });
 
 test('uses the whole preview for omitted or null excerpt and preserves empty text', () => {
