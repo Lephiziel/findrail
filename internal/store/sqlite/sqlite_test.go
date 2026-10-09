@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
@@ -167,8 +168,6 @@ func TestAdvancedSearchAndServerFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(root, "docs", "guide.md"), "retry budget deprecated backoff")
-	specialPath := filepath.Join(root, "docs", `literal_%_".md`)
-	write(t, specialPath, "specialmarker")
 	write(t, filepath.Join(root, "docs-old.md"), "retry budget backoff")
 	write(t, filepath.Join(root, "other.md"), "retry budget")
 	_, c := index(t, s, root)
@@ -202,6 +201,17 @@ func TestAdvancedSearchAndServerFilters(t *testing.T) {
 	}
 	if r.Total != 1 {
 		t.Fatalf("path boundary: %+v", r)
+	}
+	specialSource := connector.Source{ID: "special-source", Kind: "filesystem", Name: "special", Root: "/synthetic-special"}
+	specialScan, err := s.BeginScan(context.Background(), specialSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := specialScan.Upsert(context.Background(), connector.Document{ID: "special-id", SourceID: specialSource.ID, Title: `literal_%_".md`, URI: "file:///synthetic-special/literal.md", Path: `docs/literal_%_".md`, Content: "specialmarker", Hash: "special", MediaType: "text/markdown", ModifiedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := specialScan.Commit(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	r, err = s.Search(context.Background(), search.Request{Query: "specialmarker", Limit: 10, PathPrefix: `docs/literal_%_".md`, TitleContains: `%_"`})
 	if err != nil {
