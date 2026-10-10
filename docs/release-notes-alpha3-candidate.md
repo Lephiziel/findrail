@@ -7,8 +7,12 @@ The candidate package work includes archive provenance and checksum verification
 expanded installation and backup/rollback guidance, offline `doctor` diagnostics,
 and native packaged-binary rehearsal coverage. Existing source-built behavior
 includes empty-index onboarding, local text/PDF/DOCX extraction, public GitHub
-snapshots, evidence previews, and read-only MCP.
+snapshots, evidence previews, and read-only MCP. Current main additionally
+includes opt-in Advanced lexical queries and shared format/path/title filters.
 
 Not included: OCR, semantic search, automatic updates, code signing, notarization,
-or a public beta. alpha.2 schema-2 upgrade and remaining platform checks are still
-release blockers; see [the candidate report](release-candidate-alpha3.md).
+or a public beta. The earlier candidate report records successful native
+package and schema-2 upgrade rehearsals for its recorded revision, not every
+subsequent main change. Fresh packages from the release revision and remaining
+manual UI/platform journeys need verification; see
+[the candidate report](release-candidate-alpha3.md).

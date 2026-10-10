@@ -71,10 +71,19 @@ asset download counts are not unique installations or active users.
 
 ## Version boundaries
 
-Promote alpha.2's local workflow first. MCP and public GitHub file snapshots
-require a source build today; do not send binary users to those features
-without that qualification. The MCP client can forward retrieved text to its
-own model provider. See [the facts sheet](press-kit.md#version-boundaries).
+The latest published version remains alpha.2. Source builds now also provide
+DOCX body text, web source management, Advanced lexical queries and filters,
+offline diagnostics, MCP and public GitHub file snapshots. PR #16 prepared
+alpha.3 packages; it did not publish alpha.3. See the
+[9 October update](update-2026-10-09.md) and
+[facts sheet](press-kit.md#version-boundaries).
+
+For the next broader editorial wave, finish and verify the new release, then
+demonstrate selected notes/code/text-PDF/DOCX sources and the original evidence.
+Before publication, label the new workflow as requiring a source build and
+keep any alpha.2 submission limited to its shipped features. Existing media
+shows the older local workflow. The MCP client may forward retrieved text to
+its own model provider.
 
 ## Platform constraints checked on 2026-10-02
 
