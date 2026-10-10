@@ -58,6 +58,50 @@ func TestInspectRejectsDuplicateJSONKeys(t *testing.T) {
 	}
 }
 
+func TestInspectValidatesEveryPDF(t *testing.T) {
+	o := Origin{ID: "origin", Kind: "filesystem", Name: "Synthetic", Location: "/tmp/notes", IndexedAt: "2026-10-09T12:00:00Z"}
+	first := Document{ID: "first", Path: "a.pdf", Title: "First", URI: "file:///tmp/notes/a.pdf", MediaType: "application/pdf", Text: "first page\n", ContentHash: strings.Repeat("a", 64), SizeBytes: 10, ModifiedAt: "2026-10-09T11:00:00Z", PageCount: 1}
+	second := first
+	second.ID, second.Path, second.Title, second.URI = "second", "b.pdf", "Second", "file:///tmp/notes/b.pdf"
+	second.Text = "second page\nlast page\n"
+	second.PageCount = 2
+	pages := []Page{{Path: "a.pdf", Number: 1, Text: "first page"}, {Path: "b.pdf", Number: 1, Text: "second page"}, {Path: "b.pdf", Number: 2, Text: "last page"}}
+	for _, tt := range []struct {
+		name  string
+		docs  []Document
+		pages []Page
+		valid bool
+	}{
+		{"multiple PDFs", []Document{first, second}, pages, true},
+		{"missing first PDF", []Document{first, second}, pages[1:], false},
+		{"missing last PDF", []Document{first, second}, pages[:1], false},
+		{"incomplete last PDF", []Document{first, second}, pages[:2], false},
+		{"missing all pages", []Document{first}, nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := Encode(Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: o}, tt.docs, tt.pages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = Inspect(data); (err == nil) != tt.valid {
+				t.Fatalf("valid=%v, inspect error: %v", tt.valid, err)
+			}
+		})
+	}
+}
+
+func TestInspectRejectsTrailingPDFBody(t *testing.T) {
+	o := Origin{ID: "origin", Kind: "filesystem", Name: "Synthetic", Location: "/tmp/notes", IndexedAt: "2026-10-09T12:00:00Z"}
+	doc := Document{ID: "pdf", Path: "a.pdf", Title: "PDF", URI: "file:///tmp/notes/a.pdf", MediaType: "application/pdf", Text: "page text\nunmatched body", ContentHash: strings.Repeat("a", 64), SizeBytes: 10, ModifiedAt: "2026-10-09T11:00:00Z", PageCount: 1}
+	data, err := Encode(Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: o}, []Document{doc}, []Page{{Path: "a.pdf", Number: 1, Text: "page text"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Inspect(data); err == nil {
+		t.Fatal("PDF body with text absent from its pages accepted")
+	}
+}
+
 func TestEmptySnapshotAndStreamingWriter(t *testing.T) {
 	o := Origin{ID: "empty", Kind: "filesystem", Name: "Empty", Location: "/tmp/empty", IndexedAt: "2026-10-09T00:00:00Z"}
 	data, err := Encode(Manifest{Producer: "test", ExportedAt: "2026-10-09T00:00:00Z", Origin: o}, nil, nil)

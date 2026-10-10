@@ -36,8 +36,9 @@ record uses `path`, `number`, and `text`. V1 rejects unknown or missing fields.
 The semantic fingerprint is SHA-256 over UTF-8 concatenated length-prefixed
 fields in this order: domain `findrail-snapshot-fingerprint-v1`, origin ID,
 kind, name, location, original successful indexing timestamp, text, PDF and
-DOCX policy integers, GitHub max bytes, GitHub policy version, GitHub commit
-time, document/page counts, document payload hash and page payload hash. Each
+DOCX policy integers, GitHub repository URL, owner, repository, full commit SHA,
+ref mode, ref value, selected path, GitHub max bytes, GitHub policy version,
+GitHub commit time, document/page counts, document payload hash and page payload hash. Each
 field is encoded as decimal UTF-8 byte length, `:`, then its bytes. Export time
 and producer are intentionally excluded. A matching
 fingerprint detects consistency; it does not authenticate an author or sign the

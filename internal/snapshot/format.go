@@ -870,9 +870,18 @@ func validateRecords(a Archive) error {
 		}
 		pageBodyOffset[p.Path] = offset + len(piece)
 	}
+	if lastPath != "" && lastPage != paths[lastPath].PageCount {
+		return errors.New("missing PDF page record")
+	}
 	for path, d := range paths {
-		if d.PageCount > 0 && (lastPath != path || lastPage != d.PageCount) {
-			return errors.New("missing PDF page record")
+		if d.PageCount > 0 {
+			offset, ok := pageBodyOffset[path]
+			if !ok {
+				return errors.New("missing PDF page record")
+			}
+			if offset != len(d.Text) {
+				return errors.New("PDF body does not match the indexed page-text convention")
+			}
 		}
 	}
 	return nil

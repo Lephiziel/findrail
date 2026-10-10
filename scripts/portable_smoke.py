@@ -18,9 +18,9 @@ sys.dont_write_bytecode = True
 from smoke import docx_fixture, pdf_fixture, eventually
 
 
-def call(binary, *args, ok=True):
+def call(binary, *args, ok=True, timeout=120):
     result = subprocess.run([str(binary), *map(str, args)], capture_output=True,
-                            text=True, encoding='utf-8', timeout=120)
+                            text=True, encoding='utf-8', timeout=timeout)
     if ok and result.returncode:
         raise AssertionError((args, result.stdout, result.stderr))
     if not ok and not result.returncode:
@@ -48,6 +48,7 @@ def main():
             'positive evidence on page one',
             'retrieval phrase page two forbidden marker',
         ]))
+        (root / 'second.pdf').write_bytes(pdf_fixture(['secondpdfproof marker']))
         (root / 'réunion-notes.docx').write_bytes(docx_fixture('docxindexedphrase no page claim'))
 
         index_a, index_b = base / 'index A', base / 'index B'
@@ -57,10 +58,10 @@ def main():
         archive_path = base / 'notes – snapshot.findrail.zip'
         exported = json_call(binary, 'export-source', '--data-dir', index_a, '--source', source,
                              '--output', archive_path, '--json')
-        assert exported['documents'] == 3 and exported['pages'] == 2
+        assert exported['documents'] == 4 and exported['pages'] == 3
         assert 'retry budget phrase' not in json.dumps(exported)
         inspected = json_call(binary, 'inspect-export', '--json', archive_path)
-        assert inspected['integrity'] == 'valid' and inspected['documents'] == 3
+        assert inspected['integrity'] == 'valid' and inspected['documents'] == 4
         assert 'origin_location' not in inspected
         shown = json_call(binary, 'inspect-export', '--json', '--show-paths', archive_path)
         assert shown['origin_location'] == source_entry['root']
@@ -94,6 +95,12 @@ def main():
         missing = base / 'missing destination'
         call(binary, 'import-source', '--data-dir', missing, '--name', 'bad', broken, ok=False)
         assert not (missing / 'findrail.db').exists()
+        if hasattr(os, 'mkfifo'):
+            fifo = base / 'archive.pipe'
+            os.mkfifo(fifo)
+            refused = call(binary, 'inspect-export', '--timeout', '1s', fifo,
+                           ok=False, timeout=3)
+            assert 'regular file' in refused.stderr
 
         imported = json_call(binary, 'import-source', '--data-dir', index_b, '--name', 'Moved notes',
                               '--json', archive_path)
@@ -109,12 +116,15 @@ def main():
         (live / 'réunion-notes.docx').write_bytes(docx_fixture('docxindexedphrase no page claim'))
         (live / '資料').mkdir()
         (live / '資料' / 'runbook report.pdf').write_bytes((sub / 'runbook report.pdf').read_bytes())
+        (live / 'second.pdf').write_bytes((root / 'second.pdf').read_bytes())
         call(binary, 'index', '--data-dir', index_b, '--max-docx-bytes', 1 << 20, live)
         sources = json_call(binary, 'sources', '--data-dir', index_b, '--json')['sources']
         live_id = next(s['id'] for s in sources if s['kind'] == 'filesystem')
         archive_status = next(s for s in sources if s['kind'] == 'archive')
         assert archive_status['archive']['fingerprint'] == exported['fingerprint']
         assert live_id != imported_id
+        assert json_call(binary, 'search', '--data-dir', index_b, '--source', imported_id,
+                         '--format', 'pdf', '--json', 'secondpdfproof')['total'] == 1
 
         search = json_call(binary, 'search', '--data-dir', index_b, '--source', imported_id,
                            '--mode', 'advanced', '--format', 'pdf', '--path-prefix', '資料',

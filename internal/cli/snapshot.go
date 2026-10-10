@@ -166,12 +166,22 @@ func writeString(w io.Writer, s string) error { _, err := io.WriteString(w, s); 
 
 func readAndInspect(ctx context.Context, path string) (snapshot.Archive, error) {
 	var empty snapshot.Archive
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return empty, err
+	}
+	if !info.Mode().IsRegular() {
+		return empty, errors.New("archive input must be a regular file")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return empty, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
+	info, err = f.Stat()
 	if err != nil {
 		return empty, err
 	}
