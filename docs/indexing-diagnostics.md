@@ -73,7 +73,7 @@ One Linux amd64 run compared a clean-base binary with this instrumented binary
 on 240 unsupported synthetic files plus one Markdown note: 7.0 ms vs 7.2 ms
 wall time (one run each; startup and filesystem noise dominate). The instrumented
 journey observed 246 filesystem entries (245 files), retained 200 of 243
-skipped-file examples, and serialized the complete report to 17,088 bytes. This
+skipped-file examples, and serialized the complete report to 17,090 bytes. This
 demonstrates bounded output, not a stable overhead benchmark or a p95 claim.
 Chromium 153 headless exercised the Sources report panel, hostile path text,
 live progress, cancel and failed refresh with the old report retained, retry,

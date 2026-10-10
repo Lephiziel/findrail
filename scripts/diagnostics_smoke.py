@@ -158,4 +158,4 @@ with tempfile.TemporaryDirectory(prefix="findrail-diagnostics-") as temporary:
     run("forget","--data-dir",data,sid)
     run(*summary_args,ok=False)
     run("forget","--data-dir",data,archive_id)
-    print(f"diagnostics smoke: {report['observed_files']} observed files, {report['skipped_files']} skipped, {len(paths)} retained examples, {len(encoded)} report bytes; failure rollback, configure, watcher refresh, archive unavailability, restart and removal passed")
+    print(f"diagnostics smoke: {report['observed_files']} observed files, {report['observed_entries']} observed entries, {report['skipped_files']} skipped files, {report['skipped_entries']} skipped entries, {report['pruned_directories']} pruned directories, {len(paths)} retained examples, {len(encoded)} report bytes; failure rollback, configure, watcher refresh, archive unavailability, restart and removal passed")
