@@ -1,5 +1,18 @@
 # Local-alpha validation
 
+## Indexing diagnostics draft validation · 2026-10-10
+
+Local checks on Go 1.27.2 linux/amd64 and Node 22.23.3 passed: full Go unit
+tests and race detector, vet, module verification, CGO-free build, existing
+search/MCP/portable/smoke suites, 20 web tests, and the compiled diagnostics
+smoke. The synthetic diagnostic inventory visited 243 files (242 skipped),
+retained 200 examples, and serialized a 16,942-byte report. A single clean-base
+vs instrumented run took 7.0 vs 7.2 ms; this is a noisy spot check only. PR #23
+is draft: watcher progress, structured failed-attempt presentation, full
+failure/cancel/configure/watcher/archive smoke, and report-fetch regression tests
+remain incomplete. No native browser or native macOS/Windows execution was done
+locally; see PR Actions for remote CI status.
+
 ## Exact search / server filters branch validation · 2026-10-09
 
 Advanced SQLite regression fixtures use synthetic text and PDF-page records.
