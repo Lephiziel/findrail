@@ -21,6 +21,8 @@ import (
 
 const pageLimit = 1 << 20
 
+// Config requires an explicit HTTPS origin, collection and finite request
+// timeout. Cleartext is limited to opted-in numeric loopback fixtures.
 type Config struct {
 	Origin, Collection string
 	AllowLoopbackHTTP  bool
@@ -118,7 +120,7 @@ func New(cfg Config) (*Connector, error) {
 	if timeout <= 0 || timeout > 5*time.Second {
 		return nil, errors.New("explicit request timeout must be at most five seconds")
 	}
-	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext, TLSHandshakeTimeout: timeout, ResponseHeaderTimeout: timeout, IdleConnTimeout: 30 * time.Second}
+	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext, TLSHandshakeTimeout: timeout, ResponseHeaderTimeout: timeout, IdleConnTimeout: 30 * time.Second, DisableKeepAlives: true, MaxConnsPerHost: 1}
 	cl := &http.Client{Timeout: timeout, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	sum := sha256.Sum256([]byte("catalog-source-v1\x00" + cfg.Origin + "\x00" + cfg.Collection))
 	id := hex.EncodeToString(sum[:])
@@ -128,6 +130,9 @@ func isLoopback(host string) bool             { ip := net.ParseIP(host); return 
 func (c *Connector) Source() connector.Source { return c.source }
 func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) error) (connector.Report, error) {
 	var report connector.Report
+	if emit == nil {
+		return report, errors.New("catalogue consumer callback is required")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cursor, snapshot := "", ""

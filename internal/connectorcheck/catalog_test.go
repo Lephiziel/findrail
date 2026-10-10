@@ -14,6 +14,7 @@ import (
 	catalog "example.com/findrail-catalog"
 	"github.com/Lephiziel/findrail/internal/ingest"
 	"github.com/Lephiziel/findrail/internal/search"
+	"github.com/Lephiziel/findrail/internal/sourcecoord"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	"github.com/Lephiziel/findrail/pkg/connector"
 )
@@ -338,8 +339,36 @@ func TestCatalogSourceIsolationAndForgetRefresh(t *testing.T) {
 	if _, e = ingest.Refresh(ctx, db, two); e != nil {
 		t.Fatal(e)
 	}
-	if e = db.ForgetSource(ctx, one.Source().ID); e != nil {
+	coord := sourcecoord.New()
+	scanUnlock, e := coord.Acquire(ctx, one.Source().ID)
+	if e != nil {
 		t.Fatal(e)
+	}
+	removeStarted := make(chan struct{})
+	removeDone := make(chan error, 1)
+	go func() {
+		close(removeStarted)
+		unlock, err := coord.Acquire(ctx, one.Source().ID)
+		if err != nil {
+			removeDone <- err
+			return
+		}
+		defer unlock()
+		removeDone <- db.ForgetSource(ctx, one.Source().ID)
+	}()
+	<-removeStarted
+	if _, e = ingest.Refresh(ctx, db, one); e != nil {
+		scanUnlock()
+		t.Fatalf("guarded refresh failed: %v", e)
+	}
+	scanUnlock()
+	select {
+	case e = <-removeDone:
+		if e != nil {
+			t.Fatal(e)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("source removal did not acquire the host source lock")
 	}
 	if _, e = ingest.Refresh(ctx, db, one); !errors.Is(e, ingest.ErrSourceGone) {
 		t.Fatalf("refresh silently re-registered forgotten source: %v", e)

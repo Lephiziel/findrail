@@ -29,9 +29,12 @@ capture; `CheckStableInventory`, `CheckExpectedInventory`,
 Invalid, overflowing and above-profile limits are rejected; callers may choose
 smaller values. Defaults bound 1,000 documents, 256 KiB content per document,
 4 MiB retained content (document plus PDF page text), 16 KiB non-content strings
-per document, 4 MiB retained source/document/page metadata, and 1,000 page
-entries. Accounting is UTF-8 byte length plus 16 bytes/page entry; capture is
-checked before retaining a document. Context deadlines are cooperative; an uncooperative
+per document, 4 MiB total retained metadata/overhead, and 1,000 page entries.
+Accounting uses UTF-8 byte length plus conservative fixed charges of 128 bytes
+per source, 256 bytes per document, and 32 bytes per PDF page entry. Capture is
+checked before retaining a document. Each case deadline is finite (at most 30
+seconds) and further bounded by the parent/test deadline. Context deadlines are
+cooperative; an uncooperative
 goroutine cannot be killed safely, so use `go test -timeout` as the process
 backstop. Failure codes/check names are safe; adapter errors are returned for
 `errors.Is/As`, not rendered by the harness.

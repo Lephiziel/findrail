@@ -22,10 +22,8 @@ import (
 const ProfileID = "full-inventory-v1"
 
 // Limits bound all retained callback data. Pages are included in content and
-// aggregate accounting; metadata includes source fields and page-count overhead.
+// aggregate accounting; MetadataTotal also charges fixed source/document/page overhead.
 type Limits struct{ Documents, ContentPerDocument, ContentTotal, MetadataPerDocument, MetadataTotal, Pages int }
-
-var DefaultLimits = Limits{1000, 256 << 10, 4 << 20, 16 << 10, 4 << 20, 1000}
 
 const (
 	maxDocuments        = 1000
@@ -34,7 +32,15 @@ const (
 	maxMetadataDocument = 16 << 10
 	maxMetadataTotal    = 4 << 20
 	maxPages            = 1000
+	sourceOverhead      = 128
+	documentOverhead    = 256
+	pageOverhead        = 32
 )
+
+// DefaultLimits returns a copy of the finite profile budgets.
+func DefaultLimits() Limits {
+	return Limits{maxDocuments, maxContentDocument, maxContentTotal, maxMetadataDocument, maxMetadataTotal, maxPages}
+}
 
 // Failure is safe for routine diagnostics: it never contains adapter strings or document data.
 type Failure struct {
@@ -72,7 +78,7 @@ type Options struct {
 	Timeout time.Duration
 }
 
-func DefaultOptions() Options { return Options{Limits: DefaultLimits, Timeout: 5 * time.Second} }
+func DefaultOptions() Options { return Options{Limits: DefaultLimits(), Timeout: 5 * time.Second} }
 func (o Options) validate() error {
 	l := o.Limits
 	if o.Timeout <= 0 || o.Timeout > 30*time.Second || l.Documents <= 0 || l.Documents > maxDocuments || l.ContentPerDocument <= 0 || l.ContentPerDocument > maxContentDocument || l.ContentTotal <= 0 || l.ContentTotal > maxContentTotal || l.MetadataPerDocument <= 0 || l.MetadataPerDocument > maxMetadataDocument || l.MetadataTotal <= 0 || l.MetadataTotal > maxMetadataTotal || l.Pages <= 0 || l.Pages > maxPages {
@@ -96,7 +102,7 @@ func Observe(ctx context.Context, c connector.Connector, o Options) ([]connector
 	ctx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
 	src := c.Source()
-	if src.ID == "" || src.Kind == "" || src.Name == "" || !allValidStrings(src.ID, src.Kind, src.Name, src.Root) {
+	if src.ID == "" || !allValidStrings(src.ID, src.Kind, src.Name, src.Root) {
 		return nil, connector.Report{}, fail("source_identity", "source", 0, 0)
 	}
 	if c.Source() != src {
@@ -106,11 +112,14 @@ func Observe(ctx context.Context, c connector.Connector, o Options) ([]connector
 	docs := make([]connector.Document, 0)
 	contentTotal, metaTotal, pageTotal := 0, 0, 0
 	var captureErr error
-	sourceMeta, ok := boundedStringBytes(o.Limits.MetadataTotal, src.ID, src.Kind, src.Name, src.Root)
+	if o.Limits.MetadataTotal < sourceOverhead {
+		return nil, connector.Report{}, fail("limit_capture", "source_metadata", 0, 0)
+	}
+	sourceMeta, ok := boundedStringBytes(o.Limits.MetadataTotal-sourceOverhead, src.ID, src.Kind, src.Name, src.Root)
 	if !ok {
 		return nil, connector.Report{}, fail("limit_capture", "source_metadata", 0, sourceMeta)
 	}
-	metaTotal = sourceMeta
+	metaTotal = sourceOverhead + sourceMeta
 	var active atomic.Bool
 	var mu sync.Mutex
 	reject := func(err error) error { captureErr = err; return err }
@@ -160,10 +169,6 @@ func Observe(ctx context.Context, c connector.Connector, o Options) ([]connector
 				return reject(fail("limit_capture", "content", n, n))
 			}
 			body += len(p.Text)
-			if meta > l.MetadataPerDocument-16 {
-				return reject(fail("limit_capture", "metadata", n, n))
-			}
-			meta += 16
 			if p.Number != pages {
 				return reject(fail("page_sequence", "pages", n, pages))
 			}
@@ -174,7 +179,8 @@ func Observe(ctx context.Context, c connector.Connector, o Options) ([]connector
 		if len(d.Pages) > 0 && d.MediaType != "application/pdf" {
 			return reject(fail("pages_on_non_pdf", "pages", n, len(d.Pages)))
 		}
-		if body > l.ContentPerDocument || body > l.ContentTotal-contentTotal || meta > l.MetadataPerDocument || meta > l.MetadataTotal-metaTotal || pages > l.Pages-pageTotal {
+		remainingMetadata := l.MetadataTotal - metaTotal
+		if body > l.ContentPerDocument || body > l.ContentTotal-contentTotal || meta > l.MetadataPerDocument || remainingMetadata < documentOverhead || pages > l.Pages-pageTotal || pages > (remainingMetadata-documentOverhead)/pageOverhead || meta > remainingMetadata-documentOverhead-pages*pageOverhead {
 			return reject(fail("limit_capture", "capture", n, n))
 		}
 		if d.Hash == "" {
@@ -187,7 +193,7 @@ func Observe(ctx context.Context, c connector.Connector, o Options) ([]connector
 			return reject(fail("negative_size", "sizes", n, n))
 		}
 		contentTotal += body
-		metaTotal += meta
+		metaTotal += meta + documentOverhead + pages*pageOverhead
 		pageTotal += pages
 		d.Pages = append([]connector.Page(nil), d.Pages...)
 		docs = append(docs, d)
@@ -453,7 +459,7 @@ func Run(t *testing.T, factory func() connector.Connector, opts Options, hooks *
 		t.Fatal("nil connector factory")
 	}
 	t.Run("stable_inventory", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+		ctx, cancel := testCaseContext(t, opts.Timeout)
 		defer cancel()
 		if err := CheckStableInventory(ctx, factory, opts); err != nil {
 			t.Fatal(err)
@@ -465,7 +471,7 @@ func Run(t *testing.T, factory func() connector.Connector, opts Options, hooks *
 		}
 	})
 	t.Run("callback_error", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+		ctx, cancel := testCaseContext(t, opts.Timeout)
 		defer cancel()
 		c := factory()
 		docs, _, err := Observe(ctx, c, opts)
@@ -481,7 +487,7 @@ func Run(t *testing.T, factory func() connector.Connector, opts Options, hooks *
 		}
 	})
 	t.Run("cancellation_after_callback", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+		ctx, cancel := testCaseContext(t, opts.Timeout)
 		defer cancel()
 		c := factory()
 		docs, _, err := Observe(ctx, c, opts)
@@ -505,7 +511,7 @@ func Run(t *testing.T, factory func() connector.Connector, opts Options, hooks *
 				t.Skip("optional fixture hook not configured")
 				return
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+			ctx, cancel := testCaseContext(t, opts.Timeout)
 			defer cancel()
 			c := tc.hook()
 			if tc.name == "late_failure" {
@@ -585,4 +591,13 @@ func hookValue(h *Hooks, f func(*Hooks) func() connector.Connector) func() conne
 		return nil
 	}
 	return f(h)
+}
+
+func testCaseContext(t *testing.T, timeout time.Duration) (context.Context, context.CancelFunc) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	if td, ok := t.Deadline(); ok && td.Before(deadline) {
+		deadline = td
+	}
+	return context.WithDeadline(context.Background(), deadline)
 }

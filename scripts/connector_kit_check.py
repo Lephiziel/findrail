@@ -52,13 +52,13 @@ def snapshot(relative):
 def validate():
     env = os.environ.copy()
     env["GOWORK"] = "off"
-    run(["go", "test", "./pkg/connector/conformance"], ROOT, env)
+    run(["go", "test", "-count=1", "./pkg/connector/conformance"], ROOT, env)
     run(["go", "vet", "./pkg/connector/conformance"], ROOT, env)
-    run(["go", "test", "-race", "./pkg/connector/conformance"], ROOT, env)
+    run(["go", "test", "-count=1", "-race", "./pkg/connector/conformance"], ROOT, env)
     run(["go", "mod", "verify"], ROOT, env)
-    run(["go", "test", "./..."], EXAMPLE, env)
+    run(["go", "test", "-count=1", "./..."], EXAMPLE, env)
     run(["go", "vet", "./..."], EXAMPLE, env)
-    run(["go", "test", "-race", "./..."], EXAMPLE, env)
+    run(["go", "test", "-count=1", "-race", "./..."], EXAMPLE, env)
 
     forbidden = (
         "github.com/Lephiziel/findrail/internal/", "modernc.org/sqlite",
@@ -88,7 +88,7 @@ def validate():
             encoding="utf-8",
         )
         (consumer / "consumer_test.go").write_text(EXTERNAL_CONSUMER_TEST, encoding="utf-8")
-        run(["go", "test", "-race", "./..."], consumer, env)
+        run(["go", "test", "-count=1", "-race", "./..."], consumer, env)
 
         for goos, suffix in (("linux", ""), ("windows", ".exe"), ("darwin", "")):
             build_env = env.copy()
@@ -102,7 +102,7 @@ def validate():
         workspace.write_text(f"go 1.26.0\nuse {ROOT}\nuse {EXAMPLE}\n", encoding="utf-8")
         host_env = env.copy()
         host_env["GOWORK"] = str(workspace)
-        run(["go", "test", "-race", "-tags=connector_kit", "./internal/connectorcheck"], ROOT, host_env)
+        run(["go", "test", "-count=1", "-race", "-tags=connector_kit", "./internal/connectorcheck"], ROOT, host_env)
 
 
 def main():
