@@ -1,16 +1,22 @@
 package sqlite_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
 	"github.com/Lephiziel/findrail/internal/search"
+	"github.com/Lephiziel/findrail/internal/snapshot"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	"github.com/Lephiziel/findrail/pkg/connector"
 )
@@ -27,6 +33,95 @@ func open(t *testing.T) *sqlite.Store {
 		}
 	})
 	return s
+}
+
+type exportGate struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	data    bytes.Buffer
+}
+
+func (g *exportGate) Write(p []byte) (int, error) {
+	g.once.Do(func() { close(g.entered); <-g.release })
+	return g.data.Write(p)
+}
+
+func TestStreamingExportKeepsOneReaderSnapshotDuringRefreshAndRemoval(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	source := connector.Source{ID: "fs_portable_snapshot_test", Kind: "filesystem", Name: "Synthetic", Root: "/tmp/portable-source", MaxTextBytes: 1 << 20, MaxPDFBytes: 1 << 20}
+	seed := func(text string) error {
+		scan, e := s.BeginScan(ctx, source)
+		if e != nil {
+			return e
+		}
+		_, e = scan.Upsert(ctx, connector.Document{ID: "doc_portable", SourceID: source.ID, Title: "paper.pdf", URI: "file:///tmp/portable-source/paper.pdf", Path: "paper.pdf", Content: text, Hash: fmt.Sprintf("%x", sha256.Sum256([]byte(text))), SizeBytes: int64(len(text)), ModifiedAt: time.Date(2026, 10, 9, 11, 0, 0, 0, time.UTC), MediaType: "application/pdf", Pages: []connector.Page{{Number: 1, Text: strings.TrimSuffix(text, "\n")}}})
+		if e != nil {
+			scan.Rollback()
+			return e
+		}
+		_, e = scan.Commit(ctx)
+		return e
+	}
+	oldBody, newBody := "original export marker\n", "refreshed export marker\n"
+	if err := seed(oldBody); err != nil {
+		t.Fatal(err)
+	}
+	for _, remove := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remove_%v", remove), func(t *testing.T) {
+			if remove {
+				if err := seed(oldBody); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gate := &exportGate{entered: make(chan struct{}), release: make(chan struct{})}
+			done := make(chan error, 1)
+			go func() {
+				_, _, _, e := s.StreamSnapshot(ctx, source.ID, "test", "2026-10-09T12:00:00Z", gate)
+				done <- e
+			}()
+			<-gate.entered
+			if remove {
+				if err := s.ForgetSource(ctx, source.ID); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				scan, e := s.BeginRefresh(ctx, source)
+				if e != nil {
+					t.Fatal(e)
+				}
+				_, e = scan.Upsert(ctx, connector.Document{ID: "doc_portable", SourceID: source.ID, Title: "paper.pdf", URI: "file:///tmp/portable-source/paper.pdf", Path: "paper.pdf", Content: newBody, Hash: fmt.Sprintf("%x", sha256.Sum256([]byte(newBody))), SizeBytes: int64(len(newBody)), ModifiedAt: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC), MediaType: "application/pdf", Pages: []connector.Page{{Number: 1, Text: "refreshed export marker"}}})
+				if e != nil {
+					scan.Rollback()
+					t.Fatal(e)
+				}
+				if _, e = scan.Commit(ctx); e != nil {
+					t.Fatal(e)
+				}
+			}
+			close(gate.release)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			archive, err := snapshot.Inspect(gate.data.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(archive.Documents) != 1 || archive.Documents[0].Text != oldBody || archive.Pages[0].Text != "original export marker" {
+				t.Fatalf("mixed export generation: %+v", archive)
+			}
+			if remove {
+				if sources, e := s.Sources(ctx); e != nil || len(sources) != 0 {
+					t.Fatalf("source survived removal: %+v %v", sources, e)
+				}
+			} else {
+				if got := find(t, s, "refreshed", source.ID, 10); got.Total != 1 {
+					t.Fatalf("refresh did not commit independently: %+v", got)
+				}
+			}
+		})
+	}
 }
 
 func write(t *testing.T, path, content string) {

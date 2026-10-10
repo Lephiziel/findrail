@@ -59,6 +59,15 @@ cancellation before publication, or shutdown preserves the previous committed
 snapshot. A refresh for one source is not duplicated while busy. Search keeps
 reading the committed snapshot while preparation is in progress.
 
+## Imported archive snapshots
+
+Use the CLI-first transfer flow in [portable snapshots](portable-snapshots.md).
+An imported archive appears in a running `start` session's Sources and search
+selectors through the existing inventory. It is not scanned, watched, refreshed
+or configured. The panel displays its historical original location, original
+successful indexing time and local import time. Only explicit removal is
+available. Import never automatically adds its ID to an MCP allowlist.
+
 **Remove from index** requires confirmation. It removes the source's local
 searchable records, not original files, and is logical deletion rather than
 secure erasure. If a UI operation is running, removal cancels/waits for its

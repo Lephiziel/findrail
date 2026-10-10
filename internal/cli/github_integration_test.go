@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Lephiziel/findrail/internal/search"
+	"github.com/Lephiziel/findrail/internal/snapshot"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	web "github.com/Lephiziel/findrail/internal/transport/http"
 	transport "github.com/Lephiziel/findrail/internal/transport/mcp"
@@ -273,6 +274,31 @@ func TestGitHubCLIIntegration(t *testing.T) {
 	result := call("findrail_get_evidence", map[string]any{"source_id": source, "document_id": evidence.ID})
 	if body, _ := json.Marshal(result.StructuredContent); !bytes.Contains(body, []byte("needle unchanged")) || !bytes.Contains(body, []byte(shaB)) {
 		t.Fatalf("MCP evidence: %s", body)
+	}
+	var snapshotBytes bytes.Buffer
+	manifest, documents, pages, err := store.StreamSnapshot(ctx, source, "test", "2026-10-09T12:00:00Z", &snapshotBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	portable, err := snapshot.Inspect(snapshotBytes.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Origin.Kind != "github" || manifest.Origin.FullCommitSHA != shaB || documents != 2 || pages != 0 {
+		t.Fatalf("GitHub snapshot provenance: %+v %d/%d", manifest, documents, pages)
+	}
+	destination, err := sqlite.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	archiveID, err := destination.ImportSnapshot(ctx, "Pinned GitHub archive", portable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored search.Response
+	if restored, err = destination.Search(ctx, search.Request{Query: "unchanged", SourceID: archiveID, Limit: 10}); err != nil || restored.Total != 1 || !strings.Contains(restored.Results[0].URI, shaB+"/") {
+		t.Fatalf("GitHub offline archive search: %+v %v", restored, err)
 	}
 	run(nil, "forget", "--data-dir", data, source)
 	if _, err := store.GitHubSource(ctx, source); err == nil {

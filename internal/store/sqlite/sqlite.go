@@ -10,11 +10,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	githubconnector "github.com/Lephiziel/findrail/internal/connectors/github"
 	"github.com/Lephiziel/findrail/internal/ingest"
@@ -40,6 +43,8 @@ var docxSchema string
 var archiveSchema string
 
 type Store struct{ db, readers *sql.DB }
+
+var ErrArchiveFrozen = errors.New("archive_snapshot_frozen: imported archive sources cannot be scanned or refreshed")
 
 const currentSchemaVersion = 5
 
@@ -225,6 +230,9 @@ func (s *Store) BeginRefresh(ctx context.Context, source connector.Source) (inge
 }
 
 func (s *Store) begin(ctx context.Context, source connector.Source, create bool) (ingest.Scan, error) {
+	if source.Kind == "archive" {
+		return nil, ErrArchiveFrozen
+	}
 	if s.db == nil {
 		return nil, errors.New("index is read-only")
 	}
@@ -606,88 +614,124 @@ func (e *AlreadyImportedError) Error() string {
 	return "snapshot already imported as source " + e.SourceID
 }
 
-// SnapshotForExport reads provenance, documents and page evidence under one
-// SQLite read transaction. Callers keep output private until it is complete.
-func (s *Store) SnapshotForExport(ctx context.Context, sourceID string) (snapshot.Archive, error) {
-	var a snapshot.Archive
+// StreamSnapshot exports ordered records from one established read transaction.
+// JSONL payloads are staged by the snapshot codec, never accumulated in slices.
+func (s *Store) StreamSnapshot(ctx context.Context, sourceID, producer, exportedAt string, dst io.Writer) (snapshot.Manifest, int, int, error) {
 	tx, err := s.readers.BeginTx(ctx, nil)
 	if err != nil {
-		return a, err
+		return snapshot.Manifest{}, 0, 0, err
 	}
 	defer tx.Rollback()
+	o, err := sourceOrigin(ctx, tx, sourceID)
+	if err != nil {
+		return snapshot.Manifest{}, 0, 0, err
+	}
+	m := snapshot.Manifest{Producer: producer, ExportedAt: exportedAt, Origin: o}
+	documents := func(ctx context.Context, w io.Writer) (int, error) {
+		rows, e := tx.QueryContext(ctx, `SELECT CASE WHEN s.kind='archive' AND d.origin_document_id<>'' THEN d.origin_document_id ELSE d.id END,d.title,d.uri,d.path,d.media_type,d.content,CASE WHEN s.kind='archive' AND d.origin_content_hash<>'' THEN d.origin_content_hash ELSE d.content_hash END,d.size_bytes,d.modified_at,d.page_count FROM documents d JOIN sources s ON s.id=d.source_id WHERE d.source_id=? ORDER BY d.path`, sourceID)
+		if e != nil {
+			return 0, e
+		}
+		defer rows.Close()
+		count := 0
+		for rows.Next() {
+			if e = ctx.Err(); e != nil {
+				return count, e
+			}
+			var d snapshot.Document
+			if e = rows.Scan(&d.ID, &d.Title, &d.URI, &d.Path, &d.MediaType, &d.Text, &d.ContentHash, &d.SizeBytes, &d.ModifiedAt, &d.PageCount); e != nil {
+				return count, e
+			}
+			if e = snapshot.ValidateDocumentRecord(d, o); e != nil {
+				return count, e
+			}
+			if count >= snapshot.MaxDocuments {
+				return count, errors.New("document count exceeds portable snapshot v1 limit")
+			}
+			if e = snapshot.WriteJSONLRecord(w, d); e != nil {
+				return count, e
+			}
+			count++
+		}
+		if e = rows.Err(); e != nil {
+			return count, e
+		}
+		if e = rows.Close(); e != nil {
+			return count, e
+		}
+		return count, nil
+	}
+	pages := func(ctx context.Context, w io.Writer) (int, error) {
+		rows, e := tx.QueryContext(ctx, `SELECT d.path,p.page_number,p.content FROM document_pages p JOIN documents d ON d.id=p.document_id WHERE d.source_id=? ORDER BY d.path,p.page_number`, sourceID)
+		if e != nil {
+			return 0, e
+		}
+		defer rows.Close()
+		count := 0
+		for rows.Next() {
+			if e = ctx.Err(); e != nil {
+				return count, e
+			}
+			var p snapshot.Page
+			if e = rows.Scan(&p.Path, &p.Number, &p.Text); e != nil {
+				return count, e
+			}
+			if len(p.Text) > snapshot.MaxText || !utf8.ValidString(p.Text) || strings.ContainsRune(p.Text, 0) {
+				return count, errors.New("page text exceeds portable snapshot v1 limit")
+			}
+			if count >= snapshot.MaxPages {
+				return count, errors.New("page count exceeds portable snapshot v1 limit")
+			}
+			if e = snapshot.WriteJSONLRecord(w, p); e != nil {
+				return count, e
+			}
+			count++
+		}
+		if e = rows.Err(); e != nil {
+			return count, e
+		}
+		if e = rows.Close(); e != nil {
+			return count, e
+		}
+		return count, nil
+	}
+	manifest, err := snapshot.WriteArchive(ctx, dst, m, documents, pages)
+	if err != nil {
+		return manifest, 0, 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return manifest, 0, 0, err
+	}
+	return manifest, manifest.DocumentCount, manifest.PageCount, nil
+}
+
+func sourceOrigin(ctx context.Context, tx *sql.Tx, sourceID string) (snapshot.Origin, error) {
 	var o snapshot.Origin
-	err = tx.QueryRowContext(ctx, `SELECT id,kind,name,root,last_indexed_at,max_text_bytes,max_pdf_bytes,max_docx_bytes FROM sources WHERE id=?`, sourceID).Scan(&o.ID, &o.Kind, &o.Name, &o.Location, &o.IndexedAt, &o.MaxTextBytes, &o.MaxPDFBytes, &o.MaxDOCXBytes)
+	err := tx.QueryRowContext(ctx, `SELECT id,kind,name,root,last_indexed_at,max_text_bytes,max_pdf_bytes,max_docx_bytes FROM sources WHERE id=?`, sourceID).Scan(&o.ID, &o.Kind, &o.Name, &o.Location, &o.IndexedAt, &o.MaxTextBytes, &o.MaxPDFBytes, &o.MaxDOCXBytes)
 	if errors.Is(err, sql.ErrNoRows) {
-		return a, fmt.Errorf("source %q not found", sourceID)
+		return o, fmt.Errorf("source %q not found", sourceID)
 	}
 	if err != nil {
-		return a, err
+		return o, err
 	}
 	if o.Kind == "archive" {
 		var raw string
 		if err = tx.QueryRowContext(ctx, "SELECT origin_json FROM archive_sources WHERE source_id=?", sourceID).Scan(&raw); err != nil {
-			return a, errors.New("archive provenance missing")
+			return o, errors.New("archive provenance missing")
 		}
-		if err = json.Unmarshal([]byte(raw), &o); err != nil {
-			return a, err
-		}
-	} else if o.Kind == "github" {
-		var g GitHubSource
-		g, err = githubSourceQuery(ctx, tx, sourceID)
-		if err != nil {
-			return a, err
+		err = json.Unmarshal([]byte(raw), &o)
+		return o, err
+	}
+	if o.Kind == "github" {
+		g, e := githubSourceQuery(ctx, tx, sourceID)
+		if e != nil {
+			return o, e
 		}
 		o.RepositoryURL, o.Owner, o.Repository, o.FullCommitSHA = g.RepositoryURL, g.Owner, g.Repo, g.SHA
 		o.RefMode, o.RefValue, o.SelectedPath = g.RefMode, g.RefValue, g.SelectedPath
+		o.GitHubMaxBytes, o.GitHubPolicyVersion, o.CommitTime = g.MaxBytes, g.PolicyVersion, g.CommitTime.Format(time.RFC3339Nano)
 	}
-	a.Manifest.Origin = o
-	rows, err := tx.QueryContext(ctx, `SELECT id,title,uri,path,media_type,content,content_hash,size_bytes,modified_at,page_count FROM documents WHERE source_id=? ORDER BY path`, sourceID)
-	if err != nil {
-		return a, err
-	}
-	for rows.Next() {
-		if err := ctx.Err(); err != nil {
-			rows.Close()
-			return a, err
-		}
-		var d snapshot.Document
-		if err = rows.Scan(&d.ID, &d.Title, &d.URI, &d.Path, &d.MediaType, &d.Text, &d.ContentHash, &d.SizeBytes, &d.ModifiedAt, &d.PageCount); err != nil {
-			rows.Close()
-			return a, err
-		}
-		a.Documents = append(a.Documents, d)
-	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
-		return a, err
-	}
-	if err = rows.Close(); err != nil {
-		return a, err
-	}
-	rows, err = tx.QueryContext(ctx, `SELECT d.path,p.page_number,p.content FROM document_pages p JOIN documents d ON d.id=p.document_id WHERE d.source_id=? ORDER BY d.path,p.page_number`, sourceID)
-	if err != nil {
-		return a, err
-	}
-	for rows.Next() {
-		if err := ctx.Err(); err != nil {
-			rows.Close()
-			return a, err
-		}
-		var p snapshot.Page
-		if err = rows.Scan(&p.Path, &p.Number, &p.Text); err != nil {
-			rows.Close()
-			return a, err
-		}
-		a.Pages = append(a.Pages, p)
-	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
-		return a, err
-	}
-	if err = rows.Close(); err != nil {
-		return a, err
-	}
-	return a, tx.Commit()
+	return o, nil
 }
 
 // ImportSnapshot publishes source, provenance, documents, pages and FTS rows in
@@ -696,8 +740,13 @@ func (s *Store) ImportSnapshot(ctx context.Context, name string, a snapshot.Arch
 	if s.db == nil {
 		return "", errors.New("index is read-only")
 	}
-	if name == "" || len(name) > 512 {
+	if name == "" || len(name) > 512 || !utf8.ValidString(name) {
 		return "", errors.New("import name must be 1–512 UTF-8 bytes")
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", errors.New("import name contains a control character")
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -737,6 +786,10 @@ func (s *Store) ImportSnapshot(ctx context.Context, name string, a snapshot.Arch
 		return "", err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO sources(id,kind,name,root,last_indexed_at,max_text_bytes,max_pdf_bytes,max_docx_bytes,registration_token,revision) VALUES(?,'archive',?,'',?,0,0,0,?,1)`, sourceID, name, time.Now().UTC().Format(time.RFC3339Nano), token); err != nil {
+		_ = tx.Rollback()
+		if prior := s.waitImported(ctx, fingerprint); prior != "" {
+			return "", &AlreadyImportedError{SourceID: prior}
+		}
 		return "", err
 	}
 	origin, err := json.Marshal(a.Manifest.Origin)
@@ -746,12 +799,16 @@ func (s *Store) ImportSnapshot(ctx context.Context, name string, a snapshot.Arch
 	importedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err = tx.ExecContext(ctx, `INSERT INTO archive_sources(source_id,origin_json,fingerprint,original_indexed_at,imported_at) VALUES(?,?,?,?,?)`, sourceID, string(origin), fingerprint, a.Manifest.Origin.IndexedAt, importedAt); err != nil {
 		_ = tx.Rollback()
-		var prior string
-		if e := s.readers.QueryRowContext(ctx, "SELECT source_id FROM archive_sources WHERE fingerprint=?", fingerprint).Scan(&prior); e == nil {
+		if prior := s.waitImported(ctx, fingerprint); prior != "" {
 			return "", &AlreadyImportedError{SourceID: prior}
 		}
 		return "", err
 	}
+	pagesByPath := make(map[string][]snapshot.Page, len(a.Documents))
+	for _, p := range a.Pages {
+		pagesByPath[p.Path] = append(pagesByPath[p.Path], p)
+	}
+	documentIDs := make(map[string]string, len(a.Documents))
 	for _, d := range a.Documents {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -763,41 +820,63 @@ func (s *Store) ImportSnapshot(ctx context.Context, name string, a snapshot.Arch
 		contentHash.Write([]byte(d.MediaType))
 		contentHash.Write([]byte{0})
 		contentHash.Write([]byte(d.Text))
-		for _, p := range a.Pages {
-			if p.Path == d.Path {
-				contentHash.Write([]byte{0})
-				contentHash.Write([]byte(p.Text))
-			}
+		for _, p := range pagesByPath[d.Path] {
+			contentHash.Write([]byte{0})
+			contentHash.Write([]byte(p.Text))
 		}
 		modified := d.ModifiedAt
 		if modified == "" {
 			modified = "1970-01-01T00:00:00Z"
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO documents(id,source_id,title,uri,path,content,content_hash,size_bytes,modified_at,scan_token,media_type,page_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, sourceID, d.Title, d.URI, d.Path, d.Text, hex.EncodeToString(contentHash.Sum(nil)), d.SizeBytes, modified, token, d.MediaType, d.PageCount); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO documents(id,source_id,title,uri,path,content,content_hash,size_bytes,modified_at,scan_token,media_type,page_count,origin_content_hash,origin_document_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, sourceID, d.Title, d.URI, d.Path, d.Text, hex.EncodeToString(contentHash.Sum(nil)), d.SizeBytes, modified, token, d.MediaType, d.PageCount, d.ContentHash, d.ID); err != nil {
 			return "", err
 		}
+		documentIDs[d.Path] = id
 	}
 	for _, p := range a.Pages {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		var documentID string
-		if err = tx.QueryRowContext(ctx, "SELECT id FROM documents WHERE source_id=? AND path=?", sourceID, p.Path).Scan(&documentID); err != nil {
-			return "", err
+		documentID := documentIDs[p.Path]
+		if documentID == "" {
+			return "", errors.New("validated page lost its document during import")
 		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO document_pages(document_id,page_number,content) VALUES(?,?,?)", documentID, p.Number, p.Text); err != nil {
 			return "", err
 		}
 	}
+	if err = ctx.Err(); err != nil {
+		return "", err
+	}
 	if err = tx.Commit(); err != nil {
 		_ = tx.Rollback()
-		var prior string
-		if e := s.readers.QueryRowContext(ctx, "SELECT source_id FROM archive_sources WHERE fingerprint=?", fingerprint).Scan(&prior); e == nil {
+		if prior := s.waitImported(ctx, fingerprint); prior != "" {
 			return "", &AlreadyImportedError{SourceID: prior}
 		}
 		return "", err
 	}
 	return sourceID, nil
+}
+
+func (s *Store) waitImported(ctx context.Context, fingerprint string) string {
+	if ctx.Err() != nil {
+		return ""
+	}
+	wait, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var id string
+		if err := s.readers.QueryRowContext(wait, "SELECT source_id FROM archive_sources WHERE fingerprint=?", fingerprint).Scan(&id); err == nil {
+			return id
+		}
+		select {
+		case <-wait.Done():
+			return ""
+		case <-ticker.C:
+		}
+	}
 }
 
 // DiagnosticSummary returns a bounded aggregate for offline doctor output.
@@ -806,6 +885,7 @@ type DiagnosticSummary struct {
 	Sources           int `json:"sources"`
 	FilesystemSources int `json:"filesystem_sources"`
 	GitHubSources     int `json:"github_sources"`
+	ArchiveSources    int `json:"archive_sources"`
 	OtherSources      int `json:"other_sources"`
 	CustomTextLimits  int `json:"custom_text_limits"`
 	PDFEnabled        int `json:"pdf_enabled"`
@@ -824,13 +904,14 @@ func (s *Store) DiagnosticSummary(ctx context.Context) (DiagnosticSummary, error
 	err := s.readers.QueryRowContext(ctx, `SELECT COUNT(*),
         COALESCE(SUM(CASE WHEN kind='filesystem' THEN 1 ELSE 0 END),0),
         COALESCE(SUM(CASE WHEN kind='github' THEN 1 ELSE 0 END),0),
-        COALESCE(SUM(CASE WHEN kind NOT IN ('filesystem','github') THEN 1 ELSE 0 END),0),
-        COALESCE(SUM(CASE WHEN max_text_bytes<>1048576 THEN 1 ELSE 0 END),0),
-        COALESCE(SUM(CASE WHEN max_pdf_bytes>0 THEN 1 ELSE 0 END),0),
-        COALESCE(SUM(CASE WHEN max_docx_bytes>0 THEN 1 ELSE 0 END),0),
-        COALESCE(SUM(CASE WHEN max_docx_bytes=0 THEN 1 ELSE 0 END),0)
+		COALESCE(SUM(CASE WHEN kind='archive' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN kind NOT IN ('filesystem','github','archive') THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN kind<>'archive' AND max_text_bytes<>1048576 THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN kind<>'archive' AND max_pdf_bytes>0 THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN kind<>'archive' AND max_docx_bytes>0 THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN kind<>'archive' AND max_docx_bytes=0 THEN 1 ELSE 0 END),0)
         FROM sources`).Scan(&summary.Sources, &summary.FilesystemSources, &summary.GitHubSources,
-		&summary.OtherSources, &summary.CustomTextLimits, &summary.PDFEnabled,
+		&summary.ArchiveSources, &summary.OtherSources, &summary.CustomTextLimits, &summary.PDFEnabled,
 		&summary.DOCXEnabled, &summary.DOCXDisabled)
 	return summary, err
 }

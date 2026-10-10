@@ -68,7 +68,7 @@ func TestArchiveImportSearchDuplicateAndRemoval(t *testing.T) {
 	defer s.Close()
 	o := snapshot.Origin{ID: "synthetic-origin", Kind: "filesystem", Name: "Synthetic", Location: "/tmp/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
 	docs := []snapshot.Document{{ID: "origin-doc", Path: "notes.md", Title: "Retry notes", URI: "file:///tmp/synthetic/notes.md", MediaType: "text/markdown", Text: "retry budget is preserved", ContentHash: strings.Repeat("a", 64), SizeBytes: 25, ModifiedAt: "2026-10-09T11:00:00Z"}}
-	encoded, err := snapshot.Encode(snapshot.Manifest{Origin: o}, docs, nil)
+	encoded, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: o}, docs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +95,23 @@ func TestArchiveImportSearchDuplicateAndRemoval(t *testing.T) {
 	if err != nil || len(sources) != 1 || sources[0].Archive == nil || sources[0].Archive.Fingerprint != archive.Manifest.Fingerprint {
 		t.Fatalf("archive status: %+v %v", sources, err)
 	}
+	oldToken := sources[0].RegistrationToken
+	_, err = s.ImportSnapshot(context.Background(), "Renamed duplicate", archive)
+	if !errors.As(err, &duplicate) {
+		t.Fatalf("duplicate import unexpectedly renamed/replaced: %v", err)
+	}
+	sources, _ = s.Sources(context.Background())
+	if sources[0].Name != "Imported notes" {
+		t.Fatalf("duplicate import changed display name: %+v", sources[0])
+	}
+	var reb bytes.Buffer
+	if _, _, _, err = s.StreamSnapshot(context.Background(), id, "test", "2026-10-10T00:00:00Z", &reb); err != nil {
+		t.Fatal(err)
+	}
+	reexport, err := snapshot.Inspect(reb.Bytes())
+	if err != nil || reexport.Manifest.Fingerprint != archive.Manifest.Fingerprint {
+		t.Fatalf("re-export fingerprint changed: %v / %s", err, reexport.Manifest.Fingerprint)
+	}
 	if err = s.ForgetSource(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +120,210 @@ func TestArchiveImportSearchDuplicateAndRemoval(t *testing.T) {
 	}
 	if _, err = s.ImportSnapshot(context.Background(), "Re-imported", archive); err != nil {
 		t.Fatalf("re-import after removal: %v", err)
+	}
+	sources, err = s.Sources(context.Background())
+	if err != nil || len(sources) != 1 || sources[0].RegistrationToken == oldToken {
+		t.Fatalf("re-import did not create fresh registration state: %+v %v", sources, err)
+	}
+}
+
+func TestConcurrentIdenticalArchiveImportsHaveOneWinner(t *testing.T) {
+	dir := t.TempDir()
+	a, err := sqlite.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := sqlite.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	o := snapshot.Origin{ID: "race-origin", Kind: "filesystem", Name: "Race fixture", Location: "/tmp/race", IndexedAt: "2026-10-09T12:00:00Z"}
+	docs := []snapshot.Document{{ID: "source-doc", Path: "race.md", Title: "Race", URI: "file:///tmp/race/race.md", MediaType: "text/plain", Text: "atomic archive race marker", ContentHash: strings.Repeat("c", 64), SizeBytes: 27, ModifiedAt: "2026-10-09T11:00:00Z"}}
+	data, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: o}, docs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := snapshot.Inspect(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	type outcome struct {
+		id  string
+		err error
+	}
+	results := make(chan outcome, 2)
+	for _, store := range []*sqlite.Store{a, b} {
+		go func(s *sqlite.Store) {
+			<-start
+			id, e := s.ImportSnapshot(context.Background(), "Race", archive)
+			results <- outcome{id, e}
+		}(store)
+	}
+	close(start)
+	one, two := <-results, <-results
+	winner, loser := one, two
+	if one.err != nil {
+		winner, loser = two, one
+	}
+	if winner.err != nil {
+		t.Fatalf("no successful import: %v / %v", one.err, two.err)
+	}
+	var duplicate *sqlite.AlreadyImportedError
+	if !errors.As(loser.err, &duplicate) || duplicate.SourceID != winner.id {
+		t.Fatalf("concurrent loser must be typed duplicate: %v", loser.err)
+	}
+	sources, err := a.Sources(context.Background())
+	if err != nil || len(sources) != 1 {
+		t.Fatalf("partial/duplicate source rows: %+v %v", sources, err)
+	}
+	if got := find(t, a, "atomic archive race marker", winner.id, 10); got.Total != 1 {
+		t.Fatalf("race import incomplete: %+v", got)
+	}
+}
+
+func TestDifferentFingerprintsFromSameOriginCoexist(t *testing.T) {
+	s, err := sqlite.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	origin := snapshot.Origin{ID: "same-origin", Kind: "filesystem", Name: "Same", Location: "/tmp/same", IndexedAt: "2026-10-09T12:00:00Z"}
+	makeArchive := func(text string) snapshot.Archive {
+		doc := snapshot.Document{ID: "same-original-id", Path: "same.md", Title: "Same", URI: "file:///tmp/same/same.md", MediaType: "text/plain", Text: text, ContentHash: strings.Repeat("a", 64), SizeBytes: int64(len(text)), ModifiedAt: "2026-10-09T11:00:00Z"}
+		data, e := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, []snapshot.Document{doc}, nil)
+		if e != nil {
+			t.Fatal(e)
+		}
+		a, e := snapshot.Inspect(data)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return a
+	}
+	first, second := makeArchive("version one marker"), makeArchive("version two marker")
+	one, err := s.ImportSnapshot(context.Background(), "Version one", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := s.ImportSnapshot(context.Background(), "Version two", second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one == two {
+		t.Fatal("distinct fingerprints shared an active source ID")
+	}
+	if got := find(t, s, "version one", one, 10); got.Total != 1 {
+		t.Fatalf("first snapshot replaced: %+v", got)
+	}
+	if got := find(t, s, "version two", two, 10); got.Total != 1 {
+		t.Fatalf("second snapshot missing: %+v", got)
+	}
+	sources, err := s.Sources(context.Background())
+	if err != nil || len(sources) != 2 {
+		t.Fatalf("same-origin snapshots did not coexist: %+v %v", sources, err)
+	}
+}
+
+func TestSchemaFourUpgradePreservesRegisteredSourcesAndPages(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "findrail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"001_init.sql", "002_local_alpha.sql", "003_github_snapshots.sql", "004_docx_policy.sql"} {
+		data, e := os.ReadFile(filepath.Join("migrations", name))
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = db.Exec(string(data)); e != nil {
+			t.Fatalf("apply %s: %v", name, e)
+		}
+	}
+	_, err = db.Exec(`INSERT INTO sources(id,kind,name,root,max_text_bytes,max_pdf_bytes,max_docx_bytes,registration_token,revision) VALUES('schema4-folder','filesystem','Folder','/tmp/folder',524288,16777216,8388608,'folder-token',7),('schema4-gh','github','GH','owner/repo',1048576,0,0,'gh-token',9);
+INSERT INTO documents(id,source_id,title,uri,path,content,content_hash,size_bytes,modified_at,scan_token,media_type,page_count) VALUES('schema4-pdf','schema4-folder','paper.pdf','file:///tmp/folder/paper.pdf','paper.pdf','pageoneproof\npagetwoproof\n','hash',8,'2026-10-09T00:00:00Z','scan','application/pdf',2);
+INSERT INTO document_pages(document_id,page_number,content) VALUES('schema4-pdf',1,'pageoneproof'),('schema4-pdf',2,'pagetwoproof');
+INSERT INTO github_sources(source_id,repository_id,owner,repo,repository_url,ref_mode,ref_value,selected_path,max_bytes,policy_version,snapshot_sha,commit_time,registration_token,revision) VALUES('schema4-gh',3,'owner','repo','https://github.com/owner/repo','branch','main','docs',1048576,1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','2026-10-08T00:00:00Z','gh-token',9);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := sqlite.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sources, err := s.Sources(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 2 {
+		t.Fatalf("sources lost: %+v", sources)
+	}
+	for _, source := range sources {
+		if source.ID == "schema4-folder" && (source.RegistrationToken != "folder-token" || source.RegistrationRevision != 7 || source.MaxDOCXBytes != 8388608) {
+			t.Fatalf("filesystem registration lost: %+v", source)
+		}
+		if source.ID == "schema4-gh" && (source.GitHub == nil || source.RegistrationToken != "gh-token" || source.GitHub.Revision != 9) {
+			t.Fatalf("GitHub registration lost: %+v", source)
+		}
+	}
+	evidence, err := s.Evidence(context.Background(), "schema4-pdf", 2)
+	if err != nil || !strings.Contains(evidence.Text, "pagetwoproof") {
+		t.Fatalf("PDF page migration failed: %+v %v", evidence, err)
+	}
+}
+
+func TestArchiveImportDatabaseFailureRollsBackEveryRow(t *testing.T) {
+	dir := t.TempDir()
+	s, err := sqlite.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "findrail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`CREATE TRIGGER reject_archive_page BEFORE INSERT ON document_pages WHEN NEW.page_number=2 BEGIN SELECT RAISE(ABORT,'fixture rollback'); END`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	o := snapshot.Origin{ID: "rollback-origin", Kind: "filesystem", Name: "Rollback", Location: "/tmp/rollback", IndexedAt: "2026-10-09T12:00:00Z"}
+	docs := []snapshot.Document{{ID: "pdf-origin", Path: "paper.pdf", Title: "Paper", URI: "file:///tmp/rollback/paper.pdf", MediaType: "application/pdf", Text: "one\ntwo\n", ContentHash: strings.Repeat("d", 64), SizeBytes: 6, ModifiedAt: "2026-10-09T11:00:00Z", PageCount: 2}}
+	pages := []snapshot.Page{{Path: "paper.pdf", Number: 1, Text: "one"}, {Path: "paper.pdf", Number: 2, Text: "two"}}
+	data, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: o}, docs, pages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := snapshot.Inspect(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ImportSnapshot(context.Background(), "Rollback", archive); err == nil {
+		t.Fatal("injected DB error unexpectedly committed")
+	}
+	sources, err := s.Sources(context.Background())
+	if err != nil || len(sources) != 0 {
+		t.Fatalf("source residue after rollback: %+v %v", sources, err)
+	}
+	if got := find(t, s, "two", "", 10); got.Total != 0 {
+		t.Fatalf("FTS residue after rollback: %+v", got)
+	}
+	db, err = sql.Open("sqlite", filepath.Join(dir, "findrail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec("DROP TRIGGER reject_archive_page"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	if _, err = s.ImportSnapshot(context.Background(), "Rollback", archive); err != nil {
+		t.Fatalf("import after rollback did not recover: %v", err)
 	}
 }
 

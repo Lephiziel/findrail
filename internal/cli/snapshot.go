@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -22,6 +20,7 @@ import (
 func runSnapshotCommand(ctx context.Context, command string, args []string, out io.Writer, version string) error {
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	helpFlag := fs.Bool("help", false, "show command help")
 	dataDir := fs.String("data-dir", "", "Findrail index directory")
 	sourceID := fs.String("source", "", "one indexed source ID")
 	output := fs.String("output", "", "new archive path (plaintext content and provenance; never overwritten)")
@@ -30,7 +29,13 @@ func runSnapshotCommand(ctx context.Context, command string, args []string, out 
 	jsonOutput := fs.Bool("json", false, "output JSON")
 	showPaths := fs.Bool("show-paths", false, "show original source name and location; documents/text are never shown")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return writeSnapshotHelp(out, command)
+		}
 		return err
+	}
+	if *helpFlag {
+		return writeSnapshotHelp(out, command)
 	}
 	if *timeout < time.Second || *timeout > 10*time.Minute {
 		return errors.New("timeout must be between 1s and 10m")
@@ -93,10 +98,6 @@ func runSnapshotCommand(ctx context.Context, command string, args []string, out 
 			return fmt.Errorf("open existing index: %w", err)
 		}
 		defer store.Close()
-		archive, err := store.SnapshotForExport(opCtx, *sourceID)
-		if err != nil {
-			return err
-		}
 		sources, err := store.Sources(opCtx)
 		if err != nil {
 			return err
@@ -110,28 +111,58 @@ func runSnapshotCommand(ctx context.Context, command string, args []string, out 
 		if err = validateExportTarget(*output, protectedRoots...); err != nil {
 			return err
 		}
-		archive.Manifest.Producer, archive.Manifest.ExportedAt = version, time.Now().UTC().Format(time.RFC3339Nano)
-		data, err := snapshot.Encode(archive.Manifest, archive.Documents, archive.Pages)
+		var manifest snapshot.Manifest
+		archiveBytes, err := publishNoReplaceStream(*output, func(w io.Writer) error {
+			var e error
+			manifest, _, _, e = store.StreamSnapshot(opCtx, *sourceID, version, time.Now().UTC().Format(time.RFC3339Nano), w)
+			if e != nil {
+				return e
+			}
+			file, ok := w.(*os.File)
+			if !ok {
+				return errors.New("archive staging is not a file")
+			}
+			info, e := file.Stat()
+			if e != nil {
+				return e
+			}
+			verified, e := snapshot.VerifyArchive(opCtx, file, info.Size())
+			if e != nil {
+				return fmt.Errorf("verify completed archive: %w", e)
+			}
+			if verified.Fingerprint != manifest.Fingerprint {
+				return errors.New("verified archive fingerprint changed")
+			}
+			manifest = verified
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-		verified, err := snapshot.Inspect(data)
-		if err != nil {
-			return fmt.Errorf("verify completed archive: %w", err)
-		}
-		if err = publishNoReplace(*output, data); err != nil {
-			return err
-		}
-		sha := sha256.Sum256(data)
-		result := map[string]any{"source_id": *sourceID, "documents": len(archive.Documents), "pages": len(archive.Pages), "archive_bytes": len(data), "fingerprint": verified.Manifest.Fingerprint, "archive_sha256": hex.EncodeToString(sha[:])}
+		result := map[string]any{"source_id": *sourceID, "documents": manifest.DocumentCount, "pages": manifest.PageCount, "archive_bytes": archiveBytes, "fingerprint": manifest.Fingerprint}
 		if *jsonOutput {
 			return json.NewEncoder(out).Encode(result)
 		}
-		_, err = fmt.Fprintf(out, "Exported source %s: %d documents, %d pages, %d bytes, fingerprint %s. Archive is plaintext and contains source provenance.\n", *sourceID, len(archive.Documents), len(archive.Pages), len(data), result["fingerprint"])
+		_, err = fmt.Fprintf(out, "Exported source %s: %d documents, %d pages, %d bytes, fingerprint %s. Archive is plaintext and contains source provenance.\n", *sourceID, manifest.DocumentCount, manifest.PageCount, archiveBytes, manifest.Fingerprint)
 		return err
 	}
 	return fmt.Errorf("unknown snapshot command %q", command)
 }
+
+func writeSnapshotHelp(out io.Writer, command string) error {
+	var usage string
+	switch command {
+	case "export-source":
+		usage = "Usage: findrail export-source --data-dir DIR --source ID --output FILE [--timeout 2m] [--json]\nExports one committed source as plaintext indexed text and provenance. The archive may contain absolute paths and usernames; it is not encrypted or redacted. Existing output is never overwritten.\n"
+	case "inspect-export":
+		usage = "Usage: findrail inspect-export [--timeout 2m] [--show-paths] [--json] FILE\nValidates the complete archive; integrity is not authentication. Source name/location are hidden unless --show-paths. Document names and text are never printed.\n"
+	case "import-source":
+		usage = "Usage: findrail import-source --data-dir DIR --name NAME [--timeout 2m] [--json] FILE\nImports a validated archive as an independent frozen source. It is not watched or reconnected.\n"
+	}
+	return writeString(out, usage)
+}
+
+func writeString(w io.Writer, s string) error { _, err := io.WriteString(w, s); return err }
 
 func readAndInspect(ctx context.Context, path string) (snapshot.Archive, error) {
 	var empty snapshot.Archive
@@ -179,7 +210,7 @@ func readAndInspect(ctx context.Context, path string) (snapshot.Archive, error) 
 	if err != nil {
 		return empty, err
 	}
-	return snapshot.Inspect(data)
+	return snapshot.InspectContext(ctx, data)
 }
 
 func copyBounded(ctx context.Context, dst io.Writer, src io.Reader, limit int64) (int64, error) {
@@ -246,6 +277,10 @@ func validateExportTarget(target string, protectedRoots ...string) error {
 		return err
 	}
 	candidate := filepath.Join(realParent, filepath.Base(abs))
+	canonicalCandidate, e := canonicalSafetyPath(candidate)
+	if e != nil {
+		return e
+	}
 	for _, protected := range protectedRoots {
 		if protected == "" {
 			continue
@@ -254,12 +289,18 @@ func validateExportTarget(target string, protectedRoots ...string) error {
 		if e != nil {
 			return e
 		}
-		if resolved, e := filepath.EvalSymlinks(p); e == nil {
-			p = resolved
+		canonicalRoot, e := canonicalSafetyPath(p)
+		if e != nil {
+			return e
 		}
-		rel, e := filepath.Rel(p, candidate)
-		if e == nil && (rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))) {
-			return errors.New("refusing to export inside the index directory or registered source root")
+		for _, pair := range [][2]string{{p, abs}, {canonicalRoot, canonicalCandidate}} {
+			rel, e := filepath.Rel(pair[0], pair[1])
+			if e != nil {
+				continue
+			}
+			if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				return errors.New("refusing to export inside the index directory or registered source root")
+			}
 		}
 	}
 	if _, err = os.Lstat(candidate); err == nil {
@@ -271,45 +312,77 @@ func validateExportTarget(target string, protectedRoots ...string) error {
 	return nil
 }
 
+// canonicalSafetyPath resolves existing symlinks while retaining a missing
+// suffix. A dangling symlink in the protected path is ambiguous and rejected.
+func canonicalSafetyPath(value string) (string, error) {
+	current, err := filepath.Abs(value)
+	if err != nil {
+		return "", err
+	}
+	suffix := []string{}
+	for {
+		resolved, e := filepath.EvalSymlinks(current)
+		if e == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !os.IsNotExist(e) {
+			return "", e
+		}
+		info, lerr := os.Lstat(current)
+		if lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("ambiguous symlink in protected output path")
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", e
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
+}
+
 // A hard-link publication is atomic and fails if the destination exists on
 // supported local filesystems; it never replaces a file or symlink.
-func publishNoReplace(target string, data []byte) error {
+func publishNoReplaceStream(target string, build func(io.Writer) error) (int64, error) {
 	abs, err := filepath.Abs(target)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	parent := filepath.Dir(abs)
 	realParent, err := filepath.EvalSymlinks(parent)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	abs = filepath.Join(realParent, filepath.Base(abs))
 	f, err := os.CreateTemp(realParent, ".findrail-export-*")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp)
 	if err = f.Chmod(0600); err != nil {
 		f.Close()
-		return err
+		return 0, err
 	}
-	n, err := f.Write(data)
-	if err == nil && n != len(data) {
-		err = io.ErrShortWrite
-	}
-	if err == nil {
+	if err = build(f); err == nil {
 		err = f.Sync()
 	}
 	closeErr := f.Close()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if closeErr != nil {
-		return closeErr
+		return 0, closeErr
+	}
+	info, err := os.Stat(tmp)
+	if err != nil {
+		return 0, err
 	}
 	if err = os.Link(tmp, abs); err != nil {
-		return fmt.Errorf("publish archive without replacing existing output: %w", err)
+		return 0, fmt.Errorf("publish archive without replacing existing output: %w", err)
 	}
-	return nil
+	return info.Size(), nil
 }

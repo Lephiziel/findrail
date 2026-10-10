@@ -17,6 +17,7 @@ import (
 
 	gh "github.com/Lephiziel/findrail/internal/connectors/github"
 	"github.com/Lephiziel/findrail/internal/search"
+	"github.com/Lephiziel/findrail/internal/snapshot"
 	"github.com/Lephiziel/findrail/internal/sourcecoord"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 )
@@ -39,6 +40,33 @@ func openApp(t *testing.T) (*App, *sqlite.Store, string) {
 		}
 	})
 	return app, store, dir
+}
+
+func TestArchiveSourceCannotBeConfiguredOrRefreshed(t *testing.T) {
+	a, store, _ := openApp(t)
+	origin := snapshot.Origin{ID: "frozen-origin", Kind: "filesystem", Name: "Folder", Location: "/tmp/frozen", IndexedAt: "2026-10-09T12:00:00Z"}
+	doc := snapshot.Document{ID: "doc", Path: "note.md", Title: "Note", URI: "file:///tmp/frozen/note.md", MediaType: "text/plain", Text: "frozen", ContentHash: strings.Repeat("a", 64), SizeBytes: 6, ModifiedAt: "2026-10-09T11:00:00Z"}
+	data, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, []snapshot.Document{doc}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := snapshot.Inspect(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := store.ImportSnapshot(context.Background(), "Frozen", archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.Refresh(id); err == nil || !strings.Contains(err.Error(), "archive_snapshot_frozen") {
+		t.Fatalf("archive refresh error: %v", err)
+	}
+	if _, err = a.Configure(id, 1<<20); err == nil || !strings.Contains(err.Error(), "archive_snapshot_frozen") {
+		t.Fatalf("archive configure error: %v", err)
+	}
+	if jobs := a.Jobs(); len(jobs) != 0 {
+		t.Fatalf("archive created operation jobs: %+v", jobs)
+	}
 }
 
 type fakeRoundTripper func(*http.Request) (*http.Response, error)

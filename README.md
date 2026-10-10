@@ -10,14 +10,15 @@ documents. Source builds also provide a scoped, read-only stdio MCP server.
 Connected services and optional semantic retrieval are the next product stages.
 
 **Status: local alpha, `0.1.0-alpha.2`.** It is ready for testing, not a stable
-release. Public GitHub snapshots, bounded local DOCX extraction, MCP, and the
+release. Public GitHub snapshots, portable source snapshots, bounded local DOCX extraction, MCP, and the
 new Advanced query/filter behavior are source-build features. Existing alpha.2
-release archives do not include DOCX, MCP, or these search additions.
+release archives do not include DOCX, MCP, portable snapshots, or these search additions.
 Private GitHub, OCR, semantic search and desktop launching remain on the roadmap.
 
 [Releases](https://github.com/Lephiziel/findrail/releases) ·
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
 [Source management](docs/source-management.md) ·
+[Portable snapshots](docs/portable-snapshots.md) ·
 [MCP integration](docs/mcp.md) ·
 [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) ·
 [Русский](docs/ru/overview.md)
@@ -157,6 +158,7 @@ stop startup and preserve the prior committed inventory.
   read-only stdio MCP (`findrail mcp`).
 - Logical source removal, leaving original files untouched.
 - Manual, commit-pinned public GitHub text snapshots with offline preview.
+- Portable plaintext export and isolated frozen archive-source import in source builds.
 - Empty-index onboarding and web source management in source builds (`start`);
   release archives do not yet include these changes.
 
@@ -183,7 +185,7 @@ There is no runtime telemetry. See [data handling](docs/data-handling.md).
 Upgrading from the foundation migrates the existing index automatically. Existing
 sources retain their previous policy; re-run `index` to enable formats. Back up the
 data directory while Findrail is stopped before upgrading; the older binary
-cannot read schema 4.
+cannot read schema 5.
 
 ## Commands
 
@@ -208,6 +210,11 @@ findrail version
 is every five minutes by default; the minimum configurable interval is one
 second. Native notifications normally trigger earlier scans.
 
+Portable snapshots are CLI-first. Use `sources --json` to select a source, then
+`export-source`, `inspect-export`, and `import-source`; imported snapshots are
+independent, frozen sources. See [portable snapshots](docs/portable-snapshots.md)
+for privacy, format and transfer details.
+
 Default data directory: `$XDG_DATA_HOME/findrail` or `~/.local/share/findrail` on
 Linux; `~/Library/Application Support/Findrail` on macOS;
 `%LOCALAPPDATA%\Findrail` on Windows. Override with `--data-dir`.
@@ -217,7 +224,7 @@ Linux; `~/Library/Application Support/Findrail` on macOS;
 | Capability | Local alpha | Next stages |
 |---|---|---|
 | Documents | Text / Markdown / code / PDF text / bounded DOCX body text in source builds | optional OCR |
-| Sources | Local folders; public GitHub snapshots in source builds | Private GitHub, bookmarks, work tools |
+| Sources | Local folders; public GitHub snapshots and frozen portable archive imports in source builds | Private GitHub, bookmarks, work tools |
 | Freshness | File watching and full reconciliation | Resumable remote sync |
 | Retrieval | Literal search, opt-in Advanced queries, source/format/path/title filters, PDF evidence | Query evaluation, optional semantics |
 | Clients | CLI, local web UI, HTTP, read-only stdio MCP | Desktop launcher, editors |
