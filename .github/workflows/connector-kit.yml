@@ -1,0 +1,26 @@
+name: Connector kit
+on:
+  pull_request:
+    paths:
+      - 'pkg/connector/**'
+      - 'examples/connectors/catalog/**'
+      - 'internal/connectorcheck/**'
+      - 'scripts/connector_kit_check.py'
+      - 'docs/connector-conformance.md'
+      - 'docs/connectors.md'
+      - 'CONTRIBUTING.md'
+      - '.github/workflows/connector-kit.yml'
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - run: python scripts/connector_kit_check.py
