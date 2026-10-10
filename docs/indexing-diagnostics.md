@@ -6,6 +6,14 @@ pruning. Failed scans do not replace it. An older schema-5 index has no report
 until a successful scan; migration does not rescan files. Failed-attempt and
 live progress history is not persisted.
 
+For a failed local `index --json`, stdout returns `committed: false` plus a
+bounded attempt summary with processed/skip counts and a stable `failure_code`;
+`--show-paths` explicitly includes its single safe terminal failure path. Manual
+jobs and watcher refreshes expose process-local attempt ID, sequence, phase,
+partial processed/skipped counters, final commit state, and durable report ID on
+success. These progress records reset on process restart; failures leave the
+durable report in place.
+
 ```bash
 findrail source-report --data-dir INDEX --source SOURCE_ID
 findrail source-report --data-dir INDEX --source SOURCE_ID --json
@@ -25,9 +33,14 @@ unavailable result. Archived sources report `frozen_origin_report_not_in_portabl
 portable snapshot v1 is unchanged and no scan is started to fill this gap.
 
 Reports distinguish indexed, updated, unchanged and removed documents from
-observed/skipped files and pruned directories. Legacy `seen`/`skipped` counters
+observed files/entries/directories, skipped files/entries and pruned directories.
+GitHub archive special entries use the `entry` unit; regular selected archive
+files are counted as candidate files. Legacy `seen`/`skipped` counters
 remain unchanged: filesystem `skipped` includes both file and directory policy
-decisions, while report units keep them separate. Hidden or dependency directories
+decisions, while report units keep them separate. For filesystem reports the
+legacy aggregate reconciles as `skipped = skipped_files + skipped_entries +
+pruned_directories`; GitHub selected-candidate `skipped` reconciles as skipped
+files plus skipped special entries. Hidden or dependency directories
 are one directory decision; their descendants are not enumerated to estimate
 missing documents. GitHub coverage describes selected archive candidates only;
 files outside a selected subdirectory are intentionally not represented as skips.
@@ -59,7 +72,8 @@ plaintext. See [data handling](data-handling.md) and [source management](source-
 One Linux amd64 run compared a clean-base binary with this instrumented binary
 on 240 unsupported synthetic files plus one Markdown note: 7.0 ms vs 7.2 ms
 wall time (one run each; startup and filesystem noise dominate). The instrumented
-journey observed 243 entries, retained 200 of 242 skipped-file examples, and
-serialized the complete report to 16,876 bytes. This demonstrates bounded output,
-not a stable overhead benchmark or a p95 claim. No browser automation was run in
-this environment.
+journey observed 246 filesystem entries (245 files), retained 200 of 243
+skipped-file examples, and serialized the complete report to 17,090 bytes. This
+demonstrates bounded output, not a stable overhead benchmark or a p95 claim.
+Chromium 153 headless checked the report panel, hostile path text rendering,
+keyboard activation and 375px viewport; it was not a full browser acceptance journey.

@@ -117,7 +117,11 @@ paths:
         description: Explicitly include at most 200 safe relative-path examples (at most 64 KiB serialized report).
         schema: {type: boolean, default: false}
       responses:
-        '200': {description: Committed report, or explicit unavailable/frozen-origin status}
+        '200':
+          description: Committed report, or explicit unavailable/frozen-origin status; paths are omitted unless include_paths=true and the serialized report is capped at 64 KiB.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SourceReportResponse'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '404': {description: Source does not exist}
         '500': {$ref: '#/components/responses/Unavailable'}
@@ -224,7 +228,14 @@ paths:
       operationId: listJobs
       summary: List bounded process-memory job status (start only)
       responses:
-        '200': {description: At most one hundred completed jobs plus active jobs}
+        '200':
+          description: At most one hundred completed jobs plus active jobs; progress is process-local and contains no percentage.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs: {type: array, items: {$ref: '#/components/schemas/Job'}}
   /api/v1/jobs/{id}:
     get:
       operationId: getJob
@@ -232,7 +243,11 @@ paths:
       parameters:
       - {$ref: '#/components/parameters/JobID'}
       responses:
-        '200': {description: Job state}
+        '200':
+          description: Job state; failed/canceled progress remains partial and never claims publication.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
         '404': {description: Unknown or expired job}
   /api/v1/jobs/{id}/cancel:
     post:
@@ -477,7 +492,7 @@ components:
       required: [available]
       properties:
         available: {type: boolean}
-        availability: {type: string, enum: [not_yet_available, frozen_origin_report_not_in_portable_v1]}
+        availability: {type: string, enum: [available, not_yet_available, frozen_origin_report_not_in_portable_v1]}
         report_id: {type: string}
         operation: {type: string, enum: [initial_index, refresh, configure, github_publication]}
         finished_at: {type: string, format: date-time}
@@ -487,7 +502,71 @@ components:
         coverage: {type: string}
         reasons:
           type: array
-          maxItems: 15
+          maxItems: 45
+          items:
+            type: object
+            required: [code, count, unit]
+            properties:
+              code: {type: string}
+              count: {type: integer, minimum: 0}
+              unit: {type: string, enum: [file, directory, entry]}
+    SourceReportResponse:
+      type: object
+      required: [available, source_id, source_kind, availability]
+      properties:
+        available: {type: boolean}
+        source_id: {type: string}
+        source_kind: {type: string}
+        availability: {type: string, enum: [available, not_yet_available, frozen_origin_report_not_in_portable_v1]}
+        report:
+          oneOf:
+          - {$ref: '#/components/schemas/IndexingReportSummary'}
+          - {$ref: '#/components/schemas/CommittedIndexingReport'}
+    CommittedIndexingReport:
+      type: object
+      description: At most 200 exact relative-path examples; complete serialized report at most 64 KiB.
+      required: [format_version, id, source_id, source_kind, operation, committed, complete, indexed_documents, updated_documents, unchanged_documents, removed_documents, skipped_files, skipped_entries, pruned_directories, reasons, coverage]
+      properties:
+        format_version: {type: integer, enum: [1]}
+        id: {type: string}
+        source_id: {type: string}
+        source_kind: {type: string, enum: [filesystem, github]}
+        snapshot_id: {type: string}
+        operation: {type: string, enum: [initial_index, refresh, configure, github_publication]}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        duration_millis: {type: integer, minimum: 0}
+        committed: {type: boolean, enum: [true]}
+        complete: {type: boolean, enum: [true]}
+        indexed_documents: {type: integer, minimum: 0}
+        updated_documents: {type: integer, minimum: 0}
+        unchanged_documents: {type: integer, minimum: 0}
+        removed_documents: {type: integer, minimum: 0}
+        observed_entries: {type: integer, minimum: 0}
+        observed_entries_known: {type: boolean}
+        observed_files: {type: integer, minimum: 0}
+        observed_files_known: {type: boolean}
+        observed_directories: {type: integer, minimum: 0}
+        observed_directories_known: {type: boolean}
+        skipped_files: {type: integer, minimum: 0}
+        skipped_entries: {type: integer, minimum: 0}
+        pruned_directories: {type: integer, minimum: 0}
+        coverage: {type: string, enum: [complete_filesystem, selected_github_candidates]}
+        examples_omitted: {type: integer, minimum: 0}
+        redacted_samples: {type: integer, minimum: 0}
+        examples:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            required: [path, unit, reason]
+            properties:
+              path: {type: string, minLength: 1, maxLength: 2048, description: Safe relative path; never an absolute root.}
+              unit: {type: string, enum: [file, directory, entry]}
+              reason: {type: string}
+        reasons:
+          type: array
+          maxItems: 45
           items:
             type: object
             required: [code, count, unit]
@@ -567,3 +646,28 @@ components:
         skipped_pdf:
           type: integer
           minimum: 0
+        progress:
+          $ref: '#/components/schemas/Progress'
+    Job:
+      type: object
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [queued, running, succeeded, failed, canceled]}
+        phase: {type: string}
+        error_code: {type: string}
+        error: {type: string}
+        progress: {$ref: '#/components/schemas/Progress'}
+    Progress:
+      type: object
+      required: [attempt_id, sequence, phase, processed_documents, skipped_entries, elapsed_millis, partial]
+      properties:
+        attempt_id: {type: string}
+        sequence: {type: integer, minimum: 0}
+        phase: {type: string, enum: [validating, resolving, downloading, indexing, enumerating_extracting, publishing, removing, done]}
+        processed_documents: {type: integer, minimum: 0}
+        skipped_entries: {type: integer, minimum: 0}
+        elapsed_millis: {type: integer, minimum: 0}
+        partial: {type: boolean}
+        committed: {type: boolean}
+        report_id: {type: string}
+        failure_code: {type: string}

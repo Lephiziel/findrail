@@ -63,6 +63,10 @@ type Progress struct {
 	SkippedEntries     int    `json:"skipped_entries"`
 	ElapsedMillis      int64  `json:"elapsed_millis"`
 	Partial            bool   `json:"partial"`
+	Committed          bool   `json:"committed"`
+	ReportID           string `json:"report_id,omitempty"`
+	FailureCode        string `json:"failure_code,omitempty"`
+	updatedAt          time.Time
 }
 type work struct {
 	job      *Job
@@ -175,6 +179,17 @@ func (a *App) phase(j *Job, phase string) {
 	a.signalLocked()
 	a.mu.Unlock()
 }
+func (a *App) phaseIfDifferent(j *Job, phase string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.byID[j.ID] == nil || terminal(j.Status) || j.Progress.Phase == phase {
+		return
+	}
+	j.Phase = phase
+	j.UpdatedAt = time.Now().UTC()
+	a.bumpProgressLocked(j, phase, j.Progress.ProcessedDocuments, j.Progress.SkippedEntries, false)
+	a.signalLocked()
+}
 func (a *App) progress(j *Job, processed, skipped int, flush, committed bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -202,6 +217,14 @@ func (a *App) scanProgress(j *Job, processed, skipped int, complete, flush bool)
 	}
 	a.progress(j, processed, skipped, flush, false)
 }
+func (a *App) prepareProgress(j *Job, processed, skipped int, complete, flush bool) {
+	if complete {
+		a.phase(j, "publishing")
+	} else {
+		a.phaseIfDifferent(j, "enumerating_extracting")
+	}
+	a.progress(j, processed, skipped, flush, false)
+}
 func (a *App) bumpProgressLocked(j *Job, phase string, processed, skipped int, final bool) {
 	j.Progress.AttemptID = j.ID
 	j.Progress.Sequence++
@@ -210,6 +233,10 @@ func (a *App) bumpProgressLocked(j *Job, phase string, processed, skipped int, f
 	j.Progress.SkippedEntries = skipped
 	j.Progress.ElapsedMillis = time.Since(j.CreatedAt).Milliseconds()
 	j.Progress.Partial = !final
+}
+func (a *App) finishProgressLocked(j *Job, committed bool, failureCode string) {
+	a.bumpProgressLocked(j, "done", j.Progress.ProcessedDocuments, j.Progress.SkippedEntries, committed)
+	j.Progress.FailureCode = failureCode
 }
 func (a *App) setSourceTarget(j *Job, id string) error {
 	a.mu.Lock()
@@ -268,6 +295,8 @@ func (a *App) worker() {
 					w.job.Error = "Operation canceled before it started."
 				}
 				w.job.Phase = "done"
+				code := w.job.ErrorCode
+				a.finishProgressLocked(w.job, false, code)
 				w.job.UpdatedAt = time.Now().UTC()
 				if a.active[w.job.Target] == w.job.ID {
 					delete(a.active, w.job.Target)
@@ -303,9 +332,6 @@ func (a *App) worker() {
 				result, err = w.run(ctx, w.job)
 			}
 			cancel()
-			if err == nil {
-				a.progress(w.job, w.job.Progress.ProcessedDocuments, w.job.Progress.SkippedEntries, true, true)
-			}
 			a.mu.Lock()
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
@@ -325,6 +351,13 @@ func (a *App) worker() {
 				w.job.Result = bounded(result, 300)
 			}
 			w.job.Phase = "done"
+			a.finishProgressLocked(w.job, false, "canceled")
+			a.bumpProgressLocked(w.job, "done", w.job.Progress.ProcessedDocuments, w.job.Progress.SkippedEntries, err == nil)
+			if err != nil {
+				w.job.Progress.FailureCode = w.job.ErrorCode
+			} else {
+				w.job.Progress.FailureCode = ""
+			}
 			w.job.UpdatedAt = time.Now().UTC()
 			if a.active[w.job.Target] == w.job.ID {
 				delete(a.active, w.job.Target)
@@ -336,7 +369,31 @@ func (a *App) worker() {
 		}
 	}
 }
+func (a *App) commitProgress(j *Job, reportID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	w := a.byID[j.ID]
+	if w == nil || w.job != j || terminal(j.Status) {
+		return
+	}
+	j.Progress.Sequence++
+	j.Progress.Committed = true
+	j.Progress.Partial = false
+	j.Progress.ReportID = reportID
+	j.Progress.ElapsedMillis = time.Since(j.CreatedAt).Milliseconds()
+	j.Progress.updatedAt = time.Now().UTC()
+	j.UpdatedAt = j.Progress.updatedAt
+	a.signalLocked()
+}
 func friendlyError(err error) (string, string) {
+	var scanFailure *ingest.ScanFailure
+	if errors.As(err, &scanFailure) {
+		return scanFailure.Code, "The scan did not commit; the previous committed snapshot and report remain available."
+	}
+	var preparationFailure *gh.PreparationFailure
+	if errors.As(err, &preparationFailure) {
+		return "archive_preparation_failed", "The GitHub snapshot could not be prepared; the previous committed snapshot and report remain available."
+	}
 	s := err.Error()
 	lower := strings.ToLower(s)
 	switch {
@@ -353,7 +410,7 @@ func friendlyError(err error) (string, string) {
 	case strings.Contains(lower, "limit exceeded") || strings.Contains(lower, "exceeds "):
 		return "limits_exceeded", "The source exceeds a supported indexing limit; the previous snapshot remains available."
 	default:
-		return "operation_failed", bounded(s, 300)
+		return "operation_failed", "The operation failed; the previous committed snapshot and report remain available."
 	}
 }
 func (a *App) Jobs() []Job {
@@ -395,6 +452,7 @@ func (a *App) Cancel(id string) error {
 		}
 		w.job.Status = "canceled"
 		w.job.Phase = "done"
+		a.finishProgressLocked(w.job, false, "canceled")
 		w.job.UpdatedAt = time.Now().UTC()
 		if a.active[w.job.Target] == w.job.ID {
 			delete(a.active, w.job.Target)
@@ -418,6 +476,7 @@ func (a *App) Close(ctx context.Context) error {
 			if queued[w] {
 				w.job.Status = "canceled"
 				w.job.Phase = "done"
+				a.finishProgressLocked(w.job, false, "canceled")
 				w.job.UpdatedAt = time.Now().UTC()
 				if a.active[w.job.Target] == w.job.ID {
 					delete(a.active, w.job.Target)
@@ -484,6 +543,9 @@ func (a *App) AddFolderWithDOCX(path string, maxDOCXBytes int64) (Job, error) {
 		if e != nil {
 			return "", e
 		}
+		if r.Report != nil {
+			a.commitProgress(j, r.Report.ID)
+		}
 		return fmt.Sprintf("Indexed %d documents; %d DOCX files skipped", r.Seen, r.SkippedDOCX), nil
 	})
 }
@@ -536,6 +598,9 @@ func (a *App) Configure(id string, maxDOCXBytes int64) (Job, error) {
 		if e != nil {
 			return "", e
 		}
+		if r.Report != nil {
+			a.commitProgress(j, r.Report.ID)
+		}
 		return fmt.Sprintf("Updated DOCX policy; indexed %d documents; %d DOCX files skipped", r.Seen, r.SkippedDOCX), nil
 	})
 }
@@ -556,6 +621,7 @@ func (a *App) AddGitHub(repo, ref, subdir string) (Job, error) {
 	return a.submit("add_github", key, "", func(ctx context.Context, j *Job) (string, error) {
 		ctx, cancel := a.githubDeadline(ctx)
 		defer cancel()
+		scanStarted := time.Now().UTC()
 		client := a.newGitHubClient()
 		a.phase(j, "resolving")
 		repository, e := client.ResolveRepository(ctx, sel)
@@ -580,14 +646,20 @@ func (a *App) AddGitHub(repo, ref, subdir string) (Job, error) {
 		if e != nil {
 			return "", e
 		}
-		snapshot, e := client.PrepareResolved(ctx, sel, meta)
+		snapshot, e := client.PrepareResolvedWithProgress(ctx, sel, meta, func(processed, skipped int, complete, flush bool) {
+			a.prepareProgress(j, processed, skipped, complete, flush)
+		})
 		if e != nil {
 			return "", e
 		}
+		snapshot.SetStartedAt(scanStarted)
 		a.phase(j, "publishing")
-		_, _, e = a.store.PublishGitHub(ctx, snapshot, nil)
+		published, _, e := a.store.PublishGitHub(ctx, snapshot, nil)
 		if e != nil {
 			return "", e
+		}
+		if published.Report != nil {
+			a.commitProgress(j, published.Report.ID)
 		}
 		return "Published snapshot " + meta.SHA[:12], nil
 	})
@@ -614,6 +686,7 @@ func (a *App) Refresh(id string) (Job, error) {
 		if found.Kind == "github" {
 			ctx, cancel := a.githubDeadline(ctx)
 			defer cancel()
+			scanStarted := time.Now().UTC()
 			a.phase(j, "resolving")
 			g, e := a.store.GitHubSource(ctx, id)
 			if e != nil {
@@ -623,29 +696,39 @@ func (a *App) Refresh(id string) (Job, error) {
 			client := a.newGitHubClient()
 			repo, e := client.ResolveRepository(ctx, sel)
 			if e != nil {
-				a.store.RecordGitHubError(context.Background(), g, e.Error())
+				_, safe := friendlyError(e)
+				a.store.RecordGitHubError(context.Background(), g, safe)
 				return "", e
 			}
 			if repo.ID != g.RepositoryID {
 				e = errors.New("repository identity changed")
-				a.store.RecordGitHubError(context.Background(), g, e.Error())
+				_, safe := friendlyError(e)
+				a.store.RecordGitHubError(context.Background(), g, safe)
 				return "", e
 			}
 			meta, e := client.ResolveCommit(ctx, sel, repo)
 			if e != nil {
-				a.store.RecordGitHubError(context.Background(), g, e.Error())
+				_, safe := friendlyError(e)
+				a.store.RecordGitHubError(context.Background(), g, safe)
 				return "", e
 			}
 			a.phase(j, "downloading")
-			snapshot, e := client.PrepareResolved(ctx, sel, meta)
+			snapshot, e := client.PrepareResolvedWithProgress(ctx, sel, meta, func(processed, skipped int, complete, flush bool) {
+				a.prepareProgress(j, processed, skipped, complete, flush)
+			})
 			if e != nil {
-				a.store.RecordGitHubError(context.Background(), g, e.Error())
+				_, safe := friendlyError(e)
+				a.store.RecordGitHubError(context.Background(), g, safe)
 				return "", e
 			}
+			snapshot.SetStartedAt(scanStarted)
 			a.phase(j, "publishing")
-			_, _, e = a.store.PublishGitHub(ctx, snapshot, &g)
+			published, _, e := a.store.PublishGitHub(ctx, snapshot, &g)
 			if e != nil {
 				return "", e
+			}
+			if published.Report != nil {
+				a.commitProgress(j, published.Report.ID)
 			}
 			return "Published snapshot " + meta.SHA[:12], nil
 		}
@@ -664,6 +747,9 @@ func (a *App) Refresh(id string) (Job, error) {
 		})
 		if e != nil {
 			return "", e
+		}
+		if r.Report != nil {
+			a.commitProgress(j, r.Report.ID)
 		}
 		return fmt.Sprintf("Updated %d documents", r.Seen), nil
 	})
@@ -716,6 +802,7 @@ func (a *App) Remove(id string) (Job, error) {
 			}
 			previous.job.Status = "canceled"
 			previous.job.Phase = "done"
+			a.finishProgressLocked(previous.job, false, "canceled")
 			previous.job.UpdatedAt = time.Now().UTC()
 			close(previous.finished)
 			a.signalLocked()

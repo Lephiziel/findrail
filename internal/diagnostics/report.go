@@ -30,6 +30,10 @@ type Example struct {
 	Reason string `json:"reason"`
 }
 type Payload struct {
+	Overflow                 bool      `json:"overflow"`
+	ProcessedDocuments       int64     `json:"processed_documents"`
+	ObservedEntries          int64     `json:"observed_entries"`
+	ObservedEntriesKnown     bool      `json:"observed_entries_known"`
 	ObservedFiles            int64     `json:"observed_files"`
 	ObservedDirectories      int64     `json:"observed_directories"`
 	ObservedFilesKnown       bool      `json:"observed_files_known"`
@@ -39,6 +43,7 @@ type Payload struct {
 	ExamplesOmitted          int64     `json:"examples_omitted"`
 	RedactedSamples          int64     `json:"redacted_samples"`
 	Coverage                 string    `json:"coverage"`
+	FailurePath              string    `json:"failure_path,omitempty"`
 }
 type Report struct {
 	FormatVersion            int       `json:"format_version"`
@@ -57,10 +62,13 @@ type Report struct {
 	UnchangedDocuments       int64     `json:"unchanged_documents"`
 	RemovedDocuments         int64     `json:"removed_documents"`
 	ObservedFiles            int64     `json:"observed_files"`
+	ObservedEntries          int64     `json:"observed_entries"`
+	ObservedEntriesKnown     bool      `json:"observed_entries_known"`
 	ObservedDirectories      int64     `json:"observed_directories"`
 	ObservedFilesKnown       bool      `json:"observed_files_known"`
 	ObservedDirectoriesKnown bool      `json:"observed_directories_known"`
 	SkippedFiles             int64     `json:"skipped_files"`
+	SkippedEntries           int64     `json:"skipped_entries"`
 	PrunedDirectories        int64     `json:"pruned_directories"`
 	Reasons                  []Reason  `json:"reasons"`
 	Examples                 []Example `json:"examples,omitempty"`
@@ -69,12 +77,47 @@ type Report struct {
 	Coverage                 string    `json:"coverage"`
 }
 
+// Attempt is an ephemeral, incomplete summary. It is never persisted as the
+// source's committed report and therefore does not assert published documents.
+type Attempt struct {
+	AttemptID                string    `json:"attempt_id"`
+	SourceID                 string    `json:"source_id"`
+	SourceKind               string    `json:"source_kind"`
+	Operation                string    `json:"operation"`
+	StartedAt                time.Time `json:"started_at"`
+	FinishedAt               time.Time `json:"finished_at"`
+	DurationMillis           int64     `json:"duration_millis"`
+	Committed                bool      `json:"committed"`
+	Complete                 bool      `json:"complete"`
+	ProcessedDocuments       int64     `json:"processed_documents"`
+	UpdatedDocuments         int64     `json:"updated_documents"`
+	UnchangedDocuments       int64     `json:"unchanged_documents"`
+	ObservedFiles            int64     `json:"observed_files"`
+	ObservedEntries          int64     `json:"observed_entries"`
+	ObservedEntriesKnown     bool      `json:"observed_entries_known"`
+	ObservedFilesKnown       bool      `json:"observed_files_known"`
+	ObservedDirectories      int64     `json:"observed_directories"`
+	ObservedDirectoriesKnown bool      `json:"observed_directories_known"`
+	SkippedFiles             int64     `json:"skipped_files"`
+	SkippedEntries           int64     `json:"skipped_entries"`
+	PrunedDirectories        int64     `json:"pruned_directories"`
+	Reasons                  []Reason  `json:"reasons,omitempty"`
+	Examples                 []Example `json:"examples,omitempty"`
+	ExamplesOmitted          int64     `json:"examples_omitted"`
+	RedactedSamples          int64     `json:"redacted_samples"`
+	Coverage                 string    `json:"coverage"`
+	FailureCode              string    `json:"failure_code"`
+	FailurePath              string    `json:"failure_path,omitempty"`
+	Overflow                 bool      `json:"overflow"`
+}
+
 // Builder keeps a fixed-size deterministic sample while aggregates remain exact.
 type Builder struct {
 	Reasons           map[string]Reason
 	Examples          []Example
 	Omitted, Redacted int64
 	sampleBytes       int
+	Overflow          bool
 }
 
 func NewBuilder() *Builder {
@@ -84,29 +127,40 @@ func (b *Builder) Add(code, unit, rel string, redact bool) {
 	if !validReason(code) || (unit != "file" && unit != "directory" && unit != "entry") {
 		return
 	}
-	r := b.Reasons[code]
+	key := code + "\x00" + unit
+	r := b.Reasons[key]
 	r.Code = code
 	r.Unit = unit
-	if r.Count < int64(^uint64(0)>>1) {
+	if r.Count == int64(^uint64(0)>>1) {
+		b.Overflow = true
+	} else {
 		r.Count++
 	}
-	b.Reasons[code] = r
+	b.Reasons[key] = r
 	if redact {
-		b.Redacted++
+		if !Increment(&b.Redacted) {
+			b.Overflow = true
+		}
 		return
 	}
 	if !safeRelative(rel) {
-		b.Omitted++
+		if !Increment(&b.Omitted) {
+			b.Overflow = true
+		}
 		return
 	}
 	if len(b.Examples) >= MaxExamples {
-		b.Omitted++
+		if !Increment(&b.Omitted) {
+			b.Overflow = true
+		}
 		return
 	}
 	// Reserve room for report metadata and worst-case JSON escaping. Exact long
 	// paths are omitted rather than truncated.
 	if b.sampleBytes+len(rel)*6+96 > 48<<10 {
-		b.Omitted++
+		if !Increment(&b.Omitted) {
+			b.Overflow = true
+		}
 		return
 	}
 	b.Examples = append(b.Examples, Example{Path: rel, Unit: unit, Reason: code})
@@ -119,7 +173,7 @@ func (b *Builder) Finish() ([]Reason, []Example, int64, int64) {
 	}
 	// Reason code count is finite; stable ordering also stabilizes JSON.
 	for i := 1; i < len(rs); i++ {
-		for j := i; j > 0 && rs[j].Code < rs[j-1].Code; j-- {
+		for j := i; j > 0 && (rs[j].Code < rs[j-1].Code || (rs[j].Code == rs[j-1].Code && rs[j].Unit < rs[j-1].Unit)); j-- {
 			rs[j], rs[j-1] = rs[j-1], rs[j]
 		}
 	}
@@ -135,10 +189,21 @@ func safeRelative(s string) bool {
 		}
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
 			return false
 		}
 	}
+	return true
+}
+
+func SafeRelativePath(s string) bool { return safeRelative(s) }
+
+// Increment increments a nonnegative counter unless it has reached MaxInt64.
+func Increment(value *int64) bool {
+	if *value < 0 || *value == int64(^uint64(0)>>1) {
+		return false
+	}
+	*value++
 	return true
 }
 func validReason(s string) bool {
@@ -149,8 +214,18 @@ func validReason(s string) bool {
 	return false
 }
 func (r Report) Validate() error {
-	if r.FormatVersion != FormatVersion || r.ID == "" || r.SourceID == "" || !r.Committed || !r.Complete || r.IndexedDocuments != r.UpdatedDocuments+r.UnchangedDocuments || r.SkippedFiles < 0 || r.PrunedDirectories < 0 || len(r.Examples) > MaxExamples {
+	if r.FormatVersion != FormatVersion || r.ID == "" || r.SourceID == "" || r.Operation == "" || r.Coverage == "" || !r.Committed || !r.Complete || r.IndexedDocuments != r.UpdatedDocuments+r.UnchangedDocuments || r.IndexedDocuments < 0 || r.UpdatedDocuments < 0 || r.UnchangedDocuments < 0 || r.RemovedDocuments < 0 || r.ObservedFiles < 0 || r.ObservedEntries < 0 || r.ObservedDirectories < 0 || r.SkippedFiles < 0 || r.SkippedEntries < 0 || r.PrunedDirectories < 0 || r.ExamplesOmitted < 0 || r.RedactedSamples < 0 || r.DurationMillis < 0 || len(r.Examples) > MaxExamples || (!r.ObservedFilesKnown && r.ObservedFiles != 0) || (!r.ObservedEntriesKnown && r.ObservedEntries != 0) || (!r.ObservedDirectoriesKnown && r.ObservedDirectories != 0) {
 		return errors.New("invalid indexing report")
+	}
+	for _, reason := range r.Reasons {
+		if !validReason(reason.Code) || reason.Count < 0 || (reason.Unit != "file" && reason.Unit != "directory" && reason.Unit != "entry") {
+			return errors.New("invalid indexing report reason")
+		}
+	}
+	for _, example := range r.Examples {
+		if !safeRelative(example.Path) || !validReason(example.Reason) || (example.Unit != "file" && example.Unit != "directory" && example.Unit != "entry") {
+			return errors.New("invalid indexing report example")
+		}
 	}
 	b, err := json.Marshal(r)
 	if err != nil {

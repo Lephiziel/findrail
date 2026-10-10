@@ -69,12 +69,19 @@ func TestAutomaticLifecycle(t *testing.T) {
 			go func() { defer close(done); m.Run(ctx) }()
 			defer func() { cancel(); <-done }()
 			eventually(t, func() bool { status := m.Status(); return len(status) == 1 && status[0].State == "idle" })
+			initialProgress := m.Status()[0].Progress
+			if !initialProgress.Committed || initialProgress.ReportID == "" || initialProgress.Phase != "done" || initialProgress.Sequence < 3 {
+				t.Fatalf("watcher did not publish committed progress: %+v", initialProgress)
+			}
 			has := func(query string, count int) bool {
 				r, e := s.Search(ctx, search.Request{Query: query, Limit: 20})
 				return e == nil && r.Total == count
 			}
 			put(t, path, "updated evidence")
 			eventually(t, func() bool { return has("updated", 1) && has("initial", 0) })
+			if p := m.Status()[0].Progress; !p.Committed || p.ProcessedDocuments < 1 || p.ReportID == initialProgress.ReportID {
+				t.Fatalf("successful watcher refresh progress/report not updated: %+v", p)
+			}
 			nested := filepath.Join(root, "nested")
 			if err := os.Mkdir(nested, 0700); err != nil {
 				t.Fatal(err)
@@ -135,11 +142,27 @@ func TestMissingRootPreservesSnapshotAndRecovers(t *testing.T) {
 	go func() { defer close(done); m.Run(ctx) }()
 	defer func() { cancel(); <-done }()
 	eventually(t, func() bool { return len(m.Status()) == 1 && m.Status()[0].State == "idle" })
+	prior, err := s.SourceReport(ctx, conn.Source().ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorID := prior["report"].(sqlite.ReportSummary).ReportID
 	moved := filepath.Join(parent, "moved")
 	if err := os.Rename(root, moved); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, func() bool { return m.Status()[0].State == "error" })
+	failed := m.Status()[0].Progress
+	if failed.Committed || !failed.Partial || failed.FailureCode != "scan_failed" || failed.Phase != "done" {
+		t.Fatalf("failed watcher attempt progress: %+v", failed)
+	}
+	beforeReport, err := s.SourceReport(ctx, conn.Source().ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeReport["report"].(sqlite.ReportSummary).ReportID != priorID {
+		t.Fatal("failed refresh overwrote previous durable report")
+	}
 	r, err := s.Search(ctx, search.Request{Query: "retained", Limit: 20})
 	if err != nil || r.Total != 1 {
 		t.Fatalf("missing root pruned snapshot: %+v %v", r, err)
@@ -152,4 +175,11 @@ func TestMissingRootPreservesSnapshotAndRecovers(t *testing.T) {
 		r, e := s.Search(ctx, search.Request{Query: "recovered", Limit: 20})
 		return e == nil && r.Total == 1
 	})
+	after, err := s.SourceReport(ctx, conn.Source().ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after["report"].(sqlite.ReportSummary).ReportID == priorID {
+		t.Fatal("successful watcher recovery did not publish a new report")
+	}
 }

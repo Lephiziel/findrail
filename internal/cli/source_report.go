@@ -52,16 +52,27 @@ func runSourceReport(ctx context.Context, args []string, out, stderr io.Writer) 
 		_, err = fmt.Fprintf(out, "Indexing report unavailable (%v).\n", result["availability"])
 		return err
 	}
-	r := result["report"].(diagnostics.Report)
-	if _, err = fmt.Fprintf(out, "Committed %s report for %s: %d indexed, %d skipped files, %d pruned directories.\n", r.Operation, r.SourceID, r.IndexedDocuments, r.SkippedFiles, r.PrunedDirectories); err != nil {
+	var operation, reportID string
+	var indexed, skipped, pruned int64
+	var reasons []diagnostics.Reason
+	var examples []diagnostics.Example
+	switch r := result["report"].(type) {
+	case sqlite.ReportSummary:
+		operation, reportID, indexed, skipped, pruned, reasons = r.Operation, r.ReportID, r.IndexedDocuments, r.SkippedFiles, r.PrunedDirectories, r.Reasons
+	case diagnostics.Report:
+		operation, reportID, indexed, skipped, pruned, reasons, examples = r.Operation, r.ID, r.IndexedDocuments, r.SkippedFiles, r.PrunedDirectories, r.Reasons, r.Examples
+	default:
+		return errors.New("indexing report has an unsupported response shape")
+	}
+	if _, err = fmt.Fprintf(out, "Committed %s report %s for %s: %d indexed, %d skipped files, %d pruned directories.\n", operation, reportID, *source, indexed, skipped, pruned); err != nil {
 		return err
 	}
-	for _, reason := range r.Reasons {
+	for _, reason := range reasons {
 		if _, err = fmt.Fprintf(out, "  %s (%s): %d\n", reason.Code, reason.Unit, reason.Count); err != nil {
 			return err
 		}
 	}
-	for _, e := range r.Examples {
+	for _, e := range examples {
 		if _, err = fmt.Fprintf(out, "  %s: %s [%s]\n", safe(e.Path), e.Reason, e.Unit); err != nil {
 			return err
 		}

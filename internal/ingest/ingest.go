@@ -35,15 +35,27 @@ type ConfigureStore interface {
 var ErrSourceGone = errors.New("source is no longer registered")
 
 type Result struct {
-	Source      connector.Source `json:"source"`
-	Seen        int              `json:"seen"`
-	Updated     int              `json:"updated"`
-	Unchanged   int              `json:"unchanged"`
-	Removed     int              `json:"removed"`
-	Skipped     int              `json:"skipped"`
-	SkippedPDF  int              `json:"skipped_pdf,omitempty"`
-	SkippedDOCX int              `json:"skipped_docx,omitempty"`
+	Source      connector.Source     `json:"source"`
+	Seen        int                  `json:"seen"`
+	Updated     int                  `json:"updated"`
+	Unchanged   int                  `json:"unchanged"`
+	Removed     int                  `json:"removed"`
+	Skipped     int                  `json:"skipped"`
+	SkippedPDF  int                  `json:"skipped_pdf,omitempty"`
+	SkippedDOCX int                  `json:"skipped_docx,omitempty"`
+	Attempt     *diagnostics.Attempt `json:"attempt,omitempty"`
+	Report      *diagnostics.Report  `json:"report,omitempty"`
 }
+
+type ScanFailure struct {
+	Code  string
+	Cause error
+}
+
+func (e *ScanFailure) Error() string {
+	return e.Code + ": scan did not publish a complete snapshot; any previous committed snapshot is unchanged"
+}
+func (e *ScanFailure) Unwrap() error { return e.Cause }
 
 type ProgressFunc func(processedDocuments, skippedEntries int, scanComplete, flush bool)
 
@@ -85,7 +97,7 @@ func runProgress(ctx context.Context, begin func(context.Context, connector.Sour
 		return result, err
 	}
 	defer scan.Rollback()
-	report, err := source.Scan(ctx, func(doc connector.Document) error {
+	emit := func(doc connector.Document) error {
 		if doc.SourceID != result.Source.ID || doc.ID == "" {
 			return fmt.Errorf("connector emitted an invalid document identity")
 		}
@@ -101,7 +113,18 @@ func runProgress(ctx context.Context, begin func(context.Context, connector.Sour
 			progress(result.Updated+result.Unchanged, 0, false, false)
 		}
 		return err
-	})
+	}
+	var report connector.Report
+	var payload diagnostics.Payload
+	var hasDiagnostics bool
+	if scanner, ok := source.(interface {
+		ScanWithDiagnostics(context.Context, func(connector.Document) error) (connector.Report, diagnostics.Payload, error)
+	}); ok {
+		report, payload, err = scanner.ScanWithDiagnostics(ctx, emit)
+		hasDiagnostics = true
+	} else {
+		report, err = source.Scan(ctx, emit)
+	}
 	result.Seen, result.Skipped = report.Seen, report.Skipped
 	result.SkippedPDF = report.SkippedPDF
 	result.SkippedDOCX = report.SkippedDOCX
@@ -109,14 +132,15 @@ func runProgress(ctx context.Context, begin func(context.Context, connector.Sour
 		progress(result.Updated+result.Unchanged, report.Skipped, err == nil, true)
 	}
 	if err != nil {
-		return result, fmt.Errorf("scan failed; previous index preserved: %w", err)
+		result.Attempt = attemptSummary(result, operation, started, payload, hasDiagnostics, err)
+		return result, &ScanFailure{Code: failureCode(err), Cause: err}
 	}
-	if payload, ok := report.Diagnostics.(diagnostics.Payload); ok {
+	if hasDiagnostics {
 		var idBytes [16]byte
 		if _, err := rand.Read(idBytes[:]); err != nil {
 			return result, err
 		}
-		r := &diagnostics.Report{FormatVersion: diagnostics.FormatVersion, ID: hex.EncodeToString(idBytes[:]), SourceID: result.Source.ID, SourceKind: result.Source.Kind, SnapshotID: hex.EncodeToString(idBytes[:]), Operation: operation, StartedAt: started, Committed: true, Complete: true, IndexedDocuments: int64(result.Updated + result.Unchanged), UpdatedDocuments: int64(result.Updated), UnchangedDocuments: int64(result.Unchanged), ObservedFiles: payload.ObservedFiles, ObservedDirectories: payload.ObservedDirectories, ObservedFilesKnown: payload.ObservedFilesKnown, ObservedDirectoriesKnown: payload.ObservedDirectoriesKnown, Reasons: payload.Reasons, Examples: payload.Examples, ExamplesOmitted: payload.ExamplesOmitted, RedactedSamples: payload.RedactedSamples, Coverage: payload.Coverage}
+		r := &diagnostics.Report{FormatVersion: diagnostics.FormatVersion, ID: hex.EncodeToString(idBytes[:]), SourceID: result.Source.ID, SourceKind: result.Source.Kind, SnapshotID: hex.EncodeToString(idBytes[:]), Operation: operation, StartedAt: started, Committed: true, Complete: true, IndexedDocuments: int64(result.Updated + result.Unchanged), UpdatedDocuments: int64(result.Updated), UnchangedDocuments: int64(result.Unchanged), ObservedFiles: payload.ObservedFiles, ObservedEntries: payload.ObservedEntries, ObservedEntriesKnown: payload.ObservedEntriesKnown, ObservedDirectories: payload.ObservedDirectories, ObservedFilesKnown: payload.ObservedFilesKnown, ObservedDirectoriesKnown: payload.ObservedDirectoriesKnown, Reasons: payload.Reasons, Examples: payload.Examples, ExamplesOmitted: payload.ExamplesOmitted, RedactedSamples: payload.RedactedSamples, Coverage: payload.Coverage}
 		for _, reason := range payload.Reasons {
 			if reason.Unit == "file" {
 				r.SkippedFiles += reason.Count
@@ -124,11 +148,66 @@ func runProgress(ctx context.Context, begin func(context.Context, connector.Sour
 			if reason.Unit == "directory" {
 				r.PrunedDirectories += reason.Count
 			}
+			if reason.Unit == "entry" {
+				r.SkippedEntries += reason.Count
+			}
 		}
 		if setter, ok := scan.(interface{ SetReport(*diagnostics.Report) }); ok {
 			setter.SetReport(r)
+			result.Report = r
 		}
 	}
 	result.Removed, err = scan.Commit(ctx)
+	if err != nil {
+		result.Attempt = attemptSummary(result, operation, started, payload, hasDiagnostics, err)
+		result.Attempt.FailureCode = "publication_failed"
+		result.Report = nil
+		return result, &ScanFailure{Code: "publication_failed", Cause: err}
+	}
 	return result, err
+}
+
+func failureCode(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "deadline_exceeded"
+	}
+	return "scan_failed"
+}
+func attemptSummary(result Result, operation string, started time.Time, p diagnostics.Payload, hasDiagnostics bool, cause error) *diagnostics.Attempt {
+	finished := time.Now().UTC()
+	attempt := &diagnostics.Attempt{SourceID: result.Source.ID, SourceKind: result.Source.Kind, Operation: operation, StartedAt: started, FinishedAt: finished, DurationMillis: finished.Sub(started).Milliseconds(), ProcessedDocuments: int64(result.Updated + result.Unchanged), UpdatedDocuments: int64(result.Updated), UnchangedDocuments: int64(result.Unchanged), Committed: false, Complete: false, FailureCode: failureCode(cause), Coverage: "unsupported"}
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		attempt.AttemptID = hex.EncodeToString(b[:])
+	}
+	if hasDiagnostics {
+		attempt.Overflow = p.Overflow
+		attempt.Coverage = p.Coverage
+		attempt.ObservedFiles = p.ObservedFiles
+		attempt.ObservedEntries = p.ObservedEntries
+		attempt.ObservedEntriesKnown = p.ObservedEntriesKnown
+		attempt.ObservedFilesKnown = p.ObservedFilesKnown
+		attempt.ObservedDirectories = p.ObservedDirectories
+		attempt.ObservedDirectoriesKnown = p.ObservedDirectoriesKnown
+		attempt.Reasons = p.Reasons
+		attempt.Examples = p.Examples
+		attempt.ExamplesOmitted = p.ExamplesOmitted
+		attempt.RedactedSamples = p.RedactedSamples
+		attempt.FailurePath = p.FailurePath
+		for _, r := range p.Reasons {
+			if r.Unit == "file" {
+				attempt.SkippedFiles += r.Count
+			}
+			if r.Unit == "directory" {
+				attempt.PrunedDirectories += r.Count
+			}
+			if r.Unit == "entry" {
+				attempt.SkippedEntries += r.Count
+			}
+		}
+	}
+	return attempt
 }

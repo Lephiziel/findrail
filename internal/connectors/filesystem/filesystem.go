@@ -100,15 +100,24 @@ func NewWithOptions(root string, options Options, excluded ...string) (*Connecto
 func (c *Connector) Source() connector.Source { return c.source }
 
 func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) error) (connector.Report, error) {
+	report, _, err := c.ScanWithDiagnostics(ctx, emit)
+	return report, err
+}
+
+// ScanWithDiagnostics reports bounded private diagnostics without expanding
+// the experimental public connector report contract.
+func (c *Connector) ScanWithDiagnostics(ctx context.Context, emit func(connector.Document) error) (connector.Report, diagnostics.Payload, error) {
 	var report connector.Report
+	emptyDiagnostics := diagnostics.Payload{Coverage: "complete_filesystem"}
 	d := diagnostics.NewBuilder()
-	var observedFiles, observedDirectories int64
+	var observedFiles, observedDirectories, observedEntries int64
+	var failurePath string
 	if err := c.validateRoot(); err != nil {
-		return report, err
+		return report, emptyDiagnostics, err
 	}
 	root, err := os.OpenRoot(c.source.Root)
 	if err != nil {
-		return report, err
+		return report, emptyDiagnostics, err
 	}
 	defer root.Close()
 	err = filepath.WalkDir(c.source.Root, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -116,23 +125,37 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 			return err
 		}
 		if walkErr != nil {
+			if path != c.source.Root {
+				if rel, e := filepath.Rel(c.source.Root, path); e == nil && diagnostics.SafeRelativePath(filepath.ToSlash(rel)) {
+					failurePath = filepath.ToSlash(rel)
+				}
+			}
 			return fmt.Errorf("enumerate source: %w", walkErr)
 		}
 		if path == c.source.Root {
 			return nil
 		}
+		if !diagnostics.Increment(&observedEntries) {
+			return errors.New("diagnostic counter overflow")
+		}
 		if entry.IsDir() {
-			observedDirectories++
-		} else {
-			observedFiles++
+			if !diagnostics.Increment(&observedDirectories) {
+				return errors.New("diagnostic counter overflow")
+			}
+		} else if entry.Type().IsRegular() {
+			if !diagnostics.Increment(&observedFiles) {
+				return errors.New("diagnostic counter overflow")
+			}
 		}
 		if c.isExcluded(path) {
 			report.Skipped++
-			reason, unit := "excluded_path", "file"
+			reason, unit := "excluded_path", "entry"
 			if entry.IsDir() {
 				unit = "directory"
+			} else if entry.Type().IsRegular() {
+				unit = "file"
 			}
-			d.Add(reason, unit, filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), false)
+			d.Add(reason, unit, filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), sensitive(entry.Name()))
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -146,7 +169,7 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 				if ignoredDirs[name] {
 					reason = "dependency_directory"
 				}
-				d.Add(reason, "directory", filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), false)
+				d.Add(reason, "directory", filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), sensitive(name))
 				return filepath.SkipDir
 			}
 			return nil
@@ -156,15 +179,24 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		isDOCX := docxFile && c.maxDOCXBytes > 0
 		if strings.HasPrefix(name, "~$") && strings.EqualFold(filepath.Ext(name), ".docx") {
 			report.Skipped++
-			d.Add("office_lock_file", "file", filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), false)
+			unit := "file"
+			if !entry.Type().IsRegular() {
+				unit = "entry"
+			}
+			d.Add("office_lock_file", unit, filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), sensitive(name))
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 || strings.HasPrefix(name, ".") || sensitive(name) || (!isPDF && !isDOCX && !supported(name)) {
 			report.Skipped++
-			reason, redact := "unsupported_format", false
+			unit := "file"
+			if !entry.Type().IsRegular() {
+				unit = "entry"
+			}
+			reason, redact := "unsupported_format", sensitive(name)
 			switch {
 			case entry.Type()&os.ModeSymlink != 0:
 				reason = "symlink"
+				unit = "entry"
 			case strings.HasPrefix(name, "."):
 				reason = "hidden_entry"
 			case sensitive(name):
@@ -173,7 +205,7 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 			case (docxFile && c.maxDOCXBytes == 0) || (strings.EqualFold(filepath.Ext(name), ".pdf") && c.maxPDFBytes == 0):
 				reason = "format_disabled"
 			}
-			d.Add(reason, "file", filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), redact)
+			d.Add(reason, unit, filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), redact)
 			if docxFile {
 				report.SkippedDOCX++
 			}
@@ -181,6 +213,9 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if rel, e := filepath.Rel(c.source.Root, path); e == nil && diagnostics.SafeRelativePath(filepath.ToSlash(rel)) {
+				failurePath = filepath.ToSlash(rel)
+			}
 			return err
 		}
 		limit := c.maxBytes
@@ -193,10 +228,12 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		if !info.Mode().IsRegular() || info.Size() > limit {
 			report.Skipped++
 			reason := "input_too_large"
+			unit := "file"
 			if !info.Mode().IsRegular() {
 				reason = "special_entry"
+				unit = "entry"
 			}
-			d.Add(reason, "file", filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), false)
+			d.Add(reason, unit, filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), false)
 			if isPDF {
 				report.SkippedPDF++
 			}
@@ -208,15 +245,24 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		}
 		file, err := root.Open(rel)
 		if err != nil {
+			if diagnostics.SafeRelativePath(filepath.ToSlash(rel)) {
+				failurePath = filepath.ToSlash(rel)
+			}
 			return fmt.Errorf("open document %q: %w", rel, err)
 		}
 		openedInfo, statErr := file.Stat()
 		if statErr != nil {
 			file.Close()
+			if diagnostics.SafeRelativePath(filepath.ToSlash(rel)) {
+				failurePath = filepath.ToSlash(rel)
+			}
 			return statErr
 		}
 		if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
 			file.Close()
+			if diagnostics.SafeRelativePath(filepath.ToSlash(rel)) {
+				failurePath = filepath.ToSlash(rel)
+			}
 			return fmt.Errorf("document %q changed during scan; retry", rel)
 		}
 		var body string
@@ -237,6 +283,9 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		}
 		finalInfo, finalStatErr := file.Stat()
 		closeErr := file.Close()
+		if (closeErr != nil || finalStatErr != nil) && diagnostics.SafeRelativePath(filepath.ToSlash(rel)) {
+			failurePath = filepath.ToSlash(rel)
+		}
 		if errors.Is(readErr, text.ErrUnsupported) || errors.Is(readErr, text.ErrTooLarge) || errors.Is(readErr, docxextract.ErrSkip) || errors.Is(readErr, docxextract.ErrLimit) || errors.Is(readErr, docxextract.ErrNoText) {
 			report.Skipped++
 			reason := "extraction_limit"
@@ -248,6 +297,9 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 				}
 			case errors.Is(readErr, text.ErrTooLarge):
 				reason = "input_too_large"
+				if isPDF {
+					reason = "extraction_limit"
+				}
 			case errors.Is(readErr, docxextract.ErrNoText):
 				reason = "no_extractable_text"
 			case errors.Is(readErr, docxextract.ErrSkip):
@@ -263,6 +315,9 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 			return nil
 		}
 		if readErr != nil {
+			if diagnostics.SafeRelativePath(filepath.ToSlash(rel)) {
+				failurePath = filepath.ToSlash(rel)
+			}
 			return fmt.Errorf("extract document %q: %w", rel, readErr)
 		}
 		if closeErr != nil {
@@ -272,6 +327,9 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 			return finalStatErr
 		}
 		if finalInfo.Size() != openedInfo.Size() || !finalInfo.ModTime().Equal(openedInfo.ModTime()) {
+			if diagnostics.SafeRelativePath(filepath.ToSlash(rel)) {
+				failurePath = filepath.ToSlash(rel)
+			}
 			return fmt.Errorf("document %q changed during extraction; retry", rel)
 		}
 		uriPath := filepath.ToSlash(path)
@@ -314,8 +372,11 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 	rs, examples, omitted, redacted := d.Finish()
 	// The filesystem legacy counter includes pruned directories; the detailed
 	// aggregate keeps file and directory decisions in separate units.
-	report.Diagnostics = diagnostics.Payload{ObservedFiles: observedFiles, ObservedDirectories: observedDirectories, ObservedFilesKnown: true, ObservedDirectoriesKnown: true, Reasons: rs, Examples: examples, ExamplesOmitted: omitted, RedactedSamples: redacted, Coverage: "complete_filesystem"}
-	return report, err
+	payload := diagnostics.Payload{Overflow: d.Overflow, ObservedFiles: observedFiles, ObservedEntries: observedEntries, ObservedEntriesKnown: true, ObservedDirectories: observedDirectories, ObservedFilesKnown: true, ObservedDirectoriesKnown: true, Reasons: rs, Examples: examples, ExamplesOmitted: omitted, RedactedSamples: redacted, Coverage: "complete_filesystem", FailurePath: failurePath}
+	if d.Overflow && err == nil {
+		err = errors.New("diagnostic counter overflow")
+	}
+	return report, payload, err
 }
 
 func (c *Connector) isExcluded(path string) bool {

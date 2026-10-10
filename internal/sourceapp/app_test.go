@@ -437,6 +437,46 @@ func TestRunningCancelWaitsForCleanup(t *testing.T) {
 	}
 	if got := await(t, a, job.ID); got.Status != "canceled" {
 		t.Fatalf("terminal cancel: %+v", got)
+	} else if got.Progress.Committed || !got.Progress.Partial || got.Progress.FailureCode != "canceled" || got.Progress.Phase != "done" {
+		t.Fatalf("cancel progress falsely claims publication: %+v", got.Progress)
+	}
+}
+
+func TestFailedRefreshProgressKeepsDurableReportAndHidesFatalPath(t *testing.T) {
+	a, store, _ := openApp(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("committed before fatal extraction"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	added, err := a.AddFolder(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job := await(t, a, added.ID); job.Status != "succeeded" {
+		t.Fatal(job)
+	}
+	before, err := store.SourceReport(context.Background(), added.SourceID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeID := before["report"].(sqlite.ReportSummary).ReportID
+	if err = os.WriteFile(filepath.Join(root, "z-broken.pdf"), []byte("%PDF-invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	refresh, err := a.Refresh(added.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := await(t, a, refresh.ID)
+	if failed.Status != "failed" || failed.ErrorCode != "scan_failed" || failed.Progress.Committed || !failed.Progress.Partial || failed.Progress.FailureCode != "scan_failed" || failed.Progress.ProcessedDocuments != 1 || strings.Contains(failed.Error, "z-broken.pdf") {
+		t.Fatalf("failed attempt diagnostics: %+v", failed)
+	}
+	after, err := store.SourceReport(context.Background(), added.SourceID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after["report"].(sqlite.ReportSummary).ReportID != beforeID {
+		t.Fatal("failed refresh replaced previous committed report")
 	}
 }
 
@@ -524,7 +564,7 @@ func TestRemoveWaitsForSharedWatcherCoordination(t *testing.T) {
 	}
 	if got := await(t, app, added.ID); got.Status != "succeeded" {
 		t.Fatal(got)
-	} else if got.Progress.AttemptID != added.ID || got.Progress.ProcessedDocuments != 1 || got.Progress.Sequence == 0 || got.Progress.Partial {
+	} else if got.Progress.AttemptID != added.ID || got.Progress.ProcessedDocuments != 1 || got.Progress.Sequence == 0 || got.Progress.Partial || !got.Progress.Committed || got.Progress.ReportID == "" {
 		t.Fatalf("final committed progress is not accurate: %+v", got.Progress)
 	}
 	if sources := mustSources(t, store); len(sources) != 1 || sources[0].MaxDOCXBytes != 8<<20 {

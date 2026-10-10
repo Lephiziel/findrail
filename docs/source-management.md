@@ -58,7 +58,10 @@ request credentials, or poll GitHub automatically. **Refresh** is an explicit
 request. Search, preview and citations read only the last committed local
 snapshot and work offline.
 
-An operation shows its queued/running phase and can be canceled. Failure,
+An operation shows its queued/running phase and process-local progress (actual
+processed documents and skipped entries; no percentage) and can be canceled.
+Successful progress names the durable report ID; failed/canceled progress stays
+partial and separate from the last committed card summary. Failure,
 cancellation before publication, or shutdown preserves the previous committed
 snapshot. A refresh for one source is not duplicated while busy. Search keeps
 reading the committed snapshot while preparation is in progress.

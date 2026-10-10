@@ -659,9 +659,9 @@ type ReportSummary struct {
 	ReportID          string               `json:"report_id,omitempty"`
 	Operation         string               `json:"operation,omitempty"`
 	FinishedAt        string               `json:"finished_at,omitempty"`
-	IndexedDocuments  int64                `json:"indexed_documents,omitempty"`
-	SkippedFiles      int64                `json:"skipped_files,omitempty"`
-	PrunedDirectories int64                `json:"pruned_directories,omitempty"`
+	IndexedDocuments  int64                `json:"indexed_documents"`
+	SkippedFiles      int64                `json:"skipped_files"`
+	PrunedDirectories int64                `json:"pruned_directories"`
 	Coverage          string               `json:"coverage,omitempty"`
 	Reasons           []diagnostics.Reason `json:"reasons,omitempty"`
 }
@@ -695,6 +695,32 @@ func (s *Store) SourceReport(ctx context.Context, id string, includePaths bool) 
 		}
 		return result, nil
 	}
+	if !includePaths {
+		var summary ReportSummary
+		var reasonsJSON string
+		err = tx.QueryRowContext(ctx, `SELECT report_id,operation,finished_at,indexed_documents,skipped_files,pruned_directories,coverage,reasons_json FROM indexing_reports WHERE source_id=?`, id).Scan(&summary.ReportID, &summary.Operation, &summary.FinishedAt, &summary.IndexedDocuments, &summary.SkippedFiles, &summary.PrunedDirectories, &summary.Coverage, &reasonsJSON)
+		if errors.Is(err, sql.ErrNoRows) {
+			result["availability"] = "not_yet_available"
+			if err = tx.Commit(); err != nil {
+				return nil, err
+			}
+			return result, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		summary.Available = true
+		if err = json.Unmarshal([]byte(reasonsJSON), &summary.Reasons); err != nil {
+			return nil, err
+		}
+		result["available"] = true
+		result["availability"] = "available"
+		result["report"] = summary
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
 	var raw string
 	err = tx.QueryRowContext(ctx, "SELECT report_json FROM indexing_reports WHERE source_id=?", id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -708,9 +734,6 @@ func (s *Store) SourceReport(ctx context.Context, id string, includePaths bool) 
 	var r diagnostics.Report
 	if err = json.Unmarshal([]byte(raw), &r); err != nil {
 		return nil, err
-	}
-	if !includePaths {
-		r.Examples = nil
 	}
 	result["available"] = true
 	result["availability"] = "available"
@@ -1203,7 +1226,7 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 		token = fmt.Sprintf("%x", b)
 	}
 	sc := &scan{tx: tx, sourceID: result.Source.ID, token: token + fmt.Sprintf("-%d", revision)}
-	report, err := snapshot.Scan(ctx, func(doc connector.Document) error {
+	report, payload, err := snapshot.ScanWithDiagnostics(ctx, func(doc connector.Document) error {
 		changed, e := sc.Upsert(ctx, doc)
 		if e == nil {
 			if changed {
@@ -1216,7 +1239,7 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 	})
 	result.Seen, result.Skipped = report.Seen, report.Skipped
 	if err != nil {
-		return result, GitHubSource{}, fmt.Errorf("scan failed; previous index preserved: %w", err)
+		return result, GitHubSource{}, &ingest.ScanFailure{Code: "scan_failed", Cause: err}
 	}
 	r, err := tx.ExecContext(ctx, "DELETE FROM documents WHERE source_id=? AND scan_token<>?", result.Source.ID, sc.token)
 	if err != nil {
@@ -1236,10 +1259,6 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 		return result, GitHubSource{}, err
 	}
 	reportID := hex.EncodeToString(reportIDBytes[:])
-	payload, ok := report.Diagnostics.(diagnostics.Payload)
-	if !ok {
-		return result, GitHubSource{}, errors.New("GitHub snapshot diagnostics unavailable")
-	}
 	skippedFiles := int64(0)
 	for _, reason := range payload.Reasons {
 		if reason.Unit == "file" {
@@ -1250,7 +1269,12 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 	if startedAt.IsZero() {
 		startedAt = now
 	}
-	dr := &diagnostics.Report{FormatVersion: diagnostics.FormatVersion, ID: reportID, SourceID: result.Source.ID, SourceKind: "github", SnapshotID: reportID, Operation: "github_publication", StartedAt: startedAt, FinishedAt: now, DurationMillis: now.Sub(startedAt).Milliseconds(), Committed: true, Complete: true, IndexedDocuments: int64(result.Updated + result.Unchanged), UpdatedDocuments: int64(result.Updated), UnchangedDocuments: int64(result.Unchanged), RemovedDocuments: int64(result.Removed), ObservedFiles: payload.ObservedFiles, ObservedFilesKnown: payload.ObservedFilesKnown, ObservedDirectories: payload.ObservedDirectories, ObservedDirectoriesKnown: payload.ObservedDirectoriesKnown, SkippedFiles: skippedFiles, Reasons: payload.Reasons, Examples: payload.Examples, ExamplesOmitted: payload.ExamplesOmitted, RedactedSamples: payload.RedactedSamples, Coverage: payload.Coverage}
+	dr := &diagnostics.Report{FormatVersion: diagnostics.FormatVersion, ID: reportID, SourceID: result.Source.ID, SourceKind: "github", SnapshotID: reportID, Operation: "github_publication", StartedAt: startedAt, FinishedAt: now, DurationMillis: now.Sub(startedAt).Milliseconds(), Committed: true, Complete: true, IndexedDocuments: int64(result.Updated + result.Unchanged), UpdatedDocuments: int64(result.Updated), UnchangedDocuments: int64(result.Unchanged), RemovedDocuments: int64(result.Removed), ObservedFiles: payload.ObservedFiles, ObservedEntries: payload.ObservedEntries, ObservedEntriesKnown: payload.ObservedEntriesKnown, ObservedFilesKnown: payload.ObservedFilesKnown, ObservedDirectories: payload.ObservedDirectories, ObservedDirectoriesKnown: payload.ObservedDirectoriesKnown, SkippedFiles: skippedFiles, Reasons: payload.Reasons, Examples: payload.Examples, ExamplesOmitted: payload.ExamplesOmitted, RedactedSamples: payload.RedactedSamples, Coverage: payload.Coverage}
+	for _, reason := range payload.Reasons {
+		if reason.Unit == "entry" {
+			dr.SkippedEntries += reason.Count
+		}
+	}
 	if err = dr.Validate(); err != nil {
 		return result, GitHubSource{}, err
 	}
@@ -1272,6 +1296,7 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 	if err = tx.Commit(); err != nil {
 		return result, GitHubSource{}, err
 	}
+	result.Report = dr
 	g := GitHubSource{SourceID: result.Source.ID, RepositoryID: meta.RepositoryID, Owner: meta.Owner, Repo: meta.Repo, RepositoryURL: meta.RepositoryURL, RefMode: meta.RefMode, RefValue: meta.RefValue, SelectedPath: meta.SelectedPath, MaxBytes: meta.MaxBytes, PolicyVersion: meta.PolicyVersion, SHA: meta.SHA, CommitTime: meta.CommitTime, RegistrationToken: token, Revision: revision}
 	return result, g, nil
 }

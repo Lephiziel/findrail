@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -149,6 +150,40 @@ func TestExclusionReasonTaxonomy(t *testing.T) {
 		if got := exclusionReason(path); got != want {
 			t.Errorf("exclusionReason(%q)=%q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestArchivePreparationFailureRetainsBoundedPartialDiagnostics(t *testing.T) {
+	var raw bytes.Buffer
+	gzipWriter := gzip.NewWriter(&raw)
+	tarWriter := tar.NewWriter(gzipWriter)
+	if err := tarWriter.WriteHeader(&tar.Header{Name: "repo-root", Typeflag: tar.TypeDir, Mode: 0755}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tarWriter.WriteHeader(&tar.Header{Name: "repo-root/picture.png", Typeflag: tar.TypeReg, Mode: 0600, Size: 3}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = tarWriter.Write([]byte("png"))
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	compressed := append(append([]byte(nil), raw.Bytes()...), 0xaa)
+	var updates int
+	_, err := prepareArchiveWithProgress(context.Background(), bytes.NewReader(compressed), Metadata{RepositoryID: 2, Owner: "Example", Repo: "Demo", SHA: strings.Repeat("c", 40), RefMode: "default", MaxBytes: 1024, CommitTime: time.Unix(0, 0)}, func(processed, skipped int, complete, flush bool) {
+		updates++
+		if complete {
+			t.Fatal("failed archive reported complete progress")
+		}
+	})
+	var failure *PreparationFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("expected structured archive failure: %v", err)
+	}
+	if failure.Diagnostics.ObservedFiles != 1 || !failure.Diagnostics.ObservedFilesKnown || len(failure.Diagnostics.Reasons) != 1 || failure.Diagnostics.Reasons[0].Code != "unsupported_format" || len(failure.Diagnostics.Examples) != 1 || failure.Diagnostics.Examples[0].Path != "picture.png" || updates < 2 {
+		t.Fatalf("partial archive diagnostics lost: %+v updates=%d", failure.Diagnostics, updates)
 	}
 }
 func response(status int, body []byte) *http.Response {
