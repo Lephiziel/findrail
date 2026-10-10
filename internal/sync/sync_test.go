@@ -79,6 +79,10 @@ func TestAutomaticLifecycle(t *testing.T) {
 			}
 			put(t, path, "updated evidence")
 			eventually(t, func() bool { return has("updated", 1) && has("initial", 0) })
+			eventually(t, func() bool {
+				status := m.Status()
+				return len(status) == 1 && status[0].Progress.Committed && status[0].Progress.ProcessedDocuments >= 1 && status[0].Progress.ReportID != initialProgress.ReportID
+			})
 			if p := m.Status()[0].Progress; !p.Committed || p.ProcessedDocuments < 1 || p.ReportID == initialProgress.ReportID {
 				t.Fatalf("successful watcher refresh progress/report not updated: %+v", p)
 			}

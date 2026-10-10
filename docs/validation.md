@@ -6,7 +6,7 @@ Local checks on Go 1.27.2 linux/amd64 and Node 22.23.3 passed: full Go unit
 tests and race detector, vet, module verification, CGO-free build, existing
 search/MCP/portable/smoke suites, 23 web tests, and the compiled diagnostics
 smoke. The synthetic diagnostic inventory visited 246 entries (245 files, 243 skipped),
-retained 200 examples, and serialized a 17,090-byte report. A single clean-base
+retained 200 examples, and serialized a 17,088-byte report. A single clean-base
 vs instrumented run took 7.0 vs 7.2 ms; this is a noisy spot check only. PR #23
 includes watcher progress, structured failure attempts, compiled
 failed-refresh/cancel/configure/watcher/archive checks, and stale-report UI
