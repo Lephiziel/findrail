@@ -7,6 +7,9 @@
   does not upload files or invoke a native folder picker.
 - Public GitHub files are downloaded only by explicit `index-github` or
   `refresh-github`; retrieval reads the committed local snapshot.
+- Portable source archives are explicit CLI exports of indexed text and
+  provenance, not original attachments or database backups. They are plaintext
+  and may expose original paths/usernames; no secret-redaction guarantee is made.
 - The index contains extracted text, locations, source names, and timestamps.
 - Runtime local search does not call a hosted model, analytics service, or source API.
 - The database is plaintext, protected by local filesystem permissions rather than encryption.
@@ -19,6 +22,8 @@
   process-memory CSRF capability, Fetch Metadata and strict bounded JSON. The
   capability is not persisted; it does not protect against same-user processes.
 - `forget` removes searchable source data logically. Old disk / WAL / backup bytes may remain.
+- Imported archive sources are frozen, offline SQLite data; removal does not
+  delete exported archive copies or guarantee physical erasure.
 
 ## User controls
 

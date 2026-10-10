@@ -453,6 +453,9 @@ func (a *App) Configure(id string, maxDOCXBytes int64) (Job, error) {
 	if found == nil {
 		return Job{}, errors.New("not_found")
 	}
+	if found.Kind == "archive" {
+		return Job{}, errors.New("archive_snapshot_frozen: imported snapshots cannot be configured")
+	}
 	if found.Kind != "filesystem" {
 		return Job{}, errors.New("filesystem_source_required")
 	}
@@ -544,6 +547,9 @@ func (a *App) Refresh(id string) (Job, error) {
 	}
 	if found == nil {
 		return Job{}, errors.New("not_found")
+	}
+	if found.Kind == "archive" {
+		return Job{}, errors.New("archive_snapshot_frozen: imported snapshots cannot be refreshed")
 	}
 	return a.submit("refresh", id, id, func(ctx context.Context, j *Job) (string, error) {
 		if found.Kind == "github" {

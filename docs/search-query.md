@@ -41,6 +41,11 @@ absolute paths, backslashes, empty interior segments, `.` and `..`; one trailing
 slash is normalized. Title filters allow 128 code points / 512 bytes. Neither
 filter trims user-entered whitespace; `%` and `_` are literal characters.
 
+Frozen `archive` sources use this same search engine, source scope, format/path/title
+filters, preview budget, and PDF page evidence. Search and preview read only the
+destination SQLite snapshot; original paths and URIs remain historical citations
+and are never dereferenced.
+
 ```sh
 findrail search --data-dir INDEX --path-prefix docs --title-contains runbook --json 'retry'
 findrail search --data-dir INDEX --mode advanced --source SOURCE_ID --format pdf 'retry -deprecated'

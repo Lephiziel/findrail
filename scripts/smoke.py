@@ -16,6 +16,11 @@ import urllib.parse
 import urllib.request
 import zipfile
 
+# The smoke journeys only contact loopback Findrail servers. Bypass ambient
+# system/environment proxies so a hosted runner cannot route those test calls
+# outside the machine or reset them before the local server receives them.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+
 
 def pdf_fixture(pages):
     objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'',
@@ -133,14 +138,20 @@ def demo_smoke(binary):
                 urllib.request.urlopen(request, timeout=3)
                 raise AssertionError('demo unexpectedly enabled source mutations')
             except urllib.error.HTTPError as error:
-                assert error.code != 202
+                try:
+                    assert error.code != 202
+                finally:
+                    error.close()
             try:
                 request = urllib.request.Request(base + '/api/v1/sources/example/configure', data=b'{"max_docx_bytes":0}', method='POST',
                                                  headers={'Origin': base, 'Content-Type': 'application/json'})
                 urllib.request.urlopen(request, timeout=3)
                 raise AssertionError('demo unexpectedly exposed Configure')
             except urllib.error.HTTPError as error:
-                assert error.code == 404
+                try:
+                    assert error.code == 404
+                finally:
+                    error.close()
             response = get('/api/v1/search?q=idempotency')
             assert response['total'] == 3, response
             pdf = next(r for r in response['results'] if r['media_type'] == 'application/pdf')
@@ -202,7 +213,10 @@ def source_management_smoke(binary):
                 with urllib.request.urlopen(request, timeout=4) as response:
                     return response.status, json.load(response) if response.status != 204 else None
             except urllib.error.HTTPError as error:
-                return error.code, json.load(error)
+                try:
+                    return error.code, json.load(error)
+                finally:
+                    error.close()
 
         def wait_job(job_id):
             result = {}
@@ -286,7 +300,10 @@ def source_management_smoke(binary):
                 get('/api/v1/documents/' + matches[0]['id'])
                 raise AssertionError('removed preview remained available')
             except urllib.error.HTTPError as error:
-                assert error.code == 404
+                try:
+                    assert error.code == 404
+                finally:
+                    error.close()
             assert original.read_text(encoding='utf-8') == 'management marker citation fixture watcherrefresh'
             assert pdf_original.exists()
             assert docx_original.exists()

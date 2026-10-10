@@ -57,6 +57,12 @@ jobs:
       - name: Compiled MCP smoke (Windows)
         if: runner.os == 'Windows'
         run: python scripts/mcp_smoke.py ./findrail.exe
+      - name: Compiled portable snapshot smoke (Unix)
+        if: runner.os != 'Windows'
+        run: python3 scripts/portable_smoke.py ./findrail
+      - name: Compiled portable snapshot smoke (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/portable_smoke.py ./findrail.exe
   race:
     runs-on: ubuntu-latest
     steps:

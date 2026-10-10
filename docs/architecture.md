@@ -13,6 +13,8 @@ flowchart TD
   APP --> C
   APP --> GH["Bounded GitHub snapshot"]
   GH --> D["SQLite and FTS5"]
+  ARCH["Portable indexed snapshot"] --> PREP["Bounded validation / staging"]
+  PREP --> I
   C --> E["Text, PDF and bounded DOCX extraction"]
   E --> I["Atomic ingestion"]
   I --> D["SQLite and FTS5"]
@@ -99,10 +101,14 @@ or source removal.
 ## Storage
 
 SQLite FTS5 and a CGO-free Go driver keep installation simple. WAL and foreign
-keys are enabled. Schema migrations 1–4 are transactional and embedded in the binary.
+keys are enabled. Schema migrations 1–5 are transactional and embedded in the binary.
 Schema 3 stores GitHub selection/snapshot metadata and stale-update revision guards;
 schema 4 stores per-folder DOCX input limits (legacy default disabled) and source
-registration tokens/revisions for guarded configuration and removal.
+registration tokens/revisions for guarded configuration and removal. Schema 5
+stores immutable archive-source provenance and original content hashes separately
+from imported destination hashes. Archive sources never enter filesystem or
+GitHub discovery; import publishes the source and all searchable content in one
+transaction.
 Unknown newer schemas are rejected. A one-connection writer pool serializes
 updates; four query-only read connections use WAL snapshots, preserving search
 availability during extraction. PDF pages and their FTS entries commit in the

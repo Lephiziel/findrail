@@ -6,9 +6,11 @@ import vm from 'node:vm';
 const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 const script = [...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)][0][1]
   .replace(/^import .*;$/m, '');
+const managementScript = [...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)][1][1]
+  .replace(/^import .*;$/m, '');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-function harness() {
+function harness(sourcePayload = []) {
   const elements = new Map(), handlers = new Map(), timers = new Map();
   let nextTimer = 0, requests = 0, pendingEvidence;
   const pendingSearches = [], searchURLs = [];
@@ -16,7 +18,7 @@ function harness() {
     if (!elements.has(id)) elements.set(id, {
       value: '', textContent: '', hidden: false, disabled: false, open: false,
       addEventListener(type, fn) { handlers.set(`${id}:${type}`, fn); },
-      replaceChildren() { this.value = ''; }, append() {}, contains() { return false; },
+      children: [], replaceChildren() { this.value = ''; this.children = []; }, append(...nodes) { this.children.push(...nodes); }, contains() { return false; },
       showModal() { this.open = true; },
       close() { this.open = false; handlers.get(`${id}:close`)?.(); },
     });
@@ -31,7 +33,10 @@ function harness() {
   const document = {
     hidden: false, getElementById: element,
     addEventListener(type, fn) { handlers.set(`document:${type}`, fn); },
-    createElement: element, createTextNode: text => ({textContent: text}),
+    createElement: tag => ({tag, textContent:'', children:[], dataset:{}, className:'', disabled:false,
+      addEventListener(type,fn){handlers.set(`${tag}:${type}`,fn)}, append(...nodes){this.children.push(...nodes)},
+      replaceChildren(...nodes){this.children=nodes}, setAttribute(){}}),
+    createTextNode: text => ({textContent: text}),
   };
   const context = vm.createContext({window, document, AbortController, URLSearchParams,
     Event,
@@ -46,8 +51,10 @@ function harness() {
       if (url.startsWith('/api/v1/documents/')) return new Promise(resolve => {
         pendingEvidence = data => resolve({ok: true, json: async () => data});
       });
+      if(url.endsWith('/capabilities'))return {ok:true,json:async()=>({management:true})};
+      if(url.endsWith('/session'))return {ok:true,json:async()=>({token:'synthetic-capability'})};
       return {ok: true, json: async () => url.includes('/sync')
-        ? {enabled: true, sources: []} : {sources: []}};
+        ? {enabled: true, sources: []} : {sources: sourcePayload}};
     },
   });
   vm.runInContext(script, context);
@@ -91,6 +98,32 @@ test('source removal invalidates evidence that was fetched before removal', asyn
   assert.equal(h.element('preview').open, false);
   assert.equal(h.element('copy-markdown').disabled, true);
   assert.equal(vm.runInContext('currentEvidence', h.context), null);
+});
+
+test('archive source card identifies frozen provenance and offers no refresh/configure action', async () => {
+  const hostile = '<img src=x onerror=alert(1)>';
+  const h = harness([{id:'archive-1',kind:'archive',name:hostile,documents:1,last_indexed_at:'2026-10-09T12:00:00Z',
+    archive:{origin:{kind:'filesystem',location:hostile},fingerprint:'abc',
+      original_indexed_at:'2026-10-09T11:00:00Z',imported_at:'2026-10-09T12:00:00Z'}}]);
+  await vm.runInContext(`(async()=>{${managementScript};globalThis.__loadSources=loadSources})()`,h.context); await flush(); await flush();
+  const cards=h.element('source-list').children;
+  assert.equal(cards.length,1);
+  const flat=[];const walk=n=>{flat.push(n);for(const c of n.children||[])walk(c)};walk(cards[0]);
+  assert.ok(flat.some(n=>n.textContent==='Archive snapshot'));
+  assert.ok(flat.some(n=>n.textContent===hostile),'hostile name must remain literal text');
+  assert.ok(flat.some(n=>n.textContent.includes('Historical original location: '+hostile)));
+  const labels=flat.filter(n=>n.tag==='button').map(n=>n.textContent);
+  assert.ok(labels.includes('Search this source')&&labels.includes('Remove from index'));
+  assert.ok(!labels.includes('Refresh')&&!labels.includes('Configure'));
+});
+
+test('pending archive preview is invalidated when the archive source is removed', async () => {
+  const h=harness();await flush();
+  const preview=vm.runInContext("preview('archive-doc', 0, 'archive-source')",h.context);await flush();
+  h.notify('source-removed','archive-source');
+  h.resolveEvidence({id:'archive-doc',source_id:'archive-source',title:'snapshot',source_name:'archive',
+    path:'note.md',text:'stale archived text',source_kind:'archive',modified_at:'2026-10-09T00:00:00Z',uri:'file:///old/note.md'});
+  await preview;assert.equal(h.element('preview').open,false);assert.equal(vm.runInContext('currentEvidence',h.context),null);
 });
 
 test('successful source reconfiguration invalidates pending preview evidence', async () => {

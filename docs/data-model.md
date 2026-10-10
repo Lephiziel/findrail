@@ -1,15 +1,16 @@
 # Data model
 
-## Implemented schema 4
+## Implemented schema 5
 
 | Entity | Identity | Stored fields |
 |---|---|---|
-| Source | Hash of canonical filesystem root | Kind, name, root, last success, text / PDF / DOCX input limits, registration token and operation revision |
-| Document | Hash of source ID and relative path | Title, source ID, original URI, path, content, hash, byte size, modification time, scan token, media type, page count |
+| Source | Filesystem root identity, GitHub selection identity, or verified archive fingerprint namespace | Kind, name, active root (empty for archives), last success/import, extraction limits, fresh registration token and revision |
+| Document | Hash of destination source ID and relative path for imported snapshots | Title, source ID, original ID/hash provenance, original URI, path, full indexed content, destination content hash, byte size, modification time, media type, page count |
 | FTS entry | Document row ID | Tokenized title and content, maintained by triggers |
 | PDF page | Document ID + one-based page number | Plain text for the original page |
 | GitHub snapshot | Source ID | Repository identity, ref/path policy, full SHA, commit time, registration token and revision |
 | Page FTS | Page row ID | Page tokens, maintained by triggers |
+| Archive source | Source ID | Original provenance JSON, semantic fingerprint, original successful indexing time, local import time |
 
 Source ownership is currently the OS account running the local application.
 There is no multi-user authorization model in the foundation.
@@ -24,6 +25,10 @@ Migration 3 preserves schema 1/2 documents, FTS and PDF pages and adds GitHub
 metadata with cascade deletion. Migration 2 leaves existing sources text-only until
 explicitly re-indexed. Migration 4 adds DOCX policy with a disabled legacy default,
 plus source registration guards for stale Configure/Remove operations.
+Migration 5 adds cascaded frozen archive provenance and an original-content-hash
+provenance field while retaining a separately computed destination content hash.
+Schema 4 indexes upgrade transactionally; archive metadata is removed with its
+source. No plaintext token or credential fields are introduced.
 See [upgrade instructions](local-alpha.md#upgrade).
 
 ## Future entities

@@ -11,7 +11,7 @@ dates. Status changes require working code and evidence.
 | R03 · Extensions | Versioned connector SDK, examples, conformance harness | Independent contributor creates an adapter from docs | Planned |
 | R04 · Optional semantics | Passage chunking, opt-in embedding backend, hybrid ranking | Better retrieval on labeled corpus without losing exact-match quality | Planned |
 | R05 · Daily access | Desktop launcher, editor integration | Daily use and bounded / scoped AI retrieval demonstrated; local stdio MCP is implemented | In progress |
-| R06 · Public beta | Onboarding, releases, migrations, exports, operational documentation | Upgrade / restore / uninstall journeys and cross-platform QA | Empty-index web onboarding and source management implemented in source builds; release packaging and broader beta gates remain planned |
+| R06 · Public beta | Onboarding, releases, migrations, exports, operational documentation | Upgrade / restore / uninstall journeys and cross-platform QA | CLI portable indexed-text snapshots and isolated imports implemented in source builds; release packaging and broader beta gates remain planned |
 | R07 · Community platform | Connector catalog, governance, optional operated services | Organic contributions and demonstrated demand | Planned |
 
 ## First complete public product

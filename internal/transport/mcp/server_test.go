@@ -3,10 +3,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/Lephiziel/findrail/internal/search"
+	"github.com/Lephiziel/findrail/internal/snapshot"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	"github.com/Lephiziel/findrail/pkg/connector"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,6 +22,63 @@ type fakeBackend struct {
 	search   search.Response
 	e        search.Evidence
 	err      error
+}
+
+func TestImportedArchiveIsReadOnlyMCPSourceWhenExplicitlyAllowed(t *testing.T) {
+	dir := t.TempDir()
+	store, err := sqlite.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	o := snapshot.Origin{ID: "mcp-origin", Kind: "filesystem", Name: "MCP synthetic", Location: "/tmp/mcp", IndexedAt: "2026-10-09T12:00:00Z"}
+	doc := snapshot.Document{ID: "origin-doc", Path: "notes.md", Title: "Notes", URI: "file:///tmp/mcp/notes.md", MediaType: "text/plain", Text: "archive mcp offline marker", ContentHash: strings.Repeat("a", 64), SizeBytes: 27, ModifiedAt: "2026-10-09T11:00:00Z"}
+	data, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: o}, []snapshot.Document{doc}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := snapshot.Inspect(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := store.ImportSnapshot(context.Background(), "MCP archive", archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(store, Config{AllowedSources: []string{id}, Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ct := sdkmcp.NewInMemoryTransports()
+	ss, err := server.server.Connect(context.Background(), st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "archive-test", Version: "test"}, &sdkmcp.ClientOptions{Capabilities: &sdkmcp.ClientCapabilities{}})
+	cs, err := client.Connect(context.Background(), ct, &sdkmcp.ClientSessionOptions{ProtocolVersion: supportedProtocolVersions[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	defer ss.Close()
+	list, err := cs.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: "findrail_list_sources", Arguments: map[string]any{}})
+	if err != nil || list.IsError {
+		t.Fatalf("list archive: %v %+v", err, list)
+	}
+	var sources listSourcesOutput
+	decodeStructured(t, list.StructuredContent, &sources)
+	if len(sources.Sources) != 1 || sources.Sources[0].Kind != "archive" {
+		t.Fatalf("MCP archive inventory: %+v", sources)
+	}
+	found, err := cs.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: "findrail_search", Arguments: map[string]any{"query": "offline marker", "source_id": id}})
+	if err != nil || found.IsError {
+		t.Fatalf("search archive: %v %+v", err, found)
+	}
+	var results searchOutput
+	decodeStructured(t, found.StructuredContent, &results)
+	if results.Returned != 1 || results.Results[0].SourceKind != "archive" {
+		t.Fatalf("MCP archive search: %+v", results)
+	}
 }
 
 func (f *fakeBackend) Search(context.Context, search.Request) (search.Response, error) {

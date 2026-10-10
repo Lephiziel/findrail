@@ -57,6 +57,9 @@ its new ID as another `--source` argument. The allowlist is fixed when the MCP
 process starts. Each search and evidence request must name one allowed source;
 there is no all-sources search, file reader, shell tool, or write tool.
 
+An imported archive can be allowed by explicitly adding its destination source ID
+to `--source`. Import never changes an existing MCP allowlist automatically.
+
 ## Tools and limits
 
 The server exposes exactly three tools:
@@ -83,7 +86,7 @@ and its compatibility text representation. Evidence reports `truncated` and
 
 The result is an indexed snapshot, not a fresh read of the original file.
 Findrail does not claim that the snapshot is current when the original changes.
-The server opens an existing schema-3 index read-only and does not migrate,
+The server opens an existing schema-5 index read-only and does not migrate,
 create, or modify it.
 
 ## Updating and troubleshooting
