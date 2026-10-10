@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,9 +15,16 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "catalog demo: synthetic scan failed")
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		fatal(err)
+		return errors.New("cannot bind synthetic loopback fixture")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/collections/demo/resources", func(w http.ResponseWriter, r *http.Request) {
@@ -24,12 +32,19 @@ func main() {
 	})
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
 	go func() { _ = srv.Serve(listener) }()
-	defer srv.Shutdown(context.Background())
-	adapter, err := catalog.New(catalog.Config{Origin: "http://" + listener.Addr().String(), Collection: "demo", AllowLoopbackHTTP: true})
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+		_ = listener.Close()
+	}()
+	adapter, err := catalog.New(catalog.Config{Origin: "http://" + listener.Addr().String(), Collection: "demo", AllowLoopbackHTTP: true, RequestTimeout: 5 * time.Second})
 	if err != nil {
-		fatal(err)
+		return errors.New("cannot configure synthetic adapter")
 	}
-	fmt.Fprintf(os.Stdout, "source %s (%s)\n", adapter.Source().ID, adapter.Source().Kind)
+	if _, err = fmt.Fprintf(os.Stdout, "source %s (%s)\n", adapter.Source().ID, adapter.Source().Kind); err != nil {
+		return errors.New("cannot write synthetic source header")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	report, err := adapter.Scan(ctx, func(d connector.Document) error {
@@ -37,8 +52,10 @@ func main() {
 		return json.NewEncoder(os.Stdout).Encode(out)
 	})
 	if err != nil {
-		fatal(err)
+		return errors.New("synthetic inventory failed")
 	}
-	fmt.Fprintf(os.Stdout, "complete report: seen=%d skipped=%d\n", report.Seen, report.Skipped)
+	if _, err = fmt.Fprintf(os.Stdout, "complete report: seen=%d skipped=%d\n", report.Seen, report.Skipped); err != nil {
+		return errors.New("cannot write synthetic completion")
+	}
+	return nil
 }
-func fatal(err error) { fmt.Fprintln(os.Stderr, "catalog demo:", err); os.Exit(1) }

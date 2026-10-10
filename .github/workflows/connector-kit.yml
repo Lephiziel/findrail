@@ -9,6 +9,8 @@ on:
       - 'docs/connector-conformance.md'
       - 'docs/connectors.md'
       - 'CONTRIBUTING.md'
+      - 'go.mod'
+      - 'go.sum'
       - '.github/workflows/connector-kit.yml'
 permissions:
   contents: read

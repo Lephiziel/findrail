@@ -24,7 +24,7 @@ const pageLimit = 1 << 20
 type Config struct {
 	Origin, Collection string
 	AllowLoopbackHTTP  bool
-	Client             *http.Client
+	RequestTimeout     time.Duration
 }
 type Connector struct {
 	source     connector.Source
@@ -32,6 +32,13 @@ type Connector struct {
 	collection string
 	client     *http.Client
 }
+
+// UnavailableError is a safe example failure for access-denied responses.
+// It intentionally excludes remote response bodies and configured URLs.
+type UnavailableError struct{ Status int }
+
+func (e *UnavailableError) Error() string { return "catalogue is unavailable or access was denied" }
+
 type wirePage struct {
 	Collection string     `json:"collection"`
 	Snapshot   string     `json:"snapshot"`
@@ -39,25 +46,77 @@ type wirePage struct {
 	Complete   bool       `json:"complete"`
 	Items      []wireItem `json:"items"`
 }
+
+func (p *wirePage) UnmarshalJSON(data []byte) error {
+	type alias wirePage
+	var v alias
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, required := range []string{"collection", "snapshot", "complete", "items"} {
+		if !hasField(fields, required) {
+			return errors.New("missing required page field")
+		}
+	}
+	*p = wirePage(v)
+	if p.Items == nil {
+		return errors.New("items must be an array")
+	}
+	return nil
+}
+
 type wireItem struct{ ID, Title, Path, URI, Body, Modified string }
+
+func (i *wireItem) UnmarshalJSON(data []byte) error {
+	type alias wireItem
+	var v alias
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, required := range []string{"id", "title", "path", "uri", "body", "modified"} {
+		if !hasField(fields, required) {
+			return errors.New("missing required resource field")
+		}
+	}
+	*i = wireItem(v)
+	return nil
+}
+func hasField(fields map[string]json.RawMessage, want string) bool {
+	for key := range fields {
+		if strings.EqualFold(key, want) {
+			return true
+		}
+	}
+	return false
+}
 
 func New(cfg Config) (*Connector, error) {
 	u, e := url.Parse(cfg.Origin)
-	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
+	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(cfg.Origin, "#") || strings.Contains(cfg.Origin, "?") || u.Path != "" {
 		return nil, errors.New("invalid catalogue origin")
 	}
 	if u.Scheme != "https" && !(cfg.AllowLoopbackHTTP && u.Scheme == "http" && isLoopback(u.Hostname())) {
 		return nil, errors.New("catalogue origin must use HTTPS (loopback HTTP requires explicit opt-in)")
 	}
-	if cfg.Collection == "" || len(cfg.Collection) > 128 {
+	if cfg.Collection == "" || len(cfg.Collection) > 128 || !utf8.ValidString(cfg.Collection) || cfg.Collection == "." || cfg.Collection == ".." || strings.ContainsAny(cfg.Collection, "/\\?#") {
 		return nil, errors.New("invalid collection")
 	}
-	timeout := 5 * time.Second
-	if cfg.Client != nil {
-		timeout = cfg.Client.Timeout
-		if timeout <= 0 || timeout > 5*time.Second {
-			return nil, errors.New("client timeout must be at most five seconds")
+	for _, r := range cfg.Collection {
+		if r == 0 || r < 0x20 || r == 0x7f {
+			return nil, errors.New("invalid collection")
 		}
+	}
+	timeout := cfg.RequestTimeout
+	if timeout <= 0 || timeout > 5*time.Second {
+		return nil, errors.New("explicit request timeout must be at most five seconds")
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext, TLSHandshakeTimeout: timeout, ResponseHeaderTimeout: timeout, IdleConnTimeout: 30 * time.Second}
 	cl := &http.Client{Timeout: timeout, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -89,15 +148,24 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		}
 		res, err := c.client.Do(req)
 		if err != nil {
-			return report, err
+			return report, &requestFailure{cause: err}
 		}
 		body, readErr := io.ReadAll(io.LimitReader(res.Body, pageLimit+1))
 		closeErr := res.Body.Close()
 		if readErr != nil {
+			if ctx.Err() != nil {
+				return report, ctx.Err()
+			}
 			return report, errors.New("catalogue response read failed")
 		}
 		if closeErr != nil {
+			if ctx.Err() != nil {
+				return report, ctx.Err()
+			}
 			return report, errors.New("catalogue response close failed")
+		}
+		if err := ctx.Err(); err != nil {
+			return report, err
 		}
 		if len(body) > pageLimit {
 			return report, errors.New("catalogue page exceeds response limit")
@@ -106,8 +174,11 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		if responseTotal > 4<<20 {
 			return report, errors.New("catalogue scan response budget exceeded")
 		}
+		if !utf8.Valid(body) {
+			return report, errors.New("catalogue response is not valid UTF-8")
+		}
 		if res.StatusCode == 401 || res.StatusCode == 403 {
-			return report, errors.New("catalogue access unavailable")
+			return report, &UnavailableError{Status: res.StatusCode}
 		}
 		if res.StatusCode != 200 {
 			return report, fmt.Errorf("catalogue request failed with status %d", res.StatusCode)
@@ -128,12 +199,24 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 			return report, errors.New("catalogue snapshot changed")
 		}
 		snapshot = p.Snapshot
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
 		for _, item := range p.Items {
 			if err := ctx.Err(); err != nil {
 				return report, err
 			}
-			if item.ID == "" || ids[item.ID] || item.Title == "" || item.Path == "" || strings.HasPrefix(item.Path, "/") || strings.Contains(item.Path, "\\") || !utf8.ValidString(item.ID+item.Title+item.Path+item.URI+item.Body+item.Modified) || len(item.Body) > 256<<10 {
+			metadataBytes := len(item.ID) + len(item.Title) + len(item.Path) + len(item.URI) + len(item.Modified)
+			if item.ID == "" || ids[item.ID] || item.Title == "" || item.Path == "" || strings.HasPrefix(item.Path, "/") || strings.Contains(item.Path, "\\") || !utf8.ValidString(item.ID+item.Title+item.Path+item.URI+item.Body+item.Modified) || len(item.Body) > 256<<10 || metadataBytes > 16<<10 {
 				return report, errors.New("invalid catalogue resource")
+			}
+			for _, r := range item.ID + item.Title + item.Path + item.Modified {
+				if r == 0 || r < 0x20 || r == 0x7f {
+					return report, errors.New("invalid catalogue metadata")
+				}
+			}
+			if len(item.Path) >= 2 && ((item.Path[0] >= 'a' && item.Path[0] <= 'z') || (item.Path[0] >= 'A' && item.Path[0] <= 'Z')) && item.Path[1] == ':' {
+				return report, errors.New("catalogue path must be relative")
 			}
 			for _, part := range strings.Split(item.Path, "/") {
 				if part == "." || part == ".." || part == "" {
@@ -168,6 +251,9 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 			if p.Next != "" {
 				return report, errors.New("complete page has next cursor")
 			}
+			if err := ctx.Err(); err != nil {
+				return report, err
+			}
 			return report, nil
 		}
 		if p.Next == "" || len(p.Next) > 256 || strings.ContainsAny(p.Next, "/?#\\") || cursors[p.Next] {
@@ -178,3 +264,8 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 	}
 	return report, errors.New("catalogue page limit exceeded")
 }
+
+type requestFailure struct{ cause error }
+
+func (e *requestFailure) Error() string { return "catalogue request failed" }
+func (e *requestFailure) Unwrap() error { return e.cause }
