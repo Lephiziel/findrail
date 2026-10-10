@@ -56,4 +56,5 @@ type Report struct {
 	Skipped     int `json:"skipped"`
 	SkippedPDF  int `json:"skipped_pdf,omitempty"`
 	SkippedDOCX int `json:"skipped_docx,omitempty"`
+	Diagnostics any `json:"-"`
 }

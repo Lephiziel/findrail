@@ -32,6 +32,7 @@ Usage:
   findrail demo [--addr 127.0.0.1:7766] [--no-open]
   findrail search [--data-dir DIR] [--limit N] [--source ID] [--mode MODE] [--format FORMAT] [--path-prefix PATH] [--title-contains TEXT] [--json] QUERY
   findrail sources [--data-dir DIR] [--json]
+  findrail source-report --data-dir DIR --source SOURCE_ID [--json] [--show-paths]
   findrail export-source --data-dir DIR --source ID --output FILE [--timeout 2m] [--json]
   findrail inspect-export [--show-paths] [--json] FILE
   findrail import-source --data-dir DIR --name NAME [--timeout 2m] [--json] FILE
@@ -62,6 +63,9 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	}
 	if args[0] == "doctor" {
 		return runDoctor(ctx, args[1:], out, stderr, version)
+	}
+	if args[0] == "source-report" {
+		return runSourceReport(ctx, args[1:], out, stderr)
 	}
 	if args[0] == "export-source" || args[0] == "inspect-export" || args[0] == "import-source" {
 		return runSnapshotCommand(ctx, args[0], args[1:], out, version)

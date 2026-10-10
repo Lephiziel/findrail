@@ -143,6 +143,14 @@ func TestNormalizePathRejectsAbsoluteBeforeTrimming(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestExclusionReasonTaxonomy(t *testing.T) {
+	for path, want := range map[string]string{".private/file.md": "hidden_entry", "vendor/file.go": "dependency_directory", "docs/secret-notes.md": "sensitive_name", "docs/.private/secret.md": "hidden_entry"} {
+		if got := exclusionReason(path); got != want {
+			t.Errorf("exclusionReason(%q)=%q, want %q", path, got, want)
+		}
+	}
+}
 func response(status int, body []byte) *http.Response {
 	return &http.Response{StatusCode: status, Status: http.StatusText(status), Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body))}
 }

@@ -63,6 +63,12 @@ jobs:
       - name: Compiled portable snapshot smoke (Windows)
         if: runner.os == 'Windows'
         run: python scripts/portable_smoke.py ./findrail.exe
+      - name: Compiled indexing diagnostics smoke (Unix)
+        if: runner.os != 'Windows'
+        run: python3 scripts/diagnostics_smoke.py ./findrail
+      - name: Compiled indexing diagnostics smoke (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/diagnostics_smoke.py ./findrail.exe
   race:
     runs-on: ubuntu-latest
     steps:

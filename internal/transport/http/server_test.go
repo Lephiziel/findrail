@@ -101,6 +101,47 @@ func TestLocalSearchAPIAndBrowserBoundary(t *testing.T) {
 	}
 }
 
+func TestSourceReportHTTPAvailabilityAndPathOptIn(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	root := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, "report-private-name.png"), []byte("synthetic"), 0600)
+	conn, err := filesystem.New(root, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ingest.Run(ctx, store, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := transport.Handler(store)
+	request := func(path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", path, nil)
+		r.Host = "127.0.0.1:7766"
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	defaultResponse := request("/api/v1/sources/" + result.Source.ID + "/report")
+	if defaultResponse.Code != 200 || strings.Contains(defaultResponse.Body.String(), "report-private-name.png") {
+		t.Fatalf("default report response leaked path: %d %s", defaultResponse.Code, defaultResponse.Body.String())
+	}
+	details := request("/api/v1/sources/" + result.Source.ID + "/report?include_paths=true")
+	if details.Code != 200 || !strings.Contains(details.Body.String(), "report-private-name.png") {
+		t.Fatalf("details report response: %d %s", details.Code, details.Body.String())
+	}
+	if got := request("/api/v1/sources/" + result.Source.ID + "/report?include_paths=true&include_paths=false"); got.Code != 400 {
+		t.Fatalf("duplicate include_paths status=%d", got.Code)
+	}
+	if got := request("/api/v1/sources/missing/report"); got.Code != 404 {
+		t.Fatalf("missing source status=%d", got.Code)
+	}
+}
+
 func TestManagementRequiresSameOriginCapabilityAndStrictJSON(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

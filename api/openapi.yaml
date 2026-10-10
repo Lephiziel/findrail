@@ -106,6 +106,21 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Unavailable'
+  /api/v1/sources/{id}/report:
+    get:
+      operationId: getSourceIndexingReport
+      summary: Read the latest committed source indexing report without triggering a scan
+      parameters:
+      - {$ref: '#/components/parameters/SourceID'}
+      - name: include_paths
+        in: query
+        description: Explicitly include at most 200 safe relative-path examples (at most 64 KiB serialized report).
+        schema: {type: boolean, default: false}
+      responses:
+        '200': {description: Committed report, or explicit unavailable/frozen-origin status}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {description: Source does not exist}
+        '500': {$ref: '#/components/responses/Unavailable'}
     post:
       operationId: addSource
       summary: Queue an explicitly selected folder or public GitHub source (start only)
@@ -424,7 +439,7 @@ components:
           type: string
         kind:
           type: string
-          enum: [filesystem, github]
+          enum: [filesystem, github, archive]
         name:
           type: string
         root:
@@ -455,6 +470,31 @@ components:
             selected_path: {type: string}
             sha: {type: string, pattern: '^[0-9a-f]{40}$'}
             last_error: {type: string, maxLength: 512}
+        indexing_report:
+          $ref: '#/components/schemas/IndexingReportSummary'
+    IndexingReportSummary:
+      type: object
+      required: [available]
+      properties:
+        available: {type: boolean}
+        availability: {type: string, enum: [not_yet_available, frozen_origin_report_not_in_portable_v1]}
+        report_id: {type: string}
+        operation: {type: string, enum: [initial_index, refresh, configure, github_publication]}
+        finished_at: {type: string, format: date-time}
+        indexed_documents: {type: integer, minimum: 0}
+        skipped_files: {type: integer, minimum: 0}
+        pruned_directories: {type: integer, minimum: 0}
+        coverage: {type: string}
+        reasons:
+          type: array
+          maxItems: 15
+          items:
+            type: object
+            required: [code, count, unit]
+            properties:
+              code: {type: string}
+              count: {type: integer, minimum: 0}
+              unit: {type: string, enum: [file, directory, entry]}
     Evidence:
       type: object
       required:

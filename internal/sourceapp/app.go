@@ -53,6 +53,16 @@ type Job struct {
 	Result    string    `json:"result,omitempty"`
 	ErrorCode string    `json:"error_code,omitempty"`
 	Error     string    `json:"error,omitempty"`
+	Progress  Progress  `json:"progress"`
+}
+type Progress struct {
+	AttemptID          string `json:"attempt_id"`
+	Sequence           uint64 `json:"sequence"`
+	Phase              string `json:"phase"`
+	ProcessedDocuments int    `json:"processed_documents"`
+	SkippedEntries     int    `json:"skipped_entries"`
+	ElapsedMillis      int64  `json:"elapsed_millis"`
+	Partial            bool   `json:"partial"`
 }
 type work struct {
 	job      *Job
@@ -123,6 +133,7 @@ func (a *App) newWorkLocked(kind, target, sourceID string, run func(context.Cont
 	}
 	now := time.Now().UTC()
 	job := &Job{ID: hex.EncodeToString(b[:]), Type: kind, Target: target, SourceID: sourceID, Status: "queued", Phase: "validating", CreatedAt: now, UpdatedAt: now}
+	job.Progress = Progress{AttemptID: job.ID, Phase: "validating", Partial: true}
 	ctx, cancel := context.WithTimeout(a.root, jobDeadline)
 	w := &work{job: job, run: run, ctx: ctx, cancel: cancel, finished: make(chan struct{})}
 	a.jobs = append(a.jobs, job)
@@ -154,10 +165,51 @@ func (a *App) pruneLocked() {
 func terminal(s string) bool { return s == "succeeded" || s == "failed" || s == "canceled" }
 func (a *App) phase(j *Job, phase string) {
 	a.mu.Lock()
+	if a.byID[j.ID] == nil || terminal(j.Status) {
+		a.mu.Unlock()
+		return
+	}
 	j.Phase = phase
 	j.UpdatedAt = time.Now().UTC()
+	a.bumpProgressLocked(j, phase, j.Progress.ProcessedDocuments, j.Progress.SkippedEntries, false)
 	a.signalLocked()
 	a.mu.Unlock()
+}
+func (a *App) progress(j *Job, processed, skipped int, flush, committed bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	w := a.byID[j.ID]
+	if w == nil || w.job != j || terminal(j.Status) {
+		return
+	}
+	now := time.Now().UTC()
+	if !flush && now.Sub(j.UpdatedAt) < 200*time.Millisecond {
+		return
+	}
+	if processed < j.Progress.ProcessedDocuments {
+		processed = j.Progress.ProcessedDocuments
+	}
+	if skipped < j.Progress.SkippedEntries {
+		skipped = j.Progress.SkippedEntries
+	}
+	a.bumpProgressLocked(j, j.Phase, processed, skipped, committed)
+	j.UpdatedAt = now
+	a.signalLocked()
+}
+func (a *App) scanProgress(j *Job, processed, skipped int, complete, flush bool) {
+	if complete {
+		a.phase(j, "publishing")
+	}
+	a.progress(j, processed, skipped, flush, false)
+}
+func (a *App) bumpProgressLocked(j *Job, phase string, processed, skipped int, final bool) {
+	j.Progress.AttemptID = j.ID
+	j.Progress.Sequence++
+	j.Progress.Phase = phase
+	j.Progress.ProcessedDocuments = processed
+	j.Progress.SkippedEntries = skipped
+	j.Progress.ElapsedMillis = time.Since(j.CreatedAt).Milliseconds()
+	j.Progress.Partial = !final
 }
 func (a *App) setSourceTarget(j *Job, id string) error {
 	a.mu.Lock()
@@ -251,6 +303,9 @@ func (a *App) worker() {
 				result, err = w.run(ctx, w.job)
 			}
 			cancel()
+			if err == nil {
+				a.progress(w.job, w.job.Progress.ProcessedDocuments, w.job.Progress.SkippedEntries, true, true)
+			}
 			a.mu.Lock()
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
@@ -423,7 +478,9 @@ func (a *App) AddFolderWithDOCX(path string, maxDOCXBytes int64) (Job, error) {
 		if e != nil {
 			return "", e
 		}
-		r, e := ingest.Run(ctx, a.store, c)
+		r, e := ingest.RunWithProgress(ctx, a.store, c, func(processed, skipped int, complete, flush bool) {
+			a.scanProgress(j, processed, skipped, complete, flush)
+		})
 		if e != nil {
 			return "", e
 		}
@@ -473,7 +530,9 @@ func (a *App) Configure(id string, maxDOCXBytes int64) (Job, error) {
 		if e != nil {
 			return "", e
 		}
-		r, e := ingest.Configure(ctx, a.store, c, token, revision, previousLimit)
+		r, e := ingest.ConfigureWithProgress(ctx, a.store, c, token, revision, previousLimit, func(processed, skipped int, complete, flush bool) {
+			a.scanProgress(j, processed, skipped, complete, flush)
+		})
 		if e != nil {
 			return "", e
 		}
@@ -600,7 +659,9 @@ func (a *App) Refresh(id string) (Job, error) {
 		if e != nil {
 			return "", e
 		}
-		r, e := ingest.Refresh(ctx, a.store, c)
+		r, e := ingest.RefreshWithProgress(ctx, a.store, c, func(processed, skipped int, complete, flush bool) {
+			a.scanProgress(j, processed, skipped, complete, flush)
+		})
 		if e != nil {
 			return "", e
 		}

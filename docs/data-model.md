@@ -1,6 +1,6 @@
 # Data model
 
-## Implemented schema 5
+## Implemented schema 6
 
 | Entity | Identity | Stored fields |
 |---|---|---|
@@ -11,6 +11,7 @@
 | GitHub snapshot | Source ID | Repository identity, ref/path policy, full SHA, commit time, registration token and revision |
 | Page FTS | Page row ID | Page tokens, maintained by triggers |
 | Archive source | Source ID | Original provenance JSON, semantic fingerprint, original successful indexing time, local import time |
+| Indexing report | Source ID (one current report) | Bounded committed report JSON, unique report/snapshot IDs and commit time; cascades on source removal |
 
 Source ownership is currently the OS account running the local application.
 There is no multi-user authorization model in the foundation.
@@ -29,6 +30,8 @@ Migration 5 adds cascaded frozen archive provenance and an original-content-hash
 provenance field while retaining a separately computed destination content hash.
 Schema 4 indexes upgrade transactionally; archive metadata is removed with its
 source. No plaintext token or credential fields are introduced.
+Migration 6 adds the bounded last-successful indexing report. It does not fabricate
+reports for existing sources or change portable snapshot v1.
 See [upgrade instructions](local-alpha.md#upgrade).
 
 ## Future entities

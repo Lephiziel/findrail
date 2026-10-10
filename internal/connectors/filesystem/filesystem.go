@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Lephiziel/findrail/internal/diagnostics"
 	docxextract "github.com/Lephiziel/findrail/internal/extract/docx"
 	"github.com/Lephiziel/findrail/internal/extract/text"
 	"github.com/Lephiziel/findrail/pkg/connector"
@@ -100,6 +101,8 @@ func (c *Connector) Source() connector.Source { return c.source }
 
 func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) error) (connector.Report, error) {
 	var report connector.Report
+	d := diagnostics.NewBuilder()
+	var observedFiles, observedDirectories int64
 	if err := c.validateRoot(); err != nil {
 		return report, err
 	}
@@ -118,8 +121,18 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		if path == c.source.Root {
 			return nil
 		}
+		if entry.IsDir() {
+			observedDirectories++
+		} else {
+			observedFiles++
+		}
 		if c.isExcluded(path) {
 			report.Skipped++
+			reason, unit := "excluded_path", "file"
+			if entry.IsDir() {
+				unit = "directory"
+			}
+			d.Add(reason, unit, filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), false)
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -129,6 +142,11 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		if entry.IsDir() {
 			if strings.HasPrefix(name, ".") || ignoredDirs[name] {
 				report.Skipped++
+				reason := "hidden_entry"
+				if ignoredDirs[name] {
+					reason = "dependency_directory"
+				}
+				d.Add(reason, "directory", filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), false)
 				return filepath.SkipDir
 			}
 			return nil
@@ -138,10 +156,24 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		isDOCX := docxFile && c.maxDOCXBytes > 0
 		if strings.HasPrefix(name, "~$") && strings.EqualFold(filepath.Ext(name), ".docx") {
 			report.Skipped++
+			d.Add("office_lock_file", "file", filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), false)
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 || strings.HasPrefix(name, ".") || sensitive(name) || (!isPDF && !isDOCX && !supported(name)) {
 			report.Skipped++
+			reason, redact := "unsupported_format", false
+			switch {
+			case entry.Type()&os.ModeSymlink != 0:
+				reason = "symlink"
+			case strings.HasPrefix(name, "."):
+				reason = "hidden_entry"
+			case sensitive(name):
+				reason = "sensitive_name"
+				redact = true
+			case (docxFile && c.maxDOCXBytes == 0) || (strings.EqualFold(filepath.Ext(name), ".pdf") && c.maxPDFBytes == 0):
+				reason = "format_disabled"
+			}
+			d.Add(reason, "file", filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), redact)
 			if docxFile {
 				report.SkippedDOCX++
 			}
@@ -160,6 +192,11 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		}
 		if !info.Mode().IsRegular() || info.Size() > limit {
 			report.Skipped++
+			reason := "input_too_large"
+			if !info.Mode().IsRegular() {
+				reason = "special_entry"
+			}
+			d.Add(reason, "file", filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), false)
 			if isPDF {
 				report.SkippedPDF++
 			}
@@ -202,6 +239,21 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		closeErr := file.Close()
 		if errors.Is(readErr, text.ErrUnsupported) || errors.Is(readErr, text.ErrTooLarge) || errors.Is(readErr, docxextract.ErrSkip) || errors.Is(readErr, docxextract.ErrLimit) || errors.Is(readErr, docxextract.ErrNoText) {
 			report.Skipped++
+			reason := "extraction_limit"
+			switch {
+			case errors.Is(readErr, text.ErrUnsupported):
+				reason = "binary_or_non_utf8"
+				if isPDF {
+					reason = "no_extractable_text"
+				}
+			case errors.Is(readErr, text.ErrTooLarge):
+				reason = "input_too_large"
+			case errors.Is(readErr, docxextract.ErrNoText):
+				reason = "no_extractable_text"
+			case errors.Is(readErr, docxextract.ErrSkip):
+				reason = "unsupported_docx"
+			}
+			d.Add(reason, "file", filepath.ToSlash(strings.TrimPrefix(path, c.source.Root+string(filepath.Separator))), false)
 			if isPDF {
 				report.SkippedPDF++
 			}
@@ -259,6 +311,10 @@ func (c *Connector) Scan(ctx context.Context, emit func(connector.Document) erro
 		report.Seen++
 		return nil
 	})
+	rs, examples, omitted, redacted := d.Finish()
+	// The filesystem legacy counter includes pruned directories; the detailed
+	// aggregate keeps file and directory decisions in separate units.
+	report.Diagnostics = diagnostics.Payload{ObservedFiles: observedFiles, ObservedDirectories: observedDirectories, ObservedFilesKnown: true, ObservedDirectoriesKnown: true, Reasons: rs, Examples: examples, ExamplesOmitted: omitted, RedactedSamples: redacted, Coverage: "complete_filesystem"}
 	return report, err
 }
 

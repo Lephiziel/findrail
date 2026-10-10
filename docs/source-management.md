@@ -35,6 +35,10 @@ Findrail's perspective. Adding the same canonical folder again reports that it
 already exists; use **Refresh** to update it. Watch notifications and periodic
 reconciliation continue through the existing manager.
 
+Source reports show the last committed scan diagnostics. See
+[indexing diagnostics](indexing-diagnostics.md) for explicit path details,
+coverage limits, archive availability and troubleshooting.
+
 Filesystem source cards offer **Configure** for the DOCX enabled/input-limit
 policy. Applying the change queues a bounded re-index. The new policy and full
 inventory commit in one SQLite transaction; failure or cancellation preserves

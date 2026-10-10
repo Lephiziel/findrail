@@ -524,6 +524,8 @@ func TestRemoveWaitsForSharedWatcherCoordination(t *testing.T) {
 	}
 	if got := await(t, app, added.ID); got.Status != "succeeded" {
 		t.Fatal(got)
+	} else if got.Progress.AttemptID != added.ID || got.Progress.ProcessedDocuments != 1 || got.Progress.Sequence == 0 || got.Progress.Partial {
+		t.Fatalf("final committed progress is not accurate: %+v", got.Progress)
 	}
 	if sources := mustSources(t, store); len(sources) != 1 || sources[0].MaxDOCXBytes != 8<<20 {
 		t.Fatalf("new folder DOCX default not saved: %+v", sources)

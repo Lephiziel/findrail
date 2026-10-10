@@ -143,6 +143,31 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"sources": sources})
 	})
+	mux.HandleFunc("GET /api/v1/sources/{id}/report", func(w http.ResponseWriter, r *http.Request) {
+		v := r.URL.Query()["include_paths"]
+		if len(v) > 1 || (len(v) == 1 && v[0] != "true" && v[0] != "false") {
+			writeError(w, 400, "include_paths must be true or false")
+			return
+		}
+		include := len(v) == 1 && v[0] == "true"
+		reader, ok := backend.(interface {
+			SourceReport(context.Context, string, bool) (map[string]any, error)
+		})
+		if !ok {
+			writeError(w, 500, "source report unavailable")
+			return
+		}
+		result, err := reader.SourceReport(r.Context(), r.PathValue("id"), include)
+		if errors.Is(err, sqlite.ErrSourceNotFound) {
+			writeError(w, 404, "source not found")
+			return
+		}
+		if err != nil {
+			writeError(w, 500, "source report unavailable")
+			return
+		}
+		writeJSON(w, 200, result)
+	})
 	mux.HandleFunc("GET /api/v1/documents/{id}", func(w http.ResponseWriter, r *http.Request) {
 		page := 0
 		if raw := r.URL.Query().Get("page"); raw != "" {

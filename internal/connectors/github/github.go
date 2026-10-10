@@ -23,6 +23,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Lephiziel/findrail/internal/diagnostics"
 	"github.com/Lephiziel/findrail/internal/extract/text"
 	"github.com/Lephiziel/findrail/pkg/connector"
 )
@@ -69,24 +70,31 @@ type Metadata struct {
 type SkipCounts struct {
 	Unsupported int `json:"unsupported_format,omitempty"`
 	Excluded    int `json:"excluded_path,omitempty"`
+	Hidden      int `json:"hidden_entry,omitempty"`
+	Dependency  int `json:"dependency_directory,omitempty"`
+	Sensitive   int `json:"sensitive_name,omitempty"`
 	Binary      int `json:"binary_or_non_utf8,omitempty"`
 	TooLarge    int `json:"per_file_limit,omitempty"`
 	Special     int `json:"symlink_or_special,omitempty"`
+	Symlink     int `json:"symlink,omitempty"`
 	LFS         int `json:"git_lfs_pointer,omitempty"`
 }
 
 type Snapshot struct {
-	source connector.Source
-	docs   []connector.Document
-	meta   Metadata
-	skips  SkipCounts
+	source      connector.Source
+	docs        []connector.Document
+	meta        Metadata
+	skips       SkipCounts
+	diagnostics diagnostics.Payload
+	startedAt   time.Time
 }
 
 func (s *Snapshot) Source() connector.Source { return s.source }
 func (s *Snapshot) Metadata() Metadata       { return s.meta }
 func (s *Snapshot) SkipCounts() SkipCounts   { return s.skips }
+func (s *Snapshot) StartedAt() time.Time     { return s.startedAt }
 func (s *Snapshot) Scan(ctx context.Context, emit func(connector.Document) error) (connector.Report, error) {
-	r := connector.Report{Skipped: s.skips.Unsupported + s.skips.Excluded + s.skips.Binary + s.skips.TooLarge + s.skips.Special + s.skips.LFS}
+	r := connector.Report{Skipped: s.skips.Unsupported + s.skips.Excluded + s.skips.Binary + s.skips.TooLarge + s.skips.Special + s.skips.LFS, Diagnostics: s.diagnostics}
 	for _, d := range s.docs {
 		if err := ctx.Err(); err != nil {
 			return r, err
@@ -408,6 +416,7 @@ func (b *limitedBody) Read(p []byte) (int, error) {
 }
 
 func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*Snapshot, error) {
+	startedAt := time.Now().UTC()
 	buffered := bufio.NewReader(compressed)
 	gz, err := gzip.NewReader(buffered)
 	if err != nil {
@@ -418,12 +427,14 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 	tr := tar.NewReader(expanded)
 	var docs []connector.Document
 	var skips SkipCounts
+	diag := diagnostics.NewBuilder()
 	seen := map[string]bool{}
 	wrapper := ""
 	scopeFound := meta.SelectedPath == ""
 	var inventory int64
 	var metadataBytes int64
 	entries := 0
+	var observedFiles int64
 	for {
 		if err := ctx.Err(); err != nil {
 			gz.Close()
@@ -486,9 +497,16 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
 			if !h.FileInfo().IsDir() {
 				skips.Special++
+				code := "special_entry"
+				if h.Typeflag == tar.TypeSymlink {
+					skips.Symlink++
+					code = "symlink"
+				}
+				diag.Add(code, "file", rel, false)
 			}
 			continue
 		}
+		observedFiles++
 		if seen[rel] {
 			gz.Close()
 			return nil, fmt.Errorf("duplicate GitHub archive path %q", rel)
@@ -496,14 +514,26 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		seen[rel] = true
 		if excludedPath(rel) {
 			skips.Excluded++
+			reason := exclusionReason(rel)
+			diag.Add(reason, "file", rel, reason == "sensitive_name")
+			switch reason {
+			case "hidden_entry":
+				skips.Hidden++
+			case "dependency_directory":
+				skips.Dependency++
+			case "sensitive_name":
+				skips.Sensitive++
+			}
 			continue
 		}
 		if !supported(path.Base(rel)) {
 			skips.Unsupported++
+			diag.Add("unsupported_format", "file", rel, false)
 			continue
 		}
 		if h.Size < 0 || h.Size > meta.MaxBytes {
 			skips.TooLarge++
+			diag.Add("input_too_large", "file", rel, false)
 			continue
 		}
 		if len(docs) >= MaxDocuments {
@@ -513,10 +543,12 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		body, err := text.Read(io.LimitReader(tr, meta.MaxBytes+1), meta.MaxBytes)
 		if errors.Is(err, text.ErrUnsupported) {
 			skips.Binary++
+			diag.Add("binary_or_non_utf8", "file", rel, false)
 			continue
 		}
 		if errors.Is(err, text.ErrTooLarge) {
 			skips.TooLarge++
+			diag.Add("input_too_large", "file", rel, false)
 			continue
 		}
 		if err != nil {
@@ -525,6 +557,7 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		}
 		if strings.HasPrefix(body, "version https://git-lfs.github.com/spec/v1\n") {
 			skips.LFS++
+			diag.Add("git_lfs_pointer", "file", rel, false)
 			continue
 		}
 		inventory += int64(len(body))
@@ -586,7 +619,9 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		name += ", " + meta.SelectedPath
 	}
 	name += ")"
-	return &Snapshot{source: connector.Source{ID: sid, Kind: "github", Name: name, Root: meta.RepositoryURL, MaxTextBytes: meta.MaxBytes}, docs: docs, meta: meta, skips: skips}, nil
+	reasons, examples, omitted, redacted := diag.Finish()
+	payload := diagnostics.Payload{ObservedFiles: int64(observedFiles), ObservedFilesKnown: true, ObservedDirectoriesKnown: false, Reasons: reasons, Examples: examples, ExamplesOmitted: omitted, RedactedSamples: redacted, Coverage: "selected_github_candidates"}
+	return &Snapshot{source: connector.Source{ID: sid, Kind: "github", Name: name, Root: meta.RepositoryURL, MaxTextBytes: meta.MaxBytes}, docs: docs, meta: meta, skips: skips, diagnostics: payload, startedAt: startedAt}, nil
 }
 
 type countingReader struct {
@@ -640,19 +675,22 @@ func supported(name string) bool {
 	return extensions[strings.ToLower(path.Ext(name))]
 }
 func excludedPath(v string) bool {
+	return exclusionReason(v) != ""
+}
+func exclusionReason(v string) string {
 	for _, p := range strings.Split(v, "/") {
 		l := strings.ToLower(p)
 		if strings.HasPrefix(p, ".") && p != ".github" {
-			return true
+			return "hidden_entry"
 		}
 		if l == "node_modules" || l == "vendor" || l == "dist" || l == "build" || l == "target" || l == "__pycache__" || l == ".git" {
-			return true
+			return "dependency_directory"
 		}
 		if strings.Contains(l, "credential") || strings.Contains(l, "secret") || strings.Contains(l, "private_key") {
-			return true
+			return "sensitive_name"
 		}
 	}
-	return false
+	return ""
 }
 
 // TestClient permits package and integration tests to inject a transport without

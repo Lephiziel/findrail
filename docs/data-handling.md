@@ -24,6 +24,9 @@
 - `forget` removes searchable source data logically. Old disk / WAL / backup bytes may remain.
 - Imported archive sources are frozen, offline SQLite data; removal does not
   delete exported archive copies or guarantee physical erasure.
+- The last successful indexing report is stored locally with the committed
+  snapshot. Optional examples contain bounded relative names; sensitive-name
+  paths are redacted. Reports are not part of portable exports and are not telemetry.
 
 ## User controls
 

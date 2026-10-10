@@ -120,7 +120,7 @@ func runDoctor(ctx context.Context, args []string, out, stderr io.Writer, versio
 								break
 							}
 						}
-						if n, parseErr := strconv.Atoi(schema); parseErr == nil && n > 5 {
+						if n, parseErr := strconv.Atoi(schema); parseErr == nil && n > 6 {
 							msg = "The index uses a newer schema than this binary supports."
 						} else {
 							msg = "The index uses an older schema and needs an upgrade on first supported write."
@@ -136,7 +136,7 @@ func runDoctor(ctx context.Context, args []string, out, stderr io.Writer, versio
 					if readErr != nil {
 						check("schema", "error", "index_unreadable", "The supported index could not be read safely.", "Preserve a stopped full-directory backup and investigate.")
 					} else {
-						message := fmt.Sprintf("Index schema 5 is supported; sources=%d (filesystem=%d, GitHub=%d, archive=%d, other=%d); policies: custom text limits=%d, PDF enabled=%d, DOCX enabled=%d, DOCX disabled=%d.",
+						message := fmt.Sprintf("Index schema 6 is supported; sources=%d (filesystem=%d, GitHub=%d, archive=%d, other=%d); policies: custom text limits=%d, PDF enabled=%d, DOCX enabled=%d, DOCX disabled=%d.",
 							summary.Sources, summary.FilesystemSources, summary.GitHubSources, summary.ArchiveSources, summary.OtherSources,
 							summary.CustomTextLimits, summary.PDFEnabled, summary.DOCXEnabled, summary.DOCXDisabled)
 						check("schema", "ok", "schema_supported", message, "No action needed.")
