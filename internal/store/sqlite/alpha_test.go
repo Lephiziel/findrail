@@ -17,6 +17,7 @@ import (
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
 	"github.com/Lephiziel/findrail/internal/search"
+	"github.com/Lephiziel/findrail/internal/snapshot"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	"github.com/Lephiziel/findrail/pkg/connector"
 )
@@ -55,6 +56,53 @@ func TestMigrationPreservesSchemaOneIndex(t *testing.T) {
 	evidence, err := s.Evidence(context.Background(), "old", 0)
 	if err != nil || evidence.Text != "migration evidence" {
 		t.Fatalf("legacy preview: %+v %v", evidence, err)
+	}
+}
+
+func TestArchiveImportSearchDuplicateAndRemoval(t *testing.T) {
+	dir := t.TempDir()
+	s, err := sqlite.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	o := snapshot.Origin{ID: "synthetic-origin", Kind: "filesystem", Name: "Synthetic", Location: "/tmp/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
+	docs := []snapshot.Document{{ID: "origin-doc", Path: "notes.md", Title: "Retry notes", URI: "file:///tmp/synthetic/notes.md", MediaType: "text/markdown", Text: "retry budget is preserved", ContentHash: strings.Repeat("a", 64), SizeBytes: 25, ModifiedAt: "2026-10-09T11:00:00Z"}}
+	encoded, err := snapshot.Encode(snapshot.Manifest{Origin: o}, docs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := snapshot.Inspect(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.ImportSnapshot(context.Background(), "Imported notes", archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(id, o.ID) || id == "" {
+		t.Fatalf("archive identity reused origin: %q", id)
+	}
+	if got := find(t, s, "retry budget", id, 10); got.Total != 1 || got.Results[0].SourceKind != "archive" {
+		t.Fatalf("import search: %+v", got)
+	}
+	_, err = s.ImportSnapshot(context.Background(), "Renamed duplicate", archive)
+	var duplicate *sqlite.AlreadyImportedError
+	if !errors.As(err, &duplicate) || duplicate.SourceID != id {
+		t.Fatalf("duplicate result: %v", err)
+	}
+	sources, err := s.Sources(context.Background())
+	if err != nil || len(sources) != 1 || sources[0].Archive == nil || sources[0].Archive.Fingerprint != archive.Manifest.Fingerprint {
+		t.Fatalf("archive status: %+v %v", sources, err)
+	}
+	if err = s.ForgetSource(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if got := find(t, s, "retry budget", "", 10); got.Total != 0 {
+		t.Fatalf("removed archive remains searchable: %+v", got)
+	}
+	if _, err = s.ImportSnapshot(context.Background(), "Re-imported", archive); err != nil {
+		t.Fatalf("re-import after removal: %v", err)
 	}
 }
 
