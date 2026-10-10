@@ -405,3 +405,39 @@ func TestCitationAssetDoesNotNeedBackend(t *testing.T) {
 		t.Fatalf("citation asset response = %d %s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestCapabilitiesAdvertiseReadOnlyClientContract(t *testing.T) {
+	s, err := sqlite.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7766/api/v1/capabilities", nil)
+	r.Host = "127.0.0.1:7766"
+	w := httptest.NewRecorder()
+	transport.Handler(s).ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["client_api_version"] != float64(1) || got["pdf_title_only_evidence"] != true {
+		t.Fatalf("capabilities=%v", got)
+	}
+	if got["management"] != false {
+		t.Fatalf("management=%v", got["management"])
+	}
+	for key, want := range map[string][]string{"search_modes": {"literal", "advanced"}, "search_filters": {"source", "format", "path_prefix", "title_contains"}} {
+		values, ok := got[key].([]any)
+		if !ok || len(values) != len(want) {
+			t.Fatalf("%s=%v", key, got[key])
+		}
+		for i := range want {
+			if values[i] != want[i] {
+				t.Fatalf("%s=%v", key, values)
+			}
+		}
+	}
+}

@@ -178,7 +178,13 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 		writeJSON(w, 200, map[string]any{"enabled": config.syncEnabled, "sources": statuses})
 	})
 	mux.HandleFunc("GET /api/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]bool{"management": config.management != nil})
+		writeJSON(w, 200, map[string]any{
+			"management":              config.management != nil,
+			"client_api_version":      1,
+			"search_modes":            []string{"literal", "advanced"},
+			"search_filters":          []string{"source", "format", "path_prefix", "title_contains"},
+			"pdf_title_only_evidence": true,
+		})
 	})
 	if config.management != nil {
 		mux.HandleFunc("GET /api/v1/session", func(w http.ResponseWriter, r *http.Request) {

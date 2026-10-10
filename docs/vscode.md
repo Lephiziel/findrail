@@ -1,0 +1,11 @@
+# Read-only VS Code client (source build)
+
+The `extensions/vscode` client talks to a separately started Findrail HTTP server from the local VS Code UI extension host. For example, run `findrail serve --data-dir INDEX --no-sync` or `findrail start --data-dir INDEX --no-open`, then use **Findrail: Connect**. It accepts only HTTP loopback (`127.0.0.1`, `localhost`, `::1`); `findrail.endpoint` is user/machine scoped and workspace settings are not used. Compatible builds advertise client API v1. Downloaded alpha.2 archives are not claimed compatible.
+
+Choose one source explicitly, then search Literal (default) or opt into Advanced and existing server-side format/path-prefix/title-contains filters. Counts distinguish total from the returned limit. Archive sources are frozen snapshots. PDF page 0 represents title-only evidence; positive pages are real indexed pages. DOCX has no page claim. Results and evidence are bounded plaintext from the indexed snapshot, not live original files. Copy Location and Copy Markdown Citation require explicit user commands; the citation reuses the web client's formatter.
+
+Client source selection is not MCP's server-side allowlist authorization. The ordinary HTTP server serves its whole local index; this extension does not make it secure for multiple users. The extension never reads SQLite/originals, starts a process, writes workspace files, performs mutations, polls, or persists query/results/evidence. Open previews remain visible in the editor after memory eviction until closed; the provider will not refetch them. Other extensions/editor data handling are outside its control.
+
+Install the `.vsix` via **Extensions → ... → Install from VSIX...** or `code --install-extension path/to/file.vsix`; uninstall with `code --uninstall-extension findrail-local.findrail-readonly`. Requires VS Code 1.95+ and Findrail; no development toolchain at runtime. Restricted Mode manual commands are supported. On Remote SSH/Containers, the UI extension connects to Findrail on the local UI machine, not the remote workspace; no forwarding/tunneling is performed. No VS Code web build is promised.
+
+Build and test from `extensions/vscode`: `npm ci`, `npm run typecheck`, `npm test`, `npm run package`. The package is an installable local VSIX; no Marketplace/Open VSX publication is implied.

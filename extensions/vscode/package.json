@@ -1,0 +1,30 @@
+{
+  "name": "findrail-readonly",
+  "displayName": "Findrail Read-only Search",
+  "description": "Search one explicitly selected source from a local Findrail server.",
+  "version": "0.1.0",
+  "publisher": "findrail-local",
+  "repository": {"type":"git","url":"https://github.com/Lephiziel/findrail.git","directory":"extensions/vscode"},
+  "license": "Apache-2.0",
+  "engines": { "vscode": "^1.95.0" },
+  "extensionKind": ["ui"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "capabilities": { "untrustedWorkspaces": { "supported": true, "description": "Manual read-only commands use user settings only; no workspace code or tasks are run." } },
+  "contributes": {
+    "configuration": {
+      "title": "Findrail",
+      "properties": {
+        "findrail.endpoint": { "type": "string", "default": "http://127.0.0.1:7766", "scope": "machine", "description": "Loopback Findrail URL. User setting only; workspace overrides are ignored." },
+        "findrail.timeoutSeconds": { "type": "number", "default": 5, "minimum": 1, "maximum": 30, "scope": "machine", "description": "Request deadline in seconds." },
+        "findrail.searchLimit": { "type": "number", "default": 20, "minimum": 1, "maximum": 100, "scope": "machine", "description": "Maximum results requested from Findrail." }
+      }
+    },
+    "commands": [
+      {"command":"findrail.connect","title":"Findrail: Connect"},{"command":"findrail.chooseSource","title":"Findrail: Choose Source"},{"command":"findrail.search","title":"Findrail: Search"},{"command":"findrail.searchSelection","title":"Findrail: Search Selection"},{"command":"findrail.setMode","title":"Findrail: Set Search Mode"},{"command":"findrail.setFilters","title":"Findrail: Set Filters"},{"command":"findrail.refreshSources","title":"Findrail: Refresh Sources"},{"command":"findrail.disconnect","title":"Findrail: Disconnect"},{"command":"findrail.nextPage","title":"Findrail: Next PDF Page"},{"command":"findrail.previousPage","title":"Findrail: Previous PDF Page"},{"command":"findrail.refreshEvidence","title":"Findrail: Refresh Evidence"},{"command":"findrail.copyLocation","title":"Findrail: Copy Location"},{"command":"findrail.copyCitation","title":"Findrail: Copy Markdown Citation"}
+    ],
+    "menus": {"editor/title": [{"command":"findrail.nextPage","when":"findrail.evidencePdf","group":"navigation"},{"command":"findrail.previousPage","when":"findrail.evidencePdf","group":"navigation"},{"command":"findrail.copyLocation","when":"findrail.evidenceActive","group":"findrail"},{"command":"findrail.copyCitation","when":"findrail.evidenceActive","group":"findrail"},{"command":"findrail.refreshEvidence","when":"findrail.evidenceActive","group":"navigation"}]}
+  },
+  "scripts": {"compile":"node ./scripts/build.mjs", "typecheck":"tsc --noEmit", "test":"npm run compile && node --test test/*.test.mjs", "test:integration":"npm run compile && node ./test/compiled-server.mjs", "test:host":"npm run compile && node ./test/run-host.cjs", "package":"npm run compile && vsce package --no-dependencies"},
+  "devDependencies": {"@types/node":"22.10.2","@types/vscode":"1.95.0","@vscode/test-electron":"2.4.1","@vscode/vsce":"4.0.0","esbuild":"0.28.2","typescript":"5.7.2"}
+}

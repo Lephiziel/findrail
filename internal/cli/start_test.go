@@ -233,12 +233,12 @@ func TestStartCreatesEmptyIndexAndServes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var enabled map[string]bool
+	var enabled map[string]any
 	if err := json.NewDecoder(capability.Body).Decode(&enabled); err != nil {
 		t.Fatal(err)
 	}
 	capability.Body.Close()
-	if !enabled["management"] {
+	if enabled["management"] != true {
 		t.Fatal("start did not enable source management")
 	}
 	if _, err := os.Stat(filepath.Join(data, "findrail.db")); err != nil {
@@ -280,12 +280,12 @@ func TestReadOnlyStartCompositionHasNoManagement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var caps map[string]bool
+	var caps map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if caps["management"] {
+	if caps["management"] != false {
 		t.Fatal("read-only composition enabled management")
 	}
 	r, _ := http.NewRequest(http.MethodPost, base+"/api/v1/sources", strings.NewReader(`{"type":"folder","path":"/tmp"}`))

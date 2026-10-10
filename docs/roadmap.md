@@ -10,7 +10,7 @@ dates. Status changes require working code and evidence.
 | R02 · Connected search | Read-only GitHub, local + remote combined search, secure credentials | Resume, rate limit, revocation, and deletion tests | Public file snapshots/manual refresh implemented; web management is source-build only; private and resumable sync planned |
 | R03 · Extensions | Versioned connector SDK, examples, conformance harness | Independent contributor creates an adapter from docs | Planned |
 | R04 · Optional semantics | Passage chunking, opt-in embedding backend, hybrid ranking | Better retrieval on labeled corpus without losing exact-match quality | Planned |
-| R05 · Daily access | Desktop launcher, editor integration | Daily use and bounded / scoped AI retrieval demonstrated; local stdio MCP is implemented | In progress |
+| R05 · Daily access | Desktop launcher; read-only VS Code client available for compatible source builds ([setup](vscode.md)) | Daily use and bounded / scoped AI retrieval demonstrated; local stdio MCP is implemented | In progress |
 | R06 · Public beta | Onboarding, releases, migrations, exports, operational documentation | Upgrade / restore / uninstall journeys and cross-platform QA | CLI portable indexed-text snapshots and isolated imports implemented in source builds; release packaging and broader beta gates remain planned |
 | R07 · Community platform | Connector catalog, governance, optional operated services | Organic contributions and demonstrated demand | Planned |
 

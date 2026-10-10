@@ -1,0 +1,69 @@
+name: VS Code read-only client
+on:
+  pull_request:
+    paths:
+      - 'extensions/vscode/**'
+      - 'internal/transport/http/server.go'
+      - 'internal/transport/http/server_test.go'
+      - 'api/openapi.yaml'
+      - 'docs/vscode.md'
+      - 'docs/architecture.md'
+      - 'docs/roadmap.md'
+      - 'README.md'
+      - '.github/workflows/vscode-client.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'extensions/vscode/**'
+      - 'internal/transport/http/server.go'
+      - 'internal/transport/http/server_test.go'
+      - 'api/openapi.yaml'
+      - '.github/workflows/vscode-client.yml'
+permissions:
+  contents: read
+jobs:
+  extension:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+          cache-dependency-path: extensions/vscode/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+      - run: npm ci --ignore-scripts
+        working-directory: extensions/vscode
+      - run: npm run typecheck
+        working-directory: extensions/vscode
+      - run: npm test
+        working-directory: extensions/vscode
+      - name: Compiled Findrail server integration
+        if: runner.os == 'Linux'
+        run: npm run test:integration
+        working-directory: extensions/vscode
+      - run: go test ./internal/transport/http/...
+      - run: npm run package
+        working-directory: extensions/vscode
+      - name: Inspect VSIX contents
+        if: runner.os == 'Linux'
+        working-directory: extensions/vscode
+        run: |
+          unzip -l findrail-readonly-0.1.0.vsix
+          ! unzip -Z1 findrail-readonly-0.1.0.vsix | grep -E '(^|/)(node_modules|evaluation|fixtures|\.env)(/|$)|\.map$'
+      - name: Actual VS Code extension host
+        if: runner.os == 'Linux'
+        working-directory: extensions/vscode
+        run: xvfb-run -a npm run test:host
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: synthetic-vsix-and-check-summary
+          path: extensions/vscode/findrail-readonly-0.1.0.vsix
+          if-no-files-found: error
+          retention-days: 7
