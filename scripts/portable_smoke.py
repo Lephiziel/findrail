@@ -52,7 +52,8 @@ def main():
 
         index_a, index_b = base / 'index A', base / 'index B'
         call(binary, 'index', '--data-dir', index_a, '--max-docx-bytes', 1 << 20, root)
-        source = json_call(binary, 'sources', '--data-dir', index_a, '--json')['sources'][0]['id']
+        source_entry = json_call(binary, 'sources', '--data-dir', index_a, '--json')['sources'][0]
+        source = source_entry['id']
         archive_path = base / 'notes – snapshot.findrail.zip'
         exported = json_call(binary, 'export-source', '--data-dir', index_a, '--source', source,
                              '--output', archive_path, '--json')
@@ -62,7 +63,7 @@ def main():
         assert inspected['integrity'] == 'valid' and inspected['documents'] == 3
         assert 'origin_location' not in inspected
         shown = json_call(binary, 'inspect-export', '--json', '--show-paths', archive_path)
-        assert shown['origin_location'] == str(root)
+        assert shown['origin_location'] == source_entry['root']
         inspect_dir = base / 'inspect-must-not-create'
         json_call(binary, 'inspect-export', '--data-dir', inspect_dir, '--json', archive_path)
         assert not inspect_dir.exists()
@@ -163,7 +164,14 @@ def main():
             with urllib.request.urlopen(base_url + path, timeout=3) as response:
                 return json.load(response)
         try:
-            eventually(lambda: get('/healthz') == {'status': 'ok'})
+            def ready():
+                if process.poll() is not None:
+                    raise RuntimeError('start exited before HTTP readiness: ' + process.stderr.read())
+                try:
+                    return get('/healthz') == {'status': 'ok'}
+                except (urllib.error.URLError, TimeoutError):
+                    return False
+            eventually(ready)
             inventory = get('/api/v1/sources')['sources']
             assert any(s['id'] == imported_id and s['kind'] == 'archive' for s in inventory)
             http_search = get('/api/v1/search?' + urllib.parse.urlencode({'q': 'retrieval phrase', 'source': imported_id}))

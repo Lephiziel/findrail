@@ -16,6 +16,11 @@ import urllib.parse
 import urllib.request
 import zipfile
 
+# The smoke journeys only contact loopback Findrail servers. Bypass ambient
+# system/environment proxies so a hosted runner cannot route those test calls
+# outside the machine or reset them before the local server receives them.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+
 
 def pdf_fixture(pages):
     objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'',
