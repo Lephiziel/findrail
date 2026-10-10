@@ -142,9 +142,25 @@ paths:
   /api/v1/capabilities:
     get:
       operationId: getCapabilities
-      summary: Discover whether this composition enables source management
+      summary: Discover management and read-only client retrieval capabilities
       responses:
-        '200': {description: Management capability; false for serve and demo}
+        '200':
+          description: Management is composition-dependent; retrieval contract is static
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [management, client_api_version, search_modes, search_filters, pdf_title_only_evidence]
+                properties:
+                  management: {type: boolean}
+                  client_api_version: {type: integer, const: 1}
+                  search_modes:
+                    type: array
+                    items: {type: string, enum: [literal, advanced]}
+                  search_filters:
+                    type: array
+                    items: {type: string, enum: [source, format, path_prefix, title_contains]}
+                  pdf_title_only_evidence: {type: boolean, const: true}
   /api/v1/session:
     get:
       operationId: getManagementSession

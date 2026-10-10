@@ -19,7 +19,7 @@ flowchart TD
   E --> I["Atomic ingestion"]
   I --> D["SQLite and FTS5"]
   CLI["CLI"] --> Q["Search request"]
-  UI["Local web UI"] --> H["HTTP transport"]
+  UI["Local web UI / VS Code client"] --> H["HTTP transport"]
   H --> Q
   Q --> D
   D --> R["Passages and provenance"]
@@ -30,7 +30,9 @@ publication boundary. Source management is writable only in `start`; `serve`,
 `demo`, MCP, and the default HTTP handler remain read-only. Private adapters,
 semantic retrieval, and desktop launching remain future extensions. The source
 build also has a read-only stdio MCP transport over the same search and
-indexed-evidence contracts.
+indexed-evidence contracts. The optional VS Code client uses only read-only HTTP
+retrieval routes and does not access storage directly; its source choice is a
+client-side preference, not server authorization or multi-user isolation.
 
 ## Boundaries
 

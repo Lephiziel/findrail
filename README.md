@@ -20,7 +20,7 @@ Private GitHub, OCR, semantic search and desktop launching remain on the roadmap
 [Source management](docs/source-management.md) ·
 [Portable snapshots](docs/portable-snapshots.md) ·
 [MCP integration](docs/mcp.md) ·
-[Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) ·
+[Roadmap](docs/roadmap.md) · [VS Code client](docs/vscode.md) · [Contributing](CONTRIBUTING.md) ·
 [Русский](docs/ru/overview.md)
 
 [![Findrail screen recording: keyword search and PDF page preview](docs/assets/demo.gif)](docs/assets/demo.mp4)
@@ -157,6 +157,7 @@ stop startup and preserve the prior committed inventory.
 - CLI / JSON output, loopback web UI, read-only HTTP API and source-built
   read-only stdio MCP (`findrail mcp`).
 - Logical source removal, leaving original files untouched.
+- Optional read-only VS Code client for compatible source builds; see [setup](docs/vscode.md).
 - Manual, commit-pinned public GitHub text snapshots with offline preview.
 - Portable plaintext export and isolated frozen archive-source import in source builds.
 - Empty-index onboarding and web source management in source builds (`start`);
@@ -227,7 +228,7 @@ Linux; `~/Library/Application Support/Findrail` on macOS;
 | Sources | Local folders; public GitHub snapshots and frozen portable archive imports in source builds | Private GitHub, bookmarks, work tools |
 | Freshness | File watching and full reconciliation | Resumable remote sync |
 | Retrieval | Literal search, opt-in Advanced queries, source/format/path/title filters, PDF evidence | Query evaluation, optional semantics |
-| Clients | CLI, local web UI, HTTP, read-only stdio MCP | Desktop launcher, editors |
+| Clients | CLI, local web UI, HTTP, read-only stdio MCP and VS Code source-build client | Desktop launcher, broader editor support |
 | Extensions | Experimental connector contract | Versioned SDK and conformance harness |
 
 The advantage to validate is easy installation, useful retrieval, inspectable
