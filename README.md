@@ -18,6 +18,7 @@ Private GitHub, OCR, semantic search and desktop launching remain on the roadmap
 [Releases](https://github.com/Lephiziel/findrail/releases) ·
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
 [Source management](docs/source-management.md) ·
+[Indexing diagnostics](docs/indexing-diagnostics.md) ·
 [Portable snapshots](docs/portable-snapshots.md) ·
 [MCP integration](docs/mcp.md) ·
 [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md) ·
@@ -157,6 +158,7 @@ stop startup and preserve the prior committed inventory.
 - CLI / JSON output, loopback web UI, read-only HTTP API and source-built
   read-only stdio MCP (`findrail mcp`).
 - Logical source removal, leaving original files untouched.
+- Bounded committed indexing reports and process-local manual job progress in source builds.
 - Manual, commit-pinned public GitHub text snapshots with offline preview.
 - Portable plaintext export and isolated frozen archive-source import in source builds.
 - Empty-index onboarding and web source management in source builds (`start`);
@@ -199,6 +201,7 @@ findrail index --max-pdf-bytes 0 /path/to/text-only
 findrail search --limit 10 "payment webhook"
 findrail search --source SOURCE_ID --json "architecture"
 findrail sources --json
+findrail source-report --data-dir .findrail --source SOURCE_ID
 findrail serve --sync-interval 5m
 findrail serve --no-sync
 findrail watch --sync-interval 5m

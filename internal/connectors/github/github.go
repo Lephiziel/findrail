@@ -23,6 +23,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Lephiziel/findrail/internal/diagnostics"
 	"github.com/Lephiziel/findrail/internal/extract/text"
 	"github.com/Lephiziel/findrail/pkg/connector"
 )
@@ -69,34 +70,59 @@ type Metadata struct {
 type SkipCounts struct {
 	Unsupported int `json:"unsupported_format,omitempty"`
 	Excluded    int `json:"excluded_path,omitempty"`
+	Hidden      int `json:"hidden_entry,omitempty"`
+	Dependency  int `json:"dependency_directory,omitempty"`
+	Sensitive   int `json:"sensitive_name,omitempty"`
 	Binary      int `json:"binary_or_non_utf8,omitempty"`
 	TooLarge    int `json:"per_file_limit,omitempty"`
 	Special     int `json:"symlink_or_special,omitempty"`
+	Symlink     int `json:"symlink,omitempty"`
 	LFS         int `json:"git_lfs_pointer,omitempty"`
 }
 
 type Snapshot struct {
-	source connector.Source
-	docs   []connector.Document
-	meta   Metadata
-	skips  SkipCounts
+	source      connector.Source
+	docs        []connector.Document
+	meta        Metadata
+	skips       SkipCounts
+	diagnostics diagnostics.Payload
+	startedAt   time.Time
 }
+
+type PreparationProgress func(processedCandidates, skippedCandidates int, complete, flush bool)
+type PreparationFailure struct {
+	Cause       error
+	Diagnostics diagnostics.Payload
+}
+
+func (e *PreparationFailure) Error() string { return "github_preparation_failed" }
+func (e *PreparationFailure) Unwrap() error { return e.Cause }
 
 func (s *Snapshot) Source() connector.Source { return s.source }
 func (s *Snapshot) Metadata() Metadata       { return s.meta }
 func (s *Snapshot) SkipCounts() SkipCounts   { return s.skips }
+func (s *Snapshot) StartedAt() time.Time     { return s.startedAt }
+func (s *Snapshot) SetStartedAt(t time.Time) {
+	if !t.IsZero() {
+		s.startedAt = t.UTC()
+	}
+}
 func (s *Snapshot) Scan(ctx context.Context, emit func(connector.Document) error) (connector.Report, error) {
+	r, _, err := s.ScanWithDiagnostics(ctx, emit)
+	return r, err
+}
+func (s *Snapshot) ScanWithDiagnostics(ctx context.Context, emit func(connector.Document) error) (connector.Report, diagnostics.Payload, error) {
 	r := connector.Report{Skipped: s.skips.Unsupported + s.skips.Excluded + s.skips.Binary + s.skips.TooLarge + s.skips.Special + s.skips.LFS}
 	for _, d := range s.docs {
 		if err := ctx.Err(); err != nil {
-			return r, err
+			return r, s.diagnostics, err
 		}
 		if err := emit(d); err != nil {
-			return r, err
+			return r, s.diagnostics, err
 		}
 		r.Seen++
 	}
-	return r, nil
+	return r, s.diagnostics, nil
 }
 
 func ParseRepository(input string) (string, string, error) {
@@ -253,11 +279,19 @@ func secureRedirect(req *http.Request, via []*http.Request) error {
 }
 
 func (c *Client) Prepare(ctx context.Context, sel Selection) (*Snapshot, error) {
+	return c.PrepareWithProgress(ctx, sel, nil)
+}
+func (c *Client) PrepareWithProgress(ctx context.Context, sel Selection, progress PreparationProgress) (*Snapshot, error) {
+	startedAt := time.Now().UTC()
 	meta, err := c.Resolve(ctx, sel)
 	if err != nil {
 		return nil, err
 	}
-	return c.prepareResolved(ctx, sel, meta)
+	snapshot, err := c.prepareResolvedWithProgress(ctx, sel, meta, progress)
+	if snapshot != nil {
+		snapshot.startedAt = startedAt
+	}
+	return snapshot, err
 }
 
 // Resolve identifies the public repository and commit without downloading its archive.
@@ -319,20 +353,31 @@ func (c *Client) ResolveCommit(ctx context.Context, sel Selection, repo Reposito
 }
 
 func (c *Client) prepareResolved(ctx context.Context, sel Selection, meta Metadata) (*Snapshot, error) {
+	return c.prepareResolvedWithProgress(ctx, sel, meta, nil)
+}
+func (c *Client) prepareResolvedWithProgress(ctx context.Context, sel Selection, meta Metadata, progress PreparationProgress) (*Snapshot, error) {
+	startedAt := time.Now().UTC()
 	body, err := c.get(ctx, "/repos/"+url.PathEscape(meta.Owner)+"/"+url.PathEscape(meta.Repo)+"/tarball/"+meta.SHA, MaxArchiveBytes, false)
 	if err != nil {
 		return nil, err
 	}
 	defer body.Close()
-	return prepareArchive(ctx, body, meta)
+	snapshot, err := prepareArchiveWithProgress(ctx, body, meta, progress)
+	if snapshot != nil {
+		snapshot.startedAt = startedAt
+	}
+	return snapshot, err
 }
 
 // PrepareResolved downloads and validates the archive for a previously resolved identity.
 func (c *Client) PrepareResolved(ctx context.Context, sel Selection, meta Metadata) (*Snapshot, error) {
+	return c.PrepareResolvedWithProgress(ctx, sel, meta, nil)
+}
+func (c *Client) PrepareResolvedWithProgress(ctx context.Context, sel Selection, meta Metadata, progress PreparationProgress) (*Snapshot, error) {
 	if meta.RepositoryID <= 0 || meta.Owner == "" || meta.Repo == "" || !fullSHA.MatchString(meta.SHA) {
 		return nil, errors.New("invalid resolved GitHub identity")
 	}
-	return c.prepareResolved(ctx, sel, meta)
+	return c.prepareResolvedWithProgress(ctx, sel, meta, progress)
 }
 
 func (c *Client) getJSON(ctx context.Context, endpoint string, target any) error {
@@ -408,6 +453,33 @@ func (b *limitedBody) Read(p []byte) (int, error) {
 }
 
 func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*Snapshot, error) {
+	return prepareArchiveWithProgress(ctx, compressed, meta, nil)
+}
+func prepareArchiveWithProgress(ctx context.Context, compressed io.Reader, meta Metadata, progress PreparationProgress) (result *Snapshot, retErr error) {
+	startedAt := time.Now().UTC()
+	var skips SkipCounts
+	diag := diagnostics.NewBuilder()
+	var docs []connector.Document
+	var observedFiles int64
+	var observedEntries, observedDirectories int64
+	failurePath := ""
+	var payload diagnostics.Payload
+	skipTotal := func() int {
+		return skips.Unsupported + skips.Excluded + skips.Binary + skips.TooLarge + skips.Special + skips.LFS
+	}
+	notify := func(complete, flush bool) {
+		if progress != nil {
+			progress(len(docs), skipTotal(), complete, flush)
+		}
+	}
+	defer func() {
+		if retErr != nil {
+			reasons, examples, omitted, redacted := diag.Finish()
+			payload = diagnostics.Payload{Overflow: diag.Overflow, ProcessedDocuments: int64(len(docs)), ObservedFiles: observedFiles, ObservedFilesKnown: true, ObservedEntries: observedEntries, ObservedEntriesKnown: true, ObservedDirectories: observedDirectories, ObservedDirectoriesKnown: true, Reasons: reasons, Examples: examples, ExamplesOmitted: omitted, RedactedSamples: redacted, Coverage: "selected_github_candidates", FailurePath: failurePath}
+			retErr = &PreparationFailure{Cause: retErr, Diagnostics: payload}
+			notify(false, true)
+		}
+	}()
 	buffered := bufio.NewReader(compressed)
 	gz, err := gzip.NewReader(buffered)
 	if err != nil {
@@ -416,14 +488,13 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 	gz.Multistream(false)
 	expanded := &countingReader{r: gz, max: MaxExpandedBytes, ctx: ctx}
 	tr := tar.NewReader(expanded)
-	var docs []connector.Document
-	var skips SkipCounts
 	seen := map[string]bool{}
 	wrapper := ""
 	scopeFound := meta.SelectedPath == ""
 	var inventory int64
 	var metadataBytes int64
 	entries := 0
+	notify(false, false)
 	for {
 		if err := ctx.Err(); err != nil {
 			gz.Close()
@@ -483,12 +554,24 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		if !inScope {
 			continue
 		}
+		observedEntries++
+		if h.FileInfo().IsDir() {
+			observedDirectories++
+		}
 		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
 			if !h.FileInfo().IsDir() {
 				skips.Special++
+				code := "special_entry"
+				if h.Typeflag == tar.TypeSymlink {
+					skips.Symlink++
+					code = "symlink"
+				}
+				diag.Add(code, "entry", rel, sensitivePath(rel))
+				notify(false, false)
 			}
 			continue
 		}
+		observedFiles++
 		if seen[rel] {
 			gz.Close()
 			return nil, fmt.Errorf("duplicate GitHub archive path %q", rel)
@@ -496,14 +579,29 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		seen[rel] = true
 		if excludedPath(rel) {
 			skips.Excluded++
+			reason := exclusionReason(rel)
+			diag.Add(reason, "file", rel, sensitivePath(rel))
+			switch reason {
+			case "hidden_entry":
+				skips.Hidden++
+			case "dependency_directory":
+				skips.Dependency++
+			case "sensitive_name":
+				skips.Sensitive++
+			}
+			notify(false, false)
 			continue
 		}
 		if !supported(path.Base(rel)) {
 			skips.Unsupported++
+			diag.Add("unsupported_format", "file", rel, false)
+			notify(false, false)
 			continue
 		}
 		if h.Size < 0 || h.Size > meta.MaxBytes {
 			skips.TooLarge++
+			diag.Add("input_too_large", "file", rel, false)
+			notify(false, false)
 			continue
 		}
 		if len(docs) >= MaxDocuments {
@@ -513,18 +611,27 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		body, err := text.Read(io.LimitReader(tr, meta.MaxBytes+1), meta.MaxBytes)
 		if errors.Is(err, text.ErrUnsupported) {
 			skips.Binary++
+			diag.Add("binary_or_non_utf8", "file", rel, false)
+			notify(false, false)
 			continue
 		}
 		if errors.Is(err, text.ErrTooLarge) {
 			skips.TooLarge++
+			diag.Add("input_too_large", "file", rel, false)
+			notify(false, false)
 			continue
 		}
 		if err != nil {
+			if diagnostics.SafeRelativePath(rel) {
+				failurePath = rel
+			}
 			gz.Close()
 			return nil, err
 		}
 		if strings.HasPrefix(body, "version https://git-lfs.github.com/spec/v1\n") {
 			skips.LFS++
+			diag.Add("git_lfs_pointer", "file", rel, false)
+			notify(false, false)
 			continue
 		}
 		inventory += int64(len(body))
@@ -539,6 +646,7 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		}
 		sid := SourceID(meta.RepositoryID, Selection{RefMode: meta.RefMode, RefValue: meta.RefValue, Path: meta.SelectedPath})
 		docs = append(docs, connector.Document{ID: fmt.Sprintf("doc_%x", sha256.Sum256([]byte(sid+"\x00"+rel))), SourceID: sid, Title: path.Base(rel), URI: uri, Path: rel, Content: body, Hash: fmt.Sprintf("%x", sha256.Sum256([]byte(body))), SizeBytes: h.Size, ModifiedAt: meta.CommitTime, MediaType: "text/plain"})
+		notify(false, false)
 	}
 	var tail [32 * 1024]byte
 	for {
@@ -586,7 +694,13 @@ func prepareArchive(ctx context.Context, compressed io.Reader, meta Metadata) (*
 		name += ", " + meta.SelectedPath
 	}
 	name += ")"
-	return &Snapshot{source: connector.Source{ID: sid, Kind: "github", Name: name, Root: meta.RepositoryURL, MaxTextBytes: meta.MaxBytes}, docs: docs, meta: meta, skips: skips}, nil
+	reasons, examples, omitted, redacted := diag.Finish()
+	payload = diagnostics.Payload{Overflow: diag.Overflow, ProcessedDocuments: int64(len(docs)), ObservedEntries: observedEntries, ObservedEntriesKnown: true, ObservedFiles: observedFiles, ObservedFilesKnown: true, ObservedDirectories: observedDirectories, ObservedDirectoriesKnown: true, Reasons: reasons, Examples: examples, ExamplesOmitted: omitted, RedactedSamples: redacted, Coverage: "selected_github_candidates"}
+	if diag.Overflow {
+		return nil, errors.New("diagnostic counter overflow")
+	}
+	notify(true, true)
+	return &Snapshot{source: connector.Source{ID: sid, Kind: "github", Name: name, Root: meta.RepositoryURL, MaxTextBytes: meta.MaxBytes}, docs: docs, meta: meta, skips: skips, diagnostics: payload, startedAt: startedAt}, nil
 }
 
 type countingReader struct {
@@ -640,15 +754,29 @@ func supported(name string) bool {
 	return extensions[strings.ToLower(path.Ext(name))]
 }
 func excludedPath(v string) bool {
+	return exclusionReason(v) != ""
+}
+func exclusionReason(v string) string {
 	for _, p := range strings.Split(v, "/") {
 		l := strings.ToLower(p)
 		if strings.HasPrefix(p, ".") && p != ".github" {
-			return true
+			return "hidden_entry"
 		}
 		if l == "node_modules" || l == "vendor" || l == "dist" || l == "build" || l == "target" || l == "__pycache__" || l == ".git" {
-			return true
+			return "dependency_directory"
 		}
-		if strings.Contains(l, "credential") || strings.Contains(l, "secret") || strings.Contains(l, "private_key") {
+		if sensitiveName(l) {
+			return "sensitive_name"
+		}
+	}
+	return ""
+}
+func sensitiveName(v string) bool {
+	return strings.Contains(v, "credential") || strings.Contains(v, "secret") || strings.Contains(v, "private_key")
+}
+func sensitivePath(v string) bool {
+	for _, part := range strings.Split(v, "/") {
+		if sensitiveName(strings.ToLower(part)) {
 			return true
 		}
 	}

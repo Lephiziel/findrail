@@ -35,6 +35,10 @@ Findrail's perspective. Adding the same canonical folder again reports that it
 already exists; use **Refresh** to update it. Watch notifications and periodic
 reconciliation continue through the existing manager.
 
+Source reports show the last committed scan diagnostics. See
+[indexing diagnostics](indexing-diagnostics.md) for explicit path details,
+coverage limits, archive availability and troubleshooting.
+
 Filesystem source cards offer **Configure** for the DOCX enabled/input-limit
 policy. Applying the change queues a bounded re-index. The new policy and full
 inventory commit in one SQLite transaction; failure or cancellation preserves
@@ -54,7 +58,10 @@ request credentials, or poll GitHub automatically. **Refresh** is an explicit
 request. Search, preview and citations read only the last committed local
 snapshot and work offline.
 
-An operation shows its queued/running phase and can be canceled. Failure,
+An operation shows its queued/running phase and process-local progress (actual
+processed documents and skipped entries; no percentage) and can be canceled.
+Successful progress names the durable report ID; failed/canceled progress stays
+partial and separate from the last committed card summary. Failure,
 cancellation before publication, or shutdown preserves the previous committed
 snapshot. A refresh for one source is not duplicated while busy. Search keeps
 reading the committed snapshot while preparation is in progress.

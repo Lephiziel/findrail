@@ -1,5 +1,22 @@
 # Local-alpha validation
 
+## Indexing diagnostics validation · 2026-10-10
+
+Local checks on Go 1.27.2 linux/amd64 and Node 22.23.3 passed: full Go unit
+tests and race detector, vet, module verification, CGO-free build, existing
+search/MCP/portable/smoke suites, 23 web tests, and the compiled diagnostics
+smoke. The synthetic diagnostic inventory visited 246 entries (245 files, 243 skipped),
+retained 200 examples, and serialized a 17,090-byte report. A single clean-base
+vs instrumented run took 7.0 vs 7.2 ms; this is a noisy spot check only. PR #23
+includes watcher progress, structured failure attempts, compiled
+failed-refresh/cancel/configure/watcher/archive checks, and stale-report UI
+regression tests. Chromium 153 headless on Linux verified Sources report
+details, hostile-path plain-text rendering, live job progress, cancel/failure
+with the durable report unchanged, retry, removal, Enter activation and 375px
+layout. Visibility pause/resume is exercised by the web-client lifecycle test;
+the installed CDP build exposes no page-visibility override. Native
+macOS/Windows execution was not done locally; see PR Actions for remote CI.
+
 ## Exact search / server filters branch validation · 2026-10-09
 
 Advanced SQLite regression fixtures use synthetic text and PDF-page records.

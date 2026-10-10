@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	githubconnector "github.com/Lephiziel/findrail/internal/connectors/github"
+	"github.com/Lephiziel/findrail/internal/diagnostics"
 	"github.com/Lephiziel/findrail/internal/ingest"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 )
@@ -38,6 +40,21 @@ func githubTestTar(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return b.Bytes()
+}
+
+func TestGitHubFailureAttemptHidesPathsUnlessExplicit(t *testing.T) {
+	prep := &githubconnector.PreparationFailure{Cause: errors.New("private raw parser error"), Diagnostics: diagnostics.Payload{ObservedFiles: 3, ObservedFilesKnown: true, Reasons: []diagnostics.Reason{{Code: "unsupported_format", Unit: "file", Count: 2}}, Examples: []diagnostics.Example{{Path: "docs/private.png", Unit: "file", Reason: "unsupported_format"}}, FailurePath: "docs/broken.md", Coverage: "selected_github_candidates"}}
+	if got := failureCode(prep); got != "archive_preparation_failed" {
+		t.Fatalf("failure code=%q", got)
+	}
+	without, _ := json.Marshal(githubAttempt("refresh-github", "archive_preparation_failed", prep, false))
+	if strings.Contains(string(without), "private") || strings.Contains(string(without), "broken.md") {
+		t.Fatalf("default failure leaked path/error: %s", without)
+	}
+	with, _ := json.Marshal(githubAttempt("refresh-github", "archive_preparation_failed", prep, true))
+	if !strings.Contains(string(with), "docs/broken.md") || !strings.Contains(string(with), "docs/private.png") {
+		t.Fatalf("explicit failure details missing: %s", with)
+	}
 }
 
 func githubTestResponse(body []byte) *http.Response {

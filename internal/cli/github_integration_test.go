@@ -166,10 +166,14 @@ func TestGitHubCLIIntegration(t *testing.T) {
 	}
 	run(nil, "index", "--data-dir", data, "--max-pdf-bytes", "0", local)
 	var initial githubCommandResult
-	run(&initial, "index-github", "--data-dir", data, "--path", "docs", "--json", "Example/Demo")
+	run(&initial, "index-github", "--data-dir", data, "--path", "docs", "--report", "--json", "Example/Demo")
 	source := initial.GitHub.SourceID
 	if initial.Seen != 3 || initial.GitHub.SHA != shaA || source == "" {
 		t.Fatalf("initial index: %+v", initial)
+	}
+	initialReport, ok := initial.Report.(map[string]any)
+	if !ok || initialReport["available"] != true || initialReport["operation"] != "github_publication" {
+		t.Fatalf("initial GitHub report: %#v", initial.Report)
 	}
 	var mixed search.Response
 	run(&mixed, "search", "--data-dir", data, "--json", "needle")
@@ -185,9 +189,26 @@ func TestGitHubCLIIntegration(t *testing.T) {
 	sha, archive = shaB, archiveB
 	mu.Unlock()
 	var updated githubCommandResult
-	run(&updated, "refresh-github", "--data-dir", data, "--json", source)
+	run(&updated, "refresh-github", "--data-dir", data, "--report", "--json", source)
 	if updated.Seen != 2 || updated.Removed != 1 || updated.GitHub.SHA != shaB || updated.GitHub.Revision != 2 {
 		t.Fatalf("refresh: %+v", updated)
+	}
+	updatedReport, ok := updated.Report.(map[string]any)
+	if !ok || updatedReport["report_id"] == initialReport["report_id"] {
+		t.Fatalf("GitHub refresh report not updated: %#v", updated.Report)
+	}
+	readStore, err := sqlite.OpenReadOnly(ctx, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeReport, err := readStore.SourceReport(ctx, source, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = readStore.Close()
+	githubSummary := beforeReport["report"].(sqlite.ReportSummary)
+	if !githubSummary.Available || githubSummary.Operation != "github_publication" || githubSummary.IndexedDocuments != 2 {
+		t.Fatalf("GitHub committed diagnostics: %+v", githubSummary)
 	}
 	mu.Lock()
 	archive = archiveB[:len(archiveB)-4]
@@ -219,6 +240,9 @@ func TestGitHubCLIIntegration(t *testing.T) {
 	for _, item := range sources.Sources {
 		if item.ID == source && (item.Documents != 2 || item.GitHub == nil || item.GitHub.SHA != shaB || item.GitHub.LastError == "" || item.GitHub.RegistrationToken != "") {
 			t.Fatalf("failed refresh changed snapshot or leaked registration token: %+v", item)
+		}
+		if item.ID == source && (item.IndexingReport == nil || item.IndexingReport.ReportID != githubSummary.ReportID) {
+			t.Fatalf("failed GitHub attempt replaced committed report: %+v", item.IndexingReport)
 		}
 	}
 	store, err := sqlite.OpenReadOnly(ctx, data)

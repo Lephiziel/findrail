@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	githubconnector "github.com/Lephiziel/findrail/internal/connectors/github"
+	"github.com/Lephiziel/findrail/internal/diagnostics"
 	"github.com/Lephiziel/findrail/internal/ingest"
 	"github.com/Lephiziel/findrail/internal/search"
 	"github.com/Lephiziel/findrail/internal/snapshot"
@@ -42,11 +43,17 @@ var docxSchema string
 //go:embed migrations/005_archive_sources.sql
 var archiveSchema string
 
-type Store struct{ db, readers *sql.DB }
+//go:embed migrations/006_indexing_reports.sql
+var reportSchema string
+
+type Store struct {
+	db, readers   *sql.DB
+	schemaVersion int
+}
 
 var ErrArchiveFrozen = errors.New("archive_snapshot_frozen: imported archive sources cannot be scanned or refreshed")
 
-const currentSchemaVersion = 5
+const currentSchemaVersion = 6
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {
 	dataDir, err := filepath.Abs(dataDir)
@@ -102,6 +109,16 @@ func Open(ctx context.Context, dataDir string) (*Store, error) {
 // anything. The returned store exposes the same read methods as Store, but all
 // write paths fail safely because it has no writer connection.
 func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
+	return openReadOnly(ctx, dataDir, false)
+}
+
+// OpenReadOnlyForReport also accepts schema 5 so the report command can return
+// an honest unavailable result without performing the schema-6 migration.
+func OpenReadOnlyForReport(ctx context.Context, dataDir string) (*Store, error) {
+	return openReadOnly(ctx, dataDir, true)
+}
+
+func openReadOnly(ctx context.Context, dataDir string, allowSchema5 bool) (*Store, error) {
 	dataDir, err := filepath.Abs(dataDir)
 	if err != nil {
 		return nil, err
@@ -141,10 +158,11 @@ func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 		_ = readers.Close()
 		return nil, err
 	}
-	if version != currentSchemaVersion {
+	if version != currentSchemaVersion && !(allowSchema5 && version == 5) {
 		_ = readers.Close()
 		return nil, fmt.Errorf("unsupported index schema %d; open or update this index with the regular Findrail command", version)
 	}
+	s.schemaVersion = version
 	return s, nil
 }
 
@@ -194,7 +212,12 @@ func (s *Store) initialize(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, archiveSchema); err != nil {
 			return fmt.Errorf("migrate archive sources: %w", err)
 		}
+		fallthrough
 	case 5:
+		if _, err := tx.ExecContext(ctx, reportSchema); err != nil {
+			return fmt.Errorf("migrate indexing reports: %w", err)
+		}
+	case 6:
 	default:
 		return fmt.Errorf("unsupported index schema %d; use a compatible Findrail version", version)
 	}
@@ -219,6 +242,7 @@ type scan struct {
 	tx       *sql.Tx
 	sourceID string
 	token    string
+	report   *diagnostics.Report
 }
 
 func (s *Store) BeginScan(ctx context.Context, source connector.Source) (ingest.Scan, error) {
@@ -379,11 +403,38 @@ func (s *scan) Commit(ctx context.Context) (int, error) {
 	if _, err := s.tx.ExecContext(ctx, "UPDATE sources SET last_indexed_at=? WHERE id=?", time.Now().UTC().Format(time.RFC3339Nano), s.sourceID); err != nil {
 		return 0, err
 	}
+	if s.report != nil {
+		s.report.RemovedDocuments = int64(n)
+		s.report.FinishedAt = time.Now().UTC()
+		s.report.DurationMillis = s.report.FinishedAt.Sub(s.report.StartedAt).Milliseconds()
+		if err := s.report.Validate(); err != nil {
+			return 0, err
+		}
+		payload, err := json.Marshal(s.report)
+		if err != nil {
+			return 0, err
+		}
+		reasons, err := json.Marshal(s.report.Reasons)
+		if err != nil {
+			return 0, err
+		}
+		if _, err = s.tx.ExecContext(ctx, `INSERT INTO indexing_reports(source_id,report_id,snapshot_id,report_json,committed_at,operation,finished_at,indexed_documents,skipped_files,pruned_directories,coverage,reasons_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET report_id=excluded.report_id,snapshot_id=excluded.snapshot_id,report_json=excluded.report_json,committed_at=excluded.committed_at,operation=excluded.operation,finished_at=excluded.finished_at,indexed_documents=excluded.indexed_documents,skipped_files=excluded.skipped_files,pruned_directories=excluded.pruned_directories,coverage=excluded.coverage,reasons_json=excluded.reasons_json`, s.sourceID, s.report.ID, s.report.SnapshotID, string(payload), s.report.FinishedAt.Format(time.RFC3339Nano), s.report.Operation, s.report.FinishedAt.Format(time.RFC3339Nano), s.report.IndexedDocuments, s.report.SkippedFiles, s.report.PrunedDirectories, s.report.Coverage, string(reasons)); err != nil {
+			return 0, err
+		}
+	} else {
+		// An uninstrumented adapter publishes a new snapshot without inheriting a
+		// misleading report from an earlier scan.
+		if _, err := s.tx.ExecContext(ctx, "DELETE FROM indexing_reports WHERE source_id=?", s.sourceID); err != nil {
+			return 0, err
+		}
+	}
 	if err := s.tx.Commit(); err != nil {
 		return 0, err
 	}
 	return int(n), nil
 }
+
+func (s *scan) SetReport(r *diagnostics.Report) { s.report = r }
 
 func (s *scan) Rollback() error { return s.tx.Rollback() }
 
@@ -597,8 +648,100 @@ type SourceStatus struct {
 	LastIndexedAt        string         `json:"last_indexed_at"`
 	GitHub               *GitHubSource  `json:"github,omitempty"`
 	Archive              *ArchiveSource `json:"archive,omitempty"`
+	IndexingReport       *ReportSummary `json:"indexing_report,omitempty"`
 	RegistrationToken    string         `json:"-"`
 	RegistrationRevision int64          `json:"-"`
+}
+
+type ReportSummary struct {
+	Available         bool                 `json:"available"`
+	Availability      string               `json:"availability,omitempty"`
+	ReportID          string               `json:"report_id,omitempty"`
+	Operation         string               `json:"operation,omitempty"`
+	FinishedAt        string               `json:"finished_at,omitempty"`
+	IndexedDocuments  int64                `json:"indexed_documents"`
+	SkippedFiles      int64                `json:"skipped_files"`
+	PrunedDirectories int64                `json:"pruned_directories"`
+	Coverage          string               `json:"coverage,omitempty"`
+	Reasons           []diagnostics.Reason `json:"reasons,omitempty"`
+}
+
+var ErrSourceNotFound = errors.New("source not found")
+
+// SourceReport reads source registration and its committed report from one WAL
+// snapshot. Examples are omitted unless explicitly requested by the caller.
+func (s *Store) SourceReport(ctx context.Context, id string, includePaths bool) (map[string]any, error) {
+	tx, err := s.readers.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var kind string
+	if err = tx.QueryRowContext(ctx, "SELECT kind FROM sources WHERE id=?", id).Scan(&kind); errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrSourceNotFound
+	} else if err != nil {
+		return nil, err
+	}
+	result := map[string]any{"available": false, "source_id": id, "source_kind": kind}
+	if kind == "archive" {
+		result["availability"] = "frozen_origin_report_not_in_portable_v1"
+		_ = tx.Commit()
+		return result, nil
+	}
+	if s.schemaVersion == 5 {
+		result["availability"] = "not_yet_available"
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+	if !includePaths {
+		var summary ReportSummary
+		var reasonsJSON string
+		err = tx.QueryRowContext(ctx, `SELECT report_id,operation,finished_at,indexed_documents,skipped_files,pruned_directories,coverage,reasons_json FROM indexing_reports WHERE source_id=?`, id).Scan(&summary.ReportID, &summary.Operation, &summary.FinishedAt, &summary.IndexedDocuments, &summary.SkippedFiles, &summary.PrunedDirectories, &summary.Coverage, &reasonsJSON)
+		if errors.Is(err, sql.ErrNoRows) {
+			result["availability"] = "not_yet_available"
+			if err = tx.Commit(); err != nil {
+				return nil, err
+			}
+			return result, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		summary.Available = true
+		if err = json.Unmarshal([]byte(reasonsJSON), &summary.Reasons); err != nil {
+			return nil, err
+		}
+		result["available"] = true
+		result["availability"] = "available"
+		result["report"] = summary
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+	var raw string
+	err = tx.QueryRowContext(ctx, "SELECT report_json FROM indexing_reports WHERE source_id=?", id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		result["availability"] = "not_yet_available"
+		_ = tx.Commit()
+		return result, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var r diagnostics.Report
+	if err = json.Unmarshal([]byte(raw), &r); err != nil {
+		return nil, err
+	}
+	result["available"] = true
+	result["availability"] = "available"
+	result["report"] = r
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 type ArchiveSource struct {
@@ -960,6 +1103,22 @@ func (s *Store) Sources(ctx context.Context) ([]SourceStatus, error) {
 		return nil, err
 	}
 	for i := range result {
+		var summary ReportSummary
+		var reasonsJSON string
+		err := tx.QueryRowContext(ctx, `SELECT report_id,operation,finished_at,indexed_documents,skipped_files,pruned_directories,coverage,reasons_json FROM indexing_reports WHERE source_id=?`, result[i].ID).Scan(&summary.ReportID, &summary.Operation, &summary.FinishedAt, &summary.IndexedDocuments, &summary.SkippedFiles, &summary.PrunedDirectories, &summary.Coverage, &reasonsJSON)
+		if err == nil {
+			summary.Available = true
+			if err = json.Unmarshal([]byte(reasonsJSON), &summary.Reasons); err != nil {
+				return nil, err
+			}
+			result[i].IndexingReport = &summary
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		} else if result[i].Kind == "archive" {
+			result[i].IndexingReport = &ReportSummary{Available: false, Availability: "frozen_origin_report_not_in_portable_v1"}
+		} else {
+			result[i].IndexingReport = &ReportSummary{Available: false, Availability: "not_yet_available"}
+		}
 		switch result[i].Kind {
 		case "github":
 			g, err := githubSourceQuery(ctx, tx, result[i].ID)
@@ -1067,7 +1226,7 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 		token = fmt.Sprintf("%x", b)
 	}
 	sc := &scan{tx: tx, sourceID: result.Source.ID, token: token + fmt.Sprintf("-%d", revision)}
-	report, err := snapshot.Scan(ctx, func(doc connector.Document) error {
+	report, payload, err := snapshot.ScanWithDiagnostics(ctx, func(doc connector.Document) error {
 		changed, e := sc.Upsert(ctx, doc)
 		if e == nil {
 			if changed {
@@ -1080,7 +1239,7 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 	})
 	result.Seen, result.Skipped = report.Seen, report.Skipped
 	if err != nil {
-		return result, GitHubSource{}, fmt.Errorf("scan failed; previous index preserved: %w", err)
+		return result, GitHubSource{}, &ingest.ScanFailure{Code: "scan_failed", Cause: err}
 	}
 	r, err := tx.ExecContext(ctx, "DELETE FROM documents WHERE source_id=? AND scan_token<>?", result.Source.ID, sc.token)
 	if err != nil {
@@ -1095,6 +1254,41 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 	if _, err = tx.ExecContext(ctx, "UPDATE sources SET last_indexed_at=? WHERE id=?", now.Format(time.RFC3339Nano), result.Source.ID); err != nil {
 		return result, GitHubSource{}, err
 	}
+	var reportIDBytes [16]byte
+	if _, err = rand.Read(reportIDBytes[:]); err != nil {
+		return result, GitHubSource{}, err
+	}
+	reportID := hex.EncodeToString(reportIDBytes[:])
+	skippedFiles := int64(0)
+	for _, reason := range payload.Reasons {
+		if reason.Unit == "file" {
+			skippedFiles += reason.Count
+		}
+	}
+	startedAt := snapshot.StartedAt()
+	if startedAt.IsZero() {
+		startedAt = now
+	}
+	dr := &diagnostics.Report{FormatVersion: diagnostics.FormatVersion, ID: reportID, SourceID: result.Source.ID, SourceKind: "github", SnapshotID: reportID, Operation: "github_publication", StartedAt: startedAt, FinishedAt: now, DurationMillis: now.Sub(startedAt).Milliseconds(), Committed: true, Complete: true, IndexedDocuments: int64(result.Updated + result.Unchanged), UpdatedDocuments: int64(result.Updated), UnchangedDocuments: int64(result.Unchanged), RemovedDocuments: int64(result.Removed), ObservedFiles: payload.ObservedFiles, ObservedEntries: payload.ObservedEntries, ObservedEntriesKnown: payload.ObservedEntriesKnown, ObservedFilesKnown: payload.ObservedFilesKnown, ObservedDirectories: payload.ObservedDirectories, ObservedDirectoriesKnown: payload.ObservedDirectoriesKnown, SkippedFiles: skippedFiles, Reasons: payload.Reasons, Examples: payload.Examples, ExamplesOmitted: payload.ExamplesOmitted, RedactedSamples: payload.RedactedSamples, Coverage: payload.Coverage}
+	for _, reason := range payload.Reasons {
+		if reason.Unit == "entry" {
+			dr.SkippedEntries += reason.Count
+		}
+	}
+	if err = dr.Validate(); err != nil {
+		return result, GitHubSource{}, err
+	}
+	reportJSON, marshalErr := json.Marshal(dr)
+	if marshalErr != nil {
+		return result, GitHubSource{}, marshalErr
+	}
+	reasonsJSON, marshalErr := json.Marshal(dr.Reasons)
+	if marshalErr != nil {
+		return result, GitHubSource{}, marshalErr
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO indexing_reports(source_id,report_id,snapshot_id,report_json,committed_at,operation,finished_at,indexed_documents,skipped_files,pruned_directories,coverage,reasons_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET report_id=excluded.report_id,snapshot_id=excluded.snapshot_id,report_json=excluded.report_json,committed_at=excluded.committed_at,operation=excluded.operation,finished_at=excluded.finished_at,indexed_documents=excluded.indexed_documents,skipped_files=excluded.skipped_files,pruned_directories=excluded.pruned_directories,coverage=excluded.coverage,reasons_json=excluded.reasons_json`, result.Source.ID, reportID, reportID, string(reportJSON), now.Format(time.RFC3339Nano), dr.Operation, now.Format(time.RFC3339Nano), dr.IndexedDocuments, dr.SkippedFiles, dr.PrunedDirectories, dr.Coverage, string(reasonsJSON)); err != nil {
+		return result, GitHubSource{}, err
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO github_sources(source_id,repository_id,owner,repo,repository_url,ref_mode,ref_value,selected_path,max_bytes,policy_version,snapshot_sha,commit_time,registration_token,revision,last_error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, '') ON CONFLICT(source_id) DO UPDATE SET repository_id=excluded.repository_id,owner=excluded.owner,repo=excluded.repo,repository_url=excluded.repository_url,ref_mode=excluded.ref_mode,ref_value=excluded.ref_value,selected_path=excluded.selected_path,max_bytes=excluded.max_bytes,policy_version=excluded.policy_version,snapshot_sha=excluded.snapshot_sha,commit_time=excluded.commit_time,revision=excluded.revision,last_error='' WHERE github_sources.registration_token=? AND github_sources.revision=?`, result.Source.ID, meta.RepositoryID, meta.Owner, meta.Repo, meta.RepositoryURL, meta.RefMode, meta.RefValue, meta.SelectedPath, meta.MaxBytes, meta.PolicyVersion, meta.SHA, meta.CommitTime.Format(time.RFC3339Nano), token, revision, currentToken, currentRevision)
 	if err != nil {
 		return result, GitHubSource{}, err
@@ -1102,6 +1296,7 @@ func (s *Store) PublishGitHub(ctx context.Context, snapshot *githubconnector.Sna
 	if err = tx.Commit(); err != nil {
 		return result, GitHubSource{}, err
 	}
+	result.Report = dr
 	g := GitHubSource{SourceID: result.Source.ID, RepositoryID: meta.RepositoryID, Owner: meta.Owner, Repo: meta.Repo, RepositoryURL: meta.RepositoryURL, RefMode: meta.RefMode, RefValue: meta.RefValue, SelectedPath: meta.SelectedPath, MaxBytes: meta.MaxBytes, PolicyVersion: meta.PolicyVersion, SHA: meta.SHA, CommitTime: meta.CommitTime, RegistrationToken: token, Revision: revision}
 	return result, g, nil
 }

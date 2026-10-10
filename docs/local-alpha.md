@@ -85,9 +85,12 @@ Markdown client.
 Stop Findrail and back up its dedicated data directory. Migrations are embedded
 and transactional: migration 2 adds media metadata, PDF pages / page FTS and
 source limits; migration 4 adds the DOCX limit and registration guards; migration
-5 adds frozen archive provenance. Legacy
-sources keep DOCX disabled until explicitly configured/re-indexed. The old binary
-rejects schema 5; restore the stopped-directory backup to downgrade.
+5 adds frozen archive provenance; migration 6 adds last-successful indexing
+reports without rescanning or fabricating archive-origin diagnostics. Legacy
+sources keep DOCX disabled until explicitly configured/re-indexed. Schema-5
+sources have no report until a successful supported scan. Binaries predating
+these migrations reject newer schemas; restore a stopped-directory backup only
+with a compatible binary to downgrade.
 
 ## Alpha release scope
 
