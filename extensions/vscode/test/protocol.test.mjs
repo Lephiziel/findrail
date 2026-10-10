@@ -27,6 +27,9 @@ test('bounds chunked response bytes, rejects malformed UTF-8, and releases cance
 test('rejects search results that escape the selected source',async()=>{
  const s=http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({total:1,results:[{id:'doc_1',title:'title',uri:'file:///tmp/a',path:'a',source_id:'other',source_name:'s',source_kind:'filesystem',snippet:'x',score:1,media_type:'text/plain'}]}))});await new Promise(r=>s.listen(0,'127.0.0.1',r));try{const c=new Client(`http://127.0.0.1:${s.address().port}`,1);await assert.rejects(()=>c.search('q','chosen','literal',{},20),/result_invalid/)}finally{s.close()}
 });
+test('encodes one selected source and all existing filters as server-side parameters',async()=>{
+ let received;const s=http.createServer((req,res)=>{received=new URL(req.url,'http://127.0.0.1');res.setHeader('content-type','application/json');res.end('{"total":0,"results":[]}')});await new Promise(r=>s.listen(0,'127.0.0.1',r));try{const c=new Client(`http://127.0.0.1:${s.address().port}`,1);await c.search('literal OR is still literal','source_1','literal',{format:'docx',path_prefix:'docs',title_contains:'Guide'},20);assert.equal(received.pathname,'/api/v1/search');for(const [key,value] of Object.entries({q:'literal OR is still literal',source:'source_1',mode:'literal',limit:'20',format:'docx',path_prefix:'docs',title_contains:'Guide'}))assert.equal(received.searchParams.get(key),value)}finally{s.close()}
+});
 test('enforces a deadline and releases its slot',async()=>{
  const s=http.createServer((req,res)=>{res.setHeader('content-type','application/json')});await new Promise(r=>s.listen(0,'127.0.0.1',r));try{const c=new Client(`http://127.0.0.1:${s.address().port}`,0.05);await assert.rejects(()=>c.get('/healthz',1024),/deadline/);assert.equal(c.active,0)}finally{s.close()}
 });
