@@ -11,9 +11,11 @@ vs instrumented run took 7.0 vs 7.2 ms; this is a noisy spot check only. PR #23
 was subsequently extended with watcher progress, structured failure attempts,
 compiled failed-refresh/cancel/configure/watcher/archive checks, and stale-report
 UI regression tests. Chromium 153 headless on Linux verified Sources report
-details, hostile-path plain-text rendering, keyboard activation and 375px layout.
-The complete interactive browser acceptance journey and native macOS/Windows
-execution were not run locally; see PR Actions for remote CI status.
+details, hostile-path plain-text rendering, live job progress, cancel/failure
+with the durable report unchanged, retry, removal, Enter activation and 375px
+layout. Visibility pause/resume is exercised by the web-client lifecycle test;
+the installed CDP build exposes no page-visibility override. Native
+macOS/Windows execution was not done locally; see PR Actions for remote CI.
 
 ## Exact search / server filters branch validation · 2026-10-09
 

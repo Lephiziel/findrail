@@ -137,8 +137,11 @@ def main():
         }
         policies = updated.execute('SELECT max_docx_bytes FROM sources WHERE id=?', (folder_id,)).fetchone()
         updated.close()
-        if schema != 5 or policies != (0,): raise SystemExit('schema-5 migration state mismatch')
+        if schema != 6 or policies != (0,): raise SystemExit('schema-6 migration state mismatch')
         if before_state != after_state: raise SystemExit('migration changed the recorded inventory, content hash, FTS or PDF pages')
+        report = json.loads(invoke(binary, ['source-report', '--data-dir', str(data), '--source', folder_id, '--json']).stdout)
+        if report.get('available') is not False or report.get('availability') != 'not_yet_available':
+            raise SystemExit('schema migration fabricated a source report')
         configure_legacy_docx(binary, data, root, folder_id)
         sources = json.loads(invoke(binary, ['sources', '--data-dir', str(data), '--json']).stdout)['sources']
         legacy = next(source for source in sources if source['id'] == folder_id)
@@ -149,7 +152,7 @@ def main():
         shutil.copytree(backup, restored)
         if hashlib.sha256((restored / 'findrail.db').read_bytes()).hexdigest() != before:
             raise SystemExit('whole-directory rollback restore differed')
-        print('Packaged alpha.2 schema-2 upgrade passed: source inventory, FTS/PDF page, schema-5 disabled DOCX default, Configure/index/restart, stopped full-directory rollback copy.')
+        print('Packaged alpha.2 schema-2 upgrade passed: source inventory, FTS/PDF page, schema-6 disabled DOCX default, unavailable pre-scan diagnostics, Configure/index/restart, stopped full-directory rollback copy.')
 
 
 if __name__ == '__main__': main()

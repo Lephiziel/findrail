@@ -75,5 +75,8 @@ wall time (one run each; startup and filesystem noise dominate). The instrumente
 journey observed 246 filesystem entries (245 files), retained 200 of 243
 skipped-file examples, and serialized the complete report to 17,090 bytes. This
 demonstrates bounded output, not a stable overhead benchmark or a p95 claim.
-Chromium 153 headless checked the report panel, hostile path text rendering,
-keyboard activation and 375px viewport; it was not a full browser acceptance journey.
+Chromium 153 headless exercised the Sources report panel, hostile path text,
+live progress, cancel and failed refresh with the old report retained, retry,
+removal, Enter activation, and a 375px viewport. Visibility pause/resume is
+covered by the browser-client lifecycle regression test (the available CDP
+build has no page-visibility override command).
