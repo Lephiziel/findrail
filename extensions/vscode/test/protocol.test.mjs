@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { endpoint, Client } from '../dist/protocol.cjs';
 import { formatCitation } from '../dist/citation.mjs';
+import { PreviewCache } from '../dist/previewCache.cjs';
 
 test('endpoint allowlist rejects unsafe authorities and URL components',()=>{
  for(const v of ['https://127.0.0.1','http://127.0.0.2','http://0.0.0.0','http://user@localhost','http://localhost/path','http://localhost/?q=x','http://example.org']) assert.throws(()=>endpoint(v));
@@ -14,6 +15,9 @@ test('requires compatible API and restricts requests to fixed read-only GETs',as
 });
 test('rejects redirects and invalid capability contract',async()=>{
  const s=http.createServer((req,res)=>{if(req.url==='/healthz'){res.setHeader('content-type','application/json');res.end('{"status":"ok"}')}else{res.statusCode=302;res.setHeader('location','http://example.org');res.end()}});await new Promise(r=>s.listen(0,'127.0.0.1',r));try{await assert.rejects(()=>new Client(`http://127.0.0.1:${s.address().port}`,5).connect(),/http_rejected/)}finally{s.close()}
+});
+test('refuses a backend that omits declared Advanced capability',async()=>{
+ const s=http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(req.url==='/healthz'?{status:'ok'}:{management:false,client_api_version:1,search_modes:['literal'],search_filters:['source','format','path_prefix','title_contains'],pdf_title_only_evidence:true}))});await new Promise(r=>s.listen(0,'127.0.0.1',r));try{await assert.rejects(()=>new Client(`http://127.0.0.1:${s.address().port}`,1).connect(),/compatible_build_required/)}finally{s.close()}
 });
 test('the shipped citation formatter preserves PDF page, exact excerpt, and truncation provenance',()=>{
  const citation=formatCitation({title:'Runbook',uri:'file:///tmp/runbook.pdf#page=2',media_type:'application/pdf',page:2,text:'line one\n```\nline three',truncated:true},{excerpt:'line one'});
@@ -32,4 +36,13 @@ test('encodes one selected source and all existing filters as server-side parame
 });
 test('enforces a deadline and releases its slot',async()=>{
  const s=http.createServer((req,res)=>{res.setHeader('content-type','application/json')});await new Promise(r=>s.listen(0,'127.0.0.1',r));try{const c=new Client(`http://127.0.0.1:${s.address().port}`,0.05);await assert.rejects(()=>c.get('/healthz',1024),/deadline/);assert.equal(c.active,0)}finally{s.close()}
+});
+test('caps active requests at four without queueing and releases slots after abort',async()=>{
+ const started=[];const s=http.createServer((req,res)=>{started.push(req.url);res.setHeader('content-type','application/json')});await new Promise(r=>s.listen(0,'127.0.0.1',r));try{const c=new Client(`http://127.0.0.1:${s.address().port}`,1);const controls=Array.from({length:4},()=>new AbortController());const pending=controls.map((x,i)=>c.get(`/api/v1/documents/doc_${i}`,1024,x.signal));await new Promise(r=>setTimeout(r,20));await assert.rejects(()=>c.get('/healthz',1024),/busy/);for(const x of controls)x.abort();for(const p of pending)await assert.rejects(()=>p,/canceled/);assert.equal(c.active,0)}finally{s.close()}
+});
+test('preview cache enforces LRU record and UTF-8 text budgets and clears entries',()=>{
+ const cache=new PreviewCache(2,5);const entry=(text)=>({evidence:{text}});
+ assert.deepEqual(cache.set('a',entry('abc')),[]);assert.deepEqual(cache.set('b',entry('de')),[]);assert.equal(cache.textBytes,5);
+ assert.equal(cache.get('a').evidence.text,'abc');assert.deepEqual(cache.set('c',entry('xy')),['b']);assert.equal(cache.get('b'),undefined);assert.equal(cache.size,2);assert.equal(cache.textBytes,5);
+ assert.deepEqual(cache.set('too-large',entry('123456')),['too-large']);assert.equal(cache.get('too-large'),undefined);assert.equal(cache.size,2);cache.clear();assert.equal(cache.size,0);assert.equal(cache.textBytes,0);
 });

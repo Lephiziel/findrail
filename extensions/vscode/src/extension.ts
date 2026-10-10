@@ -1,18 +1,18 @@
 import * as vscode from 'vscode';
 import { Client, Evidence, Result, Source } from './protocol';
+import { PreviewCache } from './previewCache';
 
 type Preview={key:string;result:Result;evidence:Evidence;page?:number;generation:number};
 const scheme='findrail-evidence';
 class Provider implements vscode.TextDocumentContentProvider {
  private emitter=new vscode.EventEmitter<vscode.Uri>(); readonly onDidChange=this.emitter.event;
- private entries=new Map<string,Preview>();
- put(p:Preview){this.entries.delete(p.key);this.entries.set(p.key,p);while(this.entries.size>10||this.bytes()>4*1024*1024){const first=this.entries.keys().next().value;if(first) this.entries.delete(first);else break}}
+ private entries=new PreviewCache<Preview>();
+ put(p:Preview){return this.entries.set(p.key,p)}
  get(key:string){return this.entries.get(key)}
  remove(key:string){this.entries.delete(key)}
  clear(){this.entries.clear()}
  dispose(){this.clear();this.emitter.dispose()}
  provideTextDocumentContent(uri:vscode.Uri){const p=this.entries.get(uri.path.slice(1));return p?evidenceText(p.evidence,p.page):'This Findrail evidence preview is no longer available. Refresh it from a current result.'}
- private bytes(){return [...this.entries.values()].reduce((n,p)=>n+Buffer.byteLength(p.evidence.text,'utf8'),0)}
 }
 let client:Client|undefined, selected:Source|undefined, query='', mode:'literal'|'advanced'='literal', filters={format:'',path_prefix:'',title_contains:''}, active:Preview|undefined, generation=0, controller:AbortController|undefined;
 let ctx:vscode.ExtensionContext, provider:Provider;
