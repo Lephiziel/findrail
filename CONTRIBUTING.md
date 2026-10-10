@@ -29,6 +29,8 @@ the contract before investing in a large implementation.
 
 ## Useful areas
 
+Connector authors can follow the [conformance kit workflow](docs/connector-conformance.md).
+
 Extraction fixtures, Unicode cases, source conformance, search evaluation,
 accessibility, packaging, and clear documentation. Planned modules have scoped
 acceptance criteria under `docs/implementation-plan.md`.
