@@ -211,9 +211,12 @@ func WriteArchiveProfile(ctx context.Context, dst io.Writer, m Manifest, documen
 		}
 		return path, count, limited.n, hex.EncodeToString(h.Sum(nil)), nil
 	}
-	// Reserve the full manifest ceiling before staging JSONL so the aggregate
-	// expanded profile cannot be exceeded before manifest construction.
-	payloadLimit := expandedLimit - MaxManifest
+	// Stricter profiles reserve the manifest ceiling before staging JSONL.
+	// The historical CLI profile keeps its existing payload and final-size checks.
+	payloadLimit := expandedLimit
+	if expandedLimit < MaxUncompressed {
+		payloadLimit -= MaxManifest
+	}
 	if payloadLimit <= 0 {
 		return m, errors.New("snapshot expanded profile is too small")
 	}

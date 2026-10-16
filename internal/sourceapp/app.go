@@ -146,7 +146,11 @@ func (a *App) newWorkLocked(kind, target, sourceID string, run func(context.Cont
 	now := time.Now().UTC()
 	job := &Job{ID: hex.EncodeToString(b[:]), Type: kind, Target: target, SourceID: sourceID, Status: "queued", Phase: "validating", CreatedAt: now, UpdatedAt: now}
 	job.Progress = Progress{AttemptID: job.ID, Phase: "validating", Partial: true}
-	ctx, cancel := context.WithTimeout(a.root, jobDeadline)
+	deadline := jobDeadline
+	if strings.HasPrefix(kind, "snapshot-") {
+		deadline = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(a.root, deadline)
 	w := &work{job: job, run: run, ctx: ctx, cancel: cancel, finished: make(chan struct{})}
 	a.jobs = append(a.jobs, job)
 	a.byID[job.ID] = w

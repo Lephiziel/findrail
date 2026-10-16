@@ -76,7 +76,7 @@ encryption or authentication.
 ## Writable management API
 
 The writable `start`/desktop composition exposes portable source transfer; `serve`
-and `demo` remain read-only. The UI asks the user for a local path interpreted on
+and `demo` remain read-only. API callers supply a local path interpreted on
 the machine running Findrail. It does not use a browser file input, upload a Blob,
 accept a URL, spawn the CLI, or open an arbitrary native path. Requests require
 the existing same-origin session token, Host and fetch-site guards.
@@ -95,7 +95,10 @@ Management request bodies are capped at 32 KiB; paths at 4096 UTF-8 bytes and
 names at 512 bytes. The management profile is stricter than the CLI: 32 MiB
 compressed input/output, 64 MiB expanded, 2000 documents and 20000 pages. ZIP v1
 integrity and per-record safety limits remain unchanged. One decode/export runs
-at a time per app, jobs are bounded, and each operation has a two-minute deadline.
+at a time per app, jobs are bounded, and each operation has a two-minute deadline
+including queue time. Source exports share the source operation lock; Forget
+cancels a pending export and changed source registrations cannot authorize it.
+An absent `portable_snapshots` capability on an older API v1 server means false.
 Archives remain plaintext and may contain absolute source provenance; the
 metadata preview hides original source name/location by default.
 

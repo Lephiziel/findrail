@@ -24,14 +24,14 @@ const (
 )
 
 type SnapshotSummary struct {
-	Format      string `json:"format"`
-	Version     int    `json:"version"`
-	Kind        string `json:"kind"`
+	Format      string `json:"format,omitempty"`
+	Version     int    `json:"version,omitempty"`
+	Kind        string `json:"kind,omitempty"`
 	Documents   int    `json:"documents"`
 	Pages       int    `json:"pages"`
 	Bytes       int64  `json:"bytes"`
-	Fingerprint string `json:"fingerprint"`
-	Frozen      bool   `json:"frozen"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Frozen      bool   `json:"frozen,omitempty"`
 	Claim       string `json:"claim,omitempty"`
 	Status      string `json:"status"`
 	Error       string `json:"error,omitempty"`
@@ -159,7 +159,22 @@ func (a *App) ExportSnapshot(sourceID, output string) (Job, error) {
 	if err != nil {
 		return Job{}, errors.New("invalid_path")
 	}
-	return a.submit("snapshot-export", "portable snapshot export", sourceID, func(ctx context.Context, job *Job) (string, error) {
+	sources, err := a.store.Sources(a.root)
+	if err != nil {
+		return Job{}, err
+	}
+	var registration *sqlite.SourceStatus
+	for _, source := range sources {
+		if source.ID == sourceID {
+			copy := source
+			registration = &copy
+			break
+		}
+	}
+	if registration == nil {
+		return Job{}, errors.New("not_found")
+	}
+	return a.submit("snapshot-export", sourceID, sourceID, func(ctx context.Context, job *Job) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		unlock, err := a.coordinator.Acquire(ctx, sourceID)
@@ -175,6 +190,9 @@ func (a *App) ExportSnapshot(sourceID, output string) (Job, error) {
 		roots := []string{a.dataDir}
 		for _, s := range sources {
 			if s.ID == sourceID {
+				if s.RegistrationToken != registration.RegistrationToken || s.RegistrationRevision != registration.RegistrationRevision {
+					return "", errors.New("source_changed")
+				}
 				registered = true
 			}
 			if s.Kind == "filesystem" {

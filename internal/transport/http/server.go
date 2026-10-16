@@ -1122,10 +1122,15 @@ func decodeSnapshotRequest(w http.ResponseWriter, r *http.Request, target any, r
 		return false
 	}
 	for _, key := range required {
-		if _, ok := fields[key]; !ok {
+		value, ok := fields[key]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			writeError(w, 400, "required snapshot request field missing")
 			return false
 		}
+	}
+	if len(fields) != len(required) {
+		writeError(w, 400, "unknown snapshot request field")
+		return false
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()

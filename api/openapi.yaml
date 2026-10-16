@@ -279,10 +279,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [management, portable_snapshots, desktop, open_originals, collection_persistence, diagnostics, client_api_version, search_modes, search_filters, pdf_title_only_evidence, passage_preview]
+                required: [management, desktop, open_originals, collection_persistence, diagnostics, client_api_version, search_modes, search_filters, pdf_title_only_evidence, passage_preview]
                 properties:
                   management: {type: boolean}
-                  portable_snapshots: {type: boolean, description: "True only when the complete writable management backend is composed; source snapshot paths are local to the Findrail process host"}
+                  portable_snapshots: {type: boolean, description: "True only when the complete writable management backend is composed; absent means false on older API v1 servers; source snapshot paths are local to the Findrail process host"}
                   desktop: {type: boolean, description: Explicit desktop quit is available only in the desktop composition}
                   open_originals: {type: boolean}
                   collection_persistence: {type: boolean, description: "True only for writable start composition"}
@@ -363,6 +363,7 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/SnapshotInspection'}}}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {description: Unknown inspection job}
+        '409': {description: Inspection job failed or was canceled}
         '410': {description: Preview lease expired}
   /api/v1/snapshots/import:
     post:
@@ -379,7 +380,7 @@ paths:
         '202': {description: Existing async import job; result is `imported:<source_id>` or `already_imported:<source_id>`}
         '400': {$ref: '#/components/responses/BadRequest'}
         '403': {$ref: '#/components/responses/Forbidden'}
-        '409': {description: Invalid, expired, or replayed claim rejected before a job is accepted; a changed archive fails the accepted job before storage mutation}
+        '409': {description: 'Invalid, expired, or replayed claim rejected before a job is accepted; a changed archive fails the accepted job before storage mutation'}
   /api/v1/sources/{id}/snapshot-export:
     post:
       operationId: exportPortableSnapshot

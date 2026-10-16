@@ -257,12 +257,16 @@ def main():
                 except StaleElementReferenceException:
                     return False
             wait.until(add_note)
+            browser.execute_script("""const input=document.getElementById('collection-title');
+                input.value='Packaged notes / week 1';input.dispatchEvent(new Event('input'));""")
             browser.find_element(By.ID, "collection-download").click()
             deadline = time.monotonic() + 10
-            exported = base / "findrail-evidence.md"
+            exported = base / "findrail-packaged-notes-week-1.md"
             while time.monotonic() < deadline and not exported.exists():
                 time.sleep(.05)
             text = exported.read_text(encoding="utf-8")
+            assert text.startswith("# Packaged notes / week 1\n")
+            assert browser.find_element(By.ID, "collection-status").text == f"Downloaded {exported.name}."
             assert selected in text and "note from packaged journey" in text
             assert "runbook.pdf — page 2" in text and (root / "runbook.pdf").as_uri() + "#page=2" in text
             browser.find_element(By.ID, "collection-close").click()
