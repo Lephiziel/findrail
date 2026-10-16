@@ -789,6 +789,7 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 		writeJSON(w, 200, map[string]any{
 			"management":              config.management != nil,
 			"evidence_bundle":         bundleEnabled,
+			"portable_snapshots":      config.management != nil,
 			"collection_persistence":  config.management != nil && hasCollections,
 			"open_originals":          config.originals != nil,
 			"desktop":                 config.desktop != nil,
@@ -906,6 +907,54 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 		})
 	}
 	if config.management != nil {
+		mux.HandleFunc("POST /api/v1/snapshots/inspect", func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Path string `json:"path"`
+			}
+			if !mutationAllowed(w, r, config) || !decodeSnapshotRequest(w, r, &body, "path") {
+				return
+			}
+			job, err := config.management.InspectSnapshot(body.Path)
+			writeJobResult(w, job, err)
+		})
+		mux.HandleFunc("GET /api/v1/snapshots/inspections/{job_id}", func(w http.ResponseWriter, r *http.Request) {
+			if !managementReadAllowed(w, r, config) {
+				return
+			}
+			result := config.management.SnapshotInspection(r.PathValue("job_id"))
+			status := http.StatusOK
+			if result.Status == "not_found" {
+				status = http.StatusNotFound
+			}
+			if result.Status == "failed" || result.Status == "canceled" {
+				status = http.StatusConflict
+			}
+			if result.Status == "expired" {
+				status = http.StatusGone
+			}
+			writeJSON(w, status, result)
+		})
+		mux.HandleFunc("POST /api/v1/snapshots/import", func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Claim string `json:"claim"`
+				Name  string `json:"name"`
+			}
+			if !mutationAllowed(w, r, config) || !decodeSnapshotRequest(w, r, &body, "claim", "name") {
+				return
+			}
+			job, err := config.management.ImportSnapshot(body.Claim, body.Name)
+			writeJobResult(w, job, err)
+		})
+		mux.HandleFunc("POST /api/v1/sources/{id}/snapshot-export", func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				OutputPath string `json:"output_path"`
+			}
+			if !mutationAllowed(w, r, config) || !decodeSnapshotRequest(w, r, &body, "output_path") {
+				return
+			}
+			job, err := config.management.ExportSnapshot(r.PathValue("id"), body.OutputPath)
+			writeJobResult(w, job, err)
+		})
 		mux.HandleFunc("POST /api/v1/sources", func(w http.ResponseWriter, r *http.Request) {
 			var body struct {
 				Type         string `json:"type"`
@@ -1034,6 +1083,69 @@ func mutationAllowed(w http.ResponseWriter, r *http.Request, c options) bool {
 	return mutationAuthAllowed(w, r, c)
 }
 
+func managementReadAllowed(w http.ResponseWriter, r *http.Request, c options) bool {
+	if c.management == nil {
+		writeError(w, 404, "management unavailable")
+		return false
+	}
+	origins := r.Header.Values("Origin")
+	if len(origins) > 1 || len(origins) == 1 && origins[0] != "http://"+c.authority || !requestAuthority(r, c.authority) || crossSite(r) {
+		writeError(w, 403, "same local origin required")
+		return false
+	}
+	token := r.Header.Get("X-Findrail-Token")
+	if len(r.Header.Values("X-Findrail-Token")) != 1 || c.token == "" || len(token) != len(c.token) || subtle.ConstantTimeCompare([]byte(token), []byte(c.token)) != 1 {
+		writeError(w, 403, "session token required")
+		return false
+	}
+	return true
+}
+
+func decodeSnapshotRequest(w http.ResponseWriter, r *http.Request, target any, required ...string) bool {
+	const limit = 32 << 10
+	if r.ContentLength > limit {
+		writeError(w, 413, "request too large")
+		return false
+	}
+	b, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if err != nil || len(b) > limit {
+		writeError(w, 413, "request too large")
+		return false
+	}
+	if !utf8.Valid(b) || !jsonObjectsUnique(b) || !jsonUnicodeScalarsValid(b) {
+		writeError(w, 400, "invalid snapshot request")
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(b, &fields) != nil {
+		writeError(w, 400, "invalid snapshot request")
+		return false
+	}
+	for _, key := range required {
+		value, ok := fields[key]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			writeError(w, 400, "required snapshot request field missing")
+			return false
+		}
+	}
+	if len(fields) != len(required) {
+		writeError(w, 400, "unknown snapshot request field")
+		return false
+	}
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.DisallowUnknownFields()
+	if d.Decode(target) != nil {
+		writeError(w, 400, "invalid snapshot request")
+		return false
+	}
+	var extra any
+	if d.Decode(&extra) != io.EOF {
+		writeError(w, 400, "invalid snapshot request")
+		return false
+	}
+	return true
+}
+
 func originalMutationAllowed(w http.ResponseWriter, r *http.Request, c options) bool {
 	if c.originals == nil {
 		writeError(w, 404, "native opener unavailable")
@@ -1122,6 +1234,12 @@ func writeJobResult(w http.ResponseWriter, job sourceapp.Job, err error) {
 			writeError(w, 404, "source not found")
 		case "already_added":
 			writeError(w, 409, "source is already added; use Refresh in Sources")
+		case "invalid_claim":
+			writeError(w, 409, "snapshot claim is invalid, expired, or already used")
+		case "snapshot_preview_busy":
+			writeError(w, 409, "target is busy")
+		case "invalid_path", "invalid_name":
+			writeError(w, 400, "invalid snapshot path or name")
 		default:
 			writeError(w, 400, boundedHTTPError(err.Error()))
 		}

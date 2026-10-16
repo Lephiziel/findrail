@@ -311,8 +311,11 @@ def main():
                 URL.createObjectURL=b=>{window.__createdURLs++;return window.__createObjectURL(b)};
                 URL.revokeObjectURL=u=>{window.__revokedURLs++;return window.__revokeObjectURL(u)};""")
             browser.find_element(By.ID, "collection-download").click()
-            wait.until(lambda _: (base / "findrail-evidence.md").exists())
-            exported = (base / "findrail-evidence.md").read_text(encoding="utf-8")
+            filename = "findrail-findrail-evidence-collection.md"
+            wait.until(lambda _: (base / filename).exists())
+            exported = (base / filename).read_text(encoding="utf-8")
+            assert exported.startswith("# Findrail evidence collection\n")
+            assert browser.find_element(By.ID, "collection-status").text == f"Downloaded {filename}."
             assert "Synthetic" in exported and "file://" in exported and "literal note" in exported
             assert "changed/current version differs" in exported
             assert "runbook.pdf — page 2" in exported and "#page=2" in exported
@@ -325,9 +328,9 @@ def main():
                 stable = lambda value: "\n".join(line for line in value.splitlines() if not line.startswith("Exported "))
                 assert stable(denied_fallback) == stable(exported), "denied clipboard fallback differs from downloaded Markdown"
             browser.find_element(By.ID, "collection-download").click()
-            wait.until(lambda _: len(list(base.glob("findrail-evidence*.md"))) >= 2)
+            wait.until(lambda _: len(list(base.glob("findrail-findrail-evidence-collection*.md"))) >= 2)
             wait.until(lambda d: d.execute_script("return window.__createdURLs===2&&window.__revokedURLs>=2"))
-            assert any("runbook.pdf — page 2" in p.read_text(encoding="utf-8") for p in base.glob("findrail-evidence*.md"))
+            assert any("runbook.pdf — page 2" in p.read_text(encoding="utf-8") for p in base.glob("findrail-findrail-evidence-collection*.md"))
 
             # A confirmed 404 removes collected evidence even while its source
             # remains registered; it cannot be exported on a later action.

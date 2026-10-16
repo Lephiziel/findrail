@@ -169,6 +169,15 @@ type PayloadFunc func(context.Context, io.Writer) (int, error)
 // WriteArchive stages and hashes two bounded payloads, then writes a complete
 // deterministic ZIP to dst. The caller must keep dst private until this returns.
 func WriteArchive(ctx context.Context, dst io.Writer, m Manifest, documents, pages PayloadFunc) (Manifest, error) {
+	return WriteArchiveProfile(ctx, dst, m, documents, pages, MaxArchive, MaxUncompressed, MaxDocuments, MaxPages)
+}
+
+// WriteArchiveProfile writes the unchanged v1 wire format with stricter output
+// resource ceilings. Existing WriteArchive callers retain the historical caps.
+func WriteArchiveProfile(ctx context.Context, dst io.Writer, m Manifest, documents, pages PayloadFunc, archiveLimit, expandedLimit int64, documentLimit, pageLimit int) (Manifest, error) {
+	if archiveLimit <= 0 || archiveLimit > MaxArchive || expandedLimit <= 0 || expandedLimit > MaxUncompressed || documentLimit < 0 || documentLimit > MaxDocuments || pageLimit < 0 || pageLimit > MaxPages {
+		return m, errors.New("invalid snapshot write profile")
+	}
 	var err error
 	dir, err := os.MkdirTemp("", "findrail-snapshot-")
 	if err != nil {
@@ -202,15 +211,24 @@ func WriteArchive(ctx context.Context, dst io.Writer, m Manifest, documents, pag
 		}
 		return path, count, limited.n, hex.EncodeToString(h.Sum(nil)), nil
 	}
-	docPath, docCount, docBytes, docHash, err := makePayload("documents.jsonl", MaxUncompressed, documents)
+	// Stricter profiles reserve the manifest ceiling before staging JSONL.
+	// The historical CLI profile keeps its existing payload and final-size checks.
+	payloadLimit := expandedLimit
+	if expandedLimit < MaxUncompressed {
+		payloadLimit -= MaxManifest
+	}
+	if payloadLimit <= 0 {
+		return m, errors.New("snapshot expanded profile is too small")
+	}
+	docPath, docCount, docBytes, docHash, err := makePayload("documents.jsonl", payloadLimit, documents)
 	if err != nil {
 		return m, err
 	}
-	pagePath, pageCount, pageBytes, pageHash, err := makePayload("pages.jsonl", MaxUncompressed-docBytes, pages)
+	pagePath, pageCount, pageBytes, pageHash, err := makePayload("pages.jsonl", payloadLimit-docBytes, pages)
 	if err != nil {
 		return m, err
 	}
-	if docCount < 0 || docCount > MaxDocuments || pageCount < 0 || pageCount > MaxPages {
+	if docCount < 0 || docCount > documentLimit || pageCount < 0 || pageCount > pageLimit {
 		return m, errors.New("snapshot resource limit exceeded")
 	}
 	m.Format, m.Version = FormatID, Version
@@ -225,10 +243,10 @@ func WriteArchive(ctx context.Context, dst io.Writer, m Manifest, documents, pag
 	if len(manifest) > MaxManifest {
 		return m, errors.New("snapshot manifest exceeds v1 limit")
 	}
-	if docBytes+pageBytes+int64(len(manifest)) > MaxUncompressed {
+	if docBytes+pageBytes+int64(len(manifest)) > expandedLimit {
 		return m, errors.New("snapshot uncompressed size exceeds v1 limit")
 	}
-	limitedOut := &limitedWriter{w: dst, max: MaxArchive}
+	limitedOut := &limitedWriter{w: dst, max: archiveLimit}
 	zw := zip.NewWriter(limitedOut)
 	for _, entry := range []struct{ name, path string }{{"manifest.json", ""}, {"documents.jsonl", docPath}, {"pages.jsonl", pagePath}} {
 		h := &zip.FileHeader{Name: entry.name, Method: zip.Deflate}
@@ -365,11 +383,20 @@ func Inspect(data []byte) (Archive, error) {
 }
 
 func InspectContext(ctx context.Context, data []byte) (Archive, error) {
+	return InspectProfile(ctx, data, MaxUncompressed, MaxDocuments, MaxPages)
+}
+
+// InspectProfile fully validates a v1 archive using caller-selected stricter
+// expanded-size and record-count ceilings. The wire-format hard limits remain.
+func InspectProfile(ctx context.Context, data []byte, expandedLimit int64, documentLimit, pageLimit int) (Archive, error) {
 	var result Archive
+	if expandedLimit <= 0 || expandedLimit > MaxUncompressed || documentLimit < 0 || documentLimit > MaxDocuments || pageLimit < 0 || pageLimit > MaxPages {
+		return result, errors.New("invalid snapshot inspection profile")
+	}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if len(data) > MaxArchive {
+	if int64(len(data)) > MaxArchive {
 		return result, errors.New("snapshot archive exceeds v1 limit")
 	}
 	if err := validateZIPEnvelope(data); err != nil {
@@ -397,7 +424,7 @@ func InspectContext(ctx context.Context, data []byte) (Archive, error) {
 		if f.Mode().IsDir() || !f.Mode().IsRegular() || (f.Method != zip.Store && f.Method != zip.Deflate) || f.Flags&^allowedZIPFlags != 0 || f.CompressedSize64 > uint64(len(data)) {
 			return result, errors.New("snapshot contains a non-regular or unsupported ZIP entry")
 		}
-		if f.UncompressedSize64 > MaxUncompressed || expanded > MaxUncompressed-f.UncompressedSize64 {
+		if f.UncompressedSize64 > uint64(expandedLimit) || expanded > uint64(expandedLimit)-f.UncompressedSize64 {
 			return result, errors.New("snapshot expanded size exceeds v1 limit")
 		}
 		expanded += f.UncompressedSize64
@@ -456,10 +483,10 @@ func InspectContext(ctx context.Context, data []byte) (Archive, error) {
 	if err = validateManifest(m); err != nil {
 		return result, err
 	}
-	if m.DocumentCount < 0 || m.DocumentCount > MaxDocuments || m.PageCount < 0 || m.PageCount > MaxPages {
+	if m.DocumentCount < 0 || m.DocumentCount > documentLimit || m.PageCount < 0 || m.PageCount > pageLimit {
 		return result, errors.New("snapshot record count exceeds v1 limits")
 	}
-	remaining := uint64(MaxUncompressed) - uint64(len(manifestBytes))
+	remaining := uint64(expandedLimit) - uint64(len(manifestBytes))
 	docs, err := readEntryContext(ctx, files["documents.jsonl"], remaining)
 	if err != nil {
 		return result, err
@@ -482,10 +509,10 @@ func InspectContext(ctx context.Context, data []byte) (Archive, error) {
 	if !utf8.Valid(docs) || !utf8.Valid(pages) {
 		return result, errors.New("snapshot JSONL is not valid UTF-8")
 	}
-	if result.Documents, err = parseLinesContext[Document](ctx, docs, MaxDocuments, "id", "path", "title", "uri", "media_type", "text", "content_hash", "size_bytes", "modified_at", "page_count"); err != nil {
+	if result.Documents, err = parseLinesContext[Document](ctx, docs, documentLimit, "id", "path", "title", "uri", "media_type", "text", "content_hash", "size_bytes", "modified_at", "page_count"); err != nil {
 		return result, err
 	}
-	if result.Pages, err = parseLinesContext[Page](ctx, pages, MaxPages, "path", "number", "text"); err != nil {
+	if result.Pages, err = parseLinesContext[Page](ctx, pages, pageLimit, "path", "number", "text"); err != nil {
 		return result, err
 	}
 	if len(result.Documents) != m.DocumentCount || len(result.Pages) != m.PageCount {

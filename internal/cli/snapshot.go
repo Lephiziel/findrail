@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/Lephiziel/findrail/internal/config"
@@ -108,11 +106,11 @@ func runSnapshotCommand(ctx context.Context, command string, args []string, out 
 				protectedRoots = append(protectedRoots, source.Root)
 			}
 		}
-		if err = validateExportTarget(*output, protectedRoots...); err != nil {
+		if err = snapshot.ValidateExportTarget(*output, protectedRoots...); err != nil {
 			return err
 		}
 		var manifest snapshot.Manifest
-		archiveBytes, err := publishNoReplaceStream(*output, func(w io.Writer) error {
+		archiveBytes, err := snapshot.PublishNoReplaceStream(*output, func(w io.Writer) error {
 			var e error
 			manifest, _, _, e = store.StreamSnapshot(opCtx, *sourceID, version, time.Now().UTC().Format(time.RFC3339Nano), w)
 			if e != nil {
@@ -165,92 +163,8 @@ func writeSnapshotHelp(out io.Writer, command string) error {
 func writeString(w io.Writer, s string) error { _, err := io.WriteString(w, s); return err }
 
 func readAndInspect(ctx context.Context, path string) (snapshot.Archive, error) {
-	var empty snapshot.Archive
-	if err := ctx.Err(); err != nil {
-		return empty, err
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return empty, err
-	}
-	if !info.Mode().IsRegular() {
-		return empty, errors.New("archive input must be a regular file")
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return empty, err
-	}
-	defer f.Close()
-	info, err = f.Stat()
-	if err != nil {
-		return empty, err
-	}
-	if !info.Mode().IsRegular() {
-		return empty, errors.New("archive input must be a regular file")
-	}
-	if info.Size() > snapshot.MaxArchive {
-		return empty, errors.New("archive exceeds v1 compressed-size limit")
-	}
-	dir, err := os.MkdirTemp("", "findrail-inspect-")
-	if err != nil {
-		return empty, err
-	}
-	defer os.RemoveAll(dir)
-	if err = os.Chmod(dir, 0700); err != nil {
-		return empty, err
-	}
-	tmp := filepath.Join(dir, "input.zip")
-	dst, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return empty, err
-	}
-	_, copyErr := copyBounded(ctx, dst, f, snapshot.MaxArchive)
-	syncErr := dst.Sync()
-	closeErr := dst.Close()
-	if copyErr != nil {
-		return empty, copyErr
-	}
-	if syncErr != nil {
-		return empty, syncErr
-	}
-	if closeErr != nil {
-		return empty, closeErr
-	}
-	data, err := os.ReadFile(tmp)
-	if err != nil {
-		return empty, err
-	}
-	return snapshot.InspectContext(ctx, data)
-}
-
-func copyBounded(ctx context.Context, dst io.Writer, src io.Reader, limit int64) (int64, error) {
-	buf := make([]byte, 64<<10)
-	var total int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return total, err
-		}
-		n, e := src.Read(buf)
-		if n > 0 {
-			if int64(n) > limit-total {
-				return total, errors.New("archive exceeds v1 size limit")
-			}
-			written, we := dst.Write(buf[:n])
-			total += int64(written)
-			if we != nil {
-				return total, we
-			}
-			if written != n {
-				return total, io.ErrShortWrite
-			}
-		}
-		if e == io.EOF {
-			return total, nil
-		}
-		if e != nil {
-			return total, e
-		}
-	}
+	archive, _, err := snapshot.InspectFileProfile(ctx, path, snapshot.MaxArchive, snapshot.MaxUncompressed, snapshot.MaxDocuments, snapshot.MaxPages, false)
+	return archive, err
 }
 
 func writeInspection(out io.Writer, a snapshot.Archive, jsonOutput, showPaths bool) error {
@@ -267,132 +181,4 @@ func writeInspection(out io.Writer, a snapshot.Archive, jsonOutput, showPaths bo
 		_, err = fmt.Fprintf(out, "Original source: %s · %s\n", a.Manifest.Origin.Name, a.Manifest.Origin.Location)
 	}
 	return err
-}
-
-func validateExportTarget(target string, protectedRoots ...string) error {
-	abs, err := filepath.Abs(target)
-	if err != nil {
-		return err
-	}
-	parent := filepath.Dir(abs)
-	info, err := os.Stat(parent)
-	if err != nil {
-		return fmt.Errorf("output parent must exist: %w", err)
-	}
-	if !info.IsDir() {
-		return errors.New("output parent is not a directory")
-	}
-	realParent, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return err
-	}
-	candidate := filepath.Join(realParent, filepath.Base(abs))
-	canonicalCandidate, e := canonicalSafetyPath(candidate)
-	if e != nil {
-		return e
-	}
-	for _, protected := range protectedRoots {
-		if protected == "" {
-			continue
-		}
-		p, e := filepath.Abs(protected)
-		if e != nil {
-			return e
-		}
-		canonicalRoot, e := canonicalSafetyPath(p)
-		if e != nil {
-			return e
-		}
-		for _, pair := range [][2]string{{p, abs}, {canonicalRoot, canonicalCandidate}} {
-			rel, e := filepath.Rel(pair[0], pair[1])
-			if e != nil {
-				continue
-			}
-			if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-				return errors.New("refusing to export inside the index directory or registered source root")
-			}
-		}
-	}
-	if _, err = os.Lstat(candidate); err == nil {
-		return errors.New("output already exists; refusing to overwrite")
-	}
-	if !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-// canonicalSafetyPath resolves existing symlinks while retaining a missing
-// suffix. A dangling symlink in the protected path is ambiguous and rejected.
-func canonicalSafetyPath(value string) (string, error) {
-	current, err := filepath.Abs(value)
-	if err != nil {
-		return "", err
-	}
-	suffix := []string{}
-	for {
-		resolved, e := filepath.EvalSymlinks(current)
-		if e == nil {
-			for i := len(suffix) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, suffix[i])
-			}
-			return filepath.Clean(resolved), nil
-		}
-		if !os.IsNotExist(e) {
-			return "", e
-		}
-		info, lerr := os.Lstat(current)
-		if lerr == nil && info.Mode()&os.ModeSymlink != 0 {
-			return "", errors.New("ambiguous symlink in protected output path")
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", e
-		}
-		suffix = append(suffix, filepath.Base(current))
-		current = parent
-	}
-}
-
-// A hard-link publication is atomic and fails if the destination exists on
-// supported local filesystems; it never replaces a file or symlink.
-func publishNoReplaceStream(target string, build func(io.Writer) error) (int64, error) {
-	abs, err := filepath.Abs(target)
-	if err != nil {
-		return 0, err
-	}
-	parent := filepath.Dir(abs)
-	realParent, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return 0, err
-	}
-	abs = filepath.Join(realParent, filepath.Base(abs))
-	f, err := os.CreateTemp(realParent, ".findrail-export-*")
-	if err != nil {
-		return 0, err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-	if err = f.Chmod(0600); err != nil {
-		f.Close()
-		return 0, err
-	}
-	if err = build(f); err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err != nil {
-		return 0, err
-	}
-	if closeErr != nil {
-		return 0, closeErr
-	}
-	info, err := os.Stat(tmp)
-	if err != nil {
-		return 0, err
-	}
-	if err = os.Link(tmp, abs); err != nil {
-		return 0, fmt.Errorf("publish archive without replacing existing output: %w", err)
-	}
-	return info.Size(), nil
 }

@@ -73,6 +73,38 @@ made. Protect files using the operating system's account permissions and avoid
 sharing archives through untrusted channels. Integrity hashes are not
 encryption or authentication.
 
+## Writable management API
+
+The writable `start`/desktop composition exposes portable source transfer; `serve`
+and `demo` remain read-only. API callers supply a local path interpreted on
+the machine running Findrail. It does not use a browser file input, upload a Blob,
+accept a URL, spawn the CLI, or open an arbitrary native path. Requests require
+the existing same-origin session token, Host and fetch-site guards.
+
+`POST /api/v1/snapshots/inspect` accepts `{ "path": "/local/archive.zip" }` and
+returns an existing async job. Poll `GET /api/v1/snapshots/inspections/{job_id}`
+with the management token for status and, after complete validation, a metadata-
+only summary and opaque claim. The claim is process-local, one-use, expires after
+five minutes, and is lost on restart. `POST /api/v1/snapshots/import` takes
+`{ "claim": "…", "name": "…" }`; the worker reopens and fully validates the
+archive and rejects changed content before storage mutation. Export uses
+`POST /api/v1/sources/{id}/snapshot-export` with `{ "output_path": "…" }` and
+also returns a job. Generic jobs do not expose claims, paths or archive text.
+
+Management request bodies are capped at 32 KiB; paths at 4096 UTF-8 bytes and
+names at 512 bytes. The management profile is stricter than the CLI: 32 MiB
+compressed input/output, 64 MiB expanded, 2000 documents and 20000 pages. ZIP v1
+integrity and per-record safety limits remain unchanged. One decode/export runs
+at a time per app, jobs are bounded, and each operation has a two-minute deadline
+including queue time. Source exports share the source operation lock; Forget
+cancels a pending export and changed source registrations cannot authorize it.
+An absent `portable_snapshots` capability on an older API v1 server means false.
+Archives remain plaintext and may contain absolute source provenance; the
+metadata preview hides original source name/location by default.
+
+These routes are source-build behaviour for the next unpublished source cycle;
+they do not describe the published alpha.4 binaries.
+
 ## CLI journey
 
 Use real source IDs shown by `findrail sources --json`:
@@ -92,8 +124,8 @@ names; `--show-paths` reveals only original source name/location. It never print
 document or page text. Import can target an existing index or a new directory.
 After a CLI import to a running `start` data directory, the Sources panel and
 search source selector observe it through normal inventory reloads; no restart
-or browser upload is needed. Source builds implement this journey; existing
-alpha.2 release archives are unchanged and do not acquire these commands.
+or browser upload is needed. Existing alpha.3/alpha.4 release archives are
+unchanged and do not acquire these source-cycle management routes.
 
 PowerShell:
 

@@ -119,3 +119,9 @@ quotas before enabling creation of a new collection. Historical missing evidence
 cannot be restored automatically; changed hashes, pages, or quotes require a new
 preview and never result in a partial import. This describes the source-tree UI;
 the workflow is not included in the published alpha.4 binary.
+
+Every new preview clears the previous confirmation. Import locks its inputs until
+that request finishes, preventing duplicate submissions. Cancel releases local
+file buffers; an interrupted request may already have committed. The UI refreshes
+saved collections after an uncertain import outcome and never retries creation
+automatically. Newer local edits are retained when a delayed import completes.

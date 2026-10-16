@@ -180,7 +180,7 @@ def main():
             browser.execute_script("""
                 window.__originalFetch=window.fetch.bind(window);
                 window.fetch=(input,options)=>String(input).includes('/collections/import/preview')
-                  ?new Promise(resolve=>{window.__resolveLateBundlePreview=()=>resolve({ok:true,json:async()=>({entries:[{index:0,status:'match'},{index:1,status:'match'}],claim:'late'})})})
+                  ?new Promise(resolve=>{window.__resolveLateBundlePreview=()=>resolve(new Response(JSON.stringify({entries:[{index:0,status:'match'},{index:1,status:'match'}],claim:'late'}),{status:200}))})
                   :window.__originalFetch(input,options);
             """)
             browser.find_element(By.ID, "bundle-preview").click()
@@ -214,9 +214,34 @@ def main():
             assert "inventory changed" in browser.find_element(By.ID, "bundle-status").text.lower()
             browser.find_element(By.ID, "bundle-preview").send_keys(Keys.ENTER)
             wait.until(lambda d: "3 matches; 0 conflicts" in d.find_element(By.ID, "bundle-status").text)
+            # A new preview requires its own explicit confirmation.
+            browser.find_element(By.ID, "bundle-confirm").send_keys(Keys.SPACE)
+            browser.find_element(By.ID, "bundle-preview").send_keys(Keys.ENTER)
+            wait.until(lambda d: "3 matches; 0 conflicts" in d.find_element(By.ID, "bundle-status").text)
+            assert not browser.find_element(By.ID, "bundle-confirm").is_selected()
+            assert not browser.find_element(By.ID, "bundle-commit").is_enabled()
             browser.find_element(By.ID, "bundle-title").clear(); browser.find_element(By.ID, "bundle-title").send_keys("Imported Source B")
+            # Hold the production request to exercise the pending-commit controls.
+            browser.execute_script("""
+                window.__originalFetch=window.fetch.bind(window);window.__bundleImportRequests=0;
+                window.fetch=(input,options)=>String(input).endsWith('/collections/import')
+                  ?new Promise((resolve,reject)=>{window.__bundleImportRequests++;window.__finishBundleImport=()=>window.__originalFetch(input,options).then(resolve,reject)})
+                  :window.__originalFetch(input,options);
+            """)
             browser.find_element(By.ID, "bundle-confirm").send_keys(Keys.SPACE); browser.find_element(By.ID, "bundle-commit").send_keys(Keys.ENTER)
+            wait.until(lambda d: d.execute_script("return window.__bundleImportRequests===1"))
+            assert all(not browser.find_element(By.ID, control).is_enabled() for control in
+                       ("bundle-file", "bundle-preview", "bundle-title", "bundle-confirm", "bundle-commit"))
+            browser.execute_script("""
+                document.getElementById('bundle-title').dispatchEvent(new Event('input'));
+                document.getElementById('bundle-confirm').dispatchEvent(new Event('change'));
+                document.getElementById('bundle-commit').click();
+            """)
+            assert not browser.find_element(By.ID, "bundle-commit").is_enabled()
+            assert browser.execute_script("return window.__bundleImportRequests") == 1
+            browser.execute_script("window.__finishBundleImport();window.fetch=window.__originalFetch")
             wait.until(lambda d: d.find_element(By.ID, "collection-title").get_attribute("value") == "Imported Source B")
+            assert browser.execute_script("return document.activeElement.id") == "collection-title"
             assert [e.get_attribute("value") for e in browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")] == ["saved note two", "saved note one", "saved note three"]
             with urllib.request.urlopen(urllib.request.Request(url + "/api/v1/collections", headers=headers)) as response:
                 collection_list = json.load(response)["collections"]
