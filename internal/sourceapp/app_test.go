@@ -650,6 +650,59 @@ func TestGitHubAddRefreshOfflinePreservesSnapshotAndStableIdentity(t *testing.T)
 		t.Fatalf("sources: %+v %v", sources, err)
 	}
 	id := sources[0].ID
+	// Exercise the management job lifecycle for a GitHub registration as well as
+	// filesystem and archive sources: export preserves frozen GitHub provenance.
+	githubArchivePath := filepath.Join(t.TempDir(), "github-source.zip")
+	githubExport, err := a.ExportSnapshot(id, githubArchivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, a, githubExport.ID); done.Status != "succeeded" || !done.Progress.Committed {
+		t.Fatalf("GitHub export: %+v", done)
+	}
+	githubInspect, err := a.InspectSnapshot(githubArchivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, a, githubInspect.ID); done.Status != "succeeded" {
+		t.Fatalf("GitHub inspect: %+v", done)
+	}
+	githubPreview := a.SnapshotInspection(githubInspect.ID)
+	if githubPreview.Kind != "github" || githubPreview.Claim == "" {
+		t.Fatalf("GitHub provenance preview: %+v", githubPreview)
+	}
+	githubImport, err := a.ImportSnapshot(githubPreview.Claim, "Frozen GitHub fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubImportDone := await(t, a, githubImport.ID)
+	if githubImportDone.Status != "succeeded" || !githubImportDone.Progress.Committed {
+		t.Fatalf("GitHub archive import: %+v", githubImportDone)
+	}
+	githubArchiveID := strings.TrimPrefix(githubImportDone.Result, "imported:")
+	if !strings.HasPrefix(githubImportDone.Result, "imported:") {
+		t.Fatalf("GitHub import result: %+v", githubImportDone)
+	}
+	archiveSources, err := store.Sources(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var githubArchiveFound bool
+	for _, source := range archiveSources {
+		if source.ID == githubArchiveID && source.Archive != nil && source.Archive.Origin.Kind == "github" {
+			githubArchiveFound = true
+		}
+	}
+	if !githubArchiveFound {
+		t.Fatalf("GitHub source provenance not frozen in imported archive: %+v", archiveSources)
+	}
+	removeGitHubArchive, err := a.Remove(githubArchiveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, a, removeGitHubArchive.ID); done.Status != "succeeded" {
+		t.Fatalf("remove temporary GitHub archive fixture: %+v", done)
+	}
 	result, err := store.Search(context.Background(), search.Request{Query: "oldmarker", Limit: 10})
 	if err != nil || result.Total != 1 {
 		t.Fatalf("initial search: %+v %v", result, err)
