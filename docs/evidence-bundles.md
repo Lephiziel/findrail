@@ -110,3 +110,12 @@ the historical citation cannot automatically be restored to the current
 collection. Any future restore workflow must explicitly compare current indexed
 data and let the user remap; it must not trust the bundle's display name or hash
 as authority.
+
+In the browser, **Export evidence bundle** downloads a saved collection as JSON;
+the file contains its selected citations and notes. Save pending edits before
+export. To import, choose a JSON file and explicitly map every source alias to a
+source in the current inventory. The server preview checks all citations and
+quotas before enabling creation of a new collection. Historical missing evidence
+cannot be restored automatically; changed hashes, pages, or quotes require a new
+preview and never result in a partial import. This describes the source-tree UI;
+the workflow is not included in the published alpha.4 binary.

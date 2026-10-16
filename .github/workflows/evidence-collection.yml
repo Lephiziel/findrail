@@ -6,7 +6,11 @@ on:
       - 'internal/transport/http/server.go'
       - 'internal/transport/http/evidence_asset_test.go'
       - 'internal/transport/http/web/index.html'
+      - 'internal/transport/http/web/collections_ui.mjs'
+      - 'internal/transport/http/web/bundle_import_state_test.mjs'
       - 'internal/transport/http/web/evidence_collection*'
+      - 'scripts/evidence_bundle_browser_smoke.py'
+      - 'docs/evidence-bundles.md'
       - 'scripts/evidence_collection_smoke.py'
       - 'scripts/persistent_collection_smoke.py'
       - 'scripts/evidence_collection_fixture.go'
@@ -20,7 +24,11 @@ on:
       - 'internal/transport/http/server.go'
       - 'internal/transport/http/evidence_asset_test.go'
       - 'internal/transport/http/web/index.html'
+      - 'internal/transport/http/web/collections_ui.mjs'
+      - 'internal/transport/http/web/bundle_import_state_test.mjs'
       - 'internal/transport/http/web/evidence_collection*'
+      - 'scripts/evidence_bundle_browser_smoke.py'
+      - 'docs/evidence-bundles.md'
       - 'scripts/evidence_collection_smoke.py'
       - 'scripts/persistent_collection_smoke.py'
       - 'scripts/evidence_collection_fixture.go'
@@ -53,7 +61,7 @@ jobs:
           echo "FINDRAIL_CHROME=$(find /tmp/browser-cache/chrome -type f -name chrome | head -n 1)" >> "$GITHUB_ENV"
           echo "FINDRAIL_CHROMEDRIVER=$(find /tmp/browser-cache/chromedriver -type f -name chromedriver | head -n 1)" >> "$GITHUB_ENV"
       - name: Native module tests
-        run: node --test internal/transport/http/web/citation_test.mjs internal/transport/http/web/source_management_test.mjs internal/transport/http/web/evidence_collection_test.mjs internal/transport/http/web/originals_test.mjs
+        run: node --test internal/transport/http/web/citation_test.mjs internal/transport/http/web/source_management_test.mjs internal/transport/http/web/evidence_collection_test.mjs internal/transport/http/web/bundle_import_state_test.mjs internal/transport/http/web/originals_test.mjs
       - name: Static asset and embedded server checks
         run: go test ./internal/transport/http
       - name: Compile server and run real browser journey
@@ -61,3 +69,4 @@ jobs:
           go build -o /tmp/findrail ./cmd/findrail
           python scripts/evidence_collection_smoke.py /tmp/findrail
           python scripts/persistent_collection_smoke.py /tmp/findrail
+          python scripts/evidence_bundle_browser_smoke.py /tmp/findrail
