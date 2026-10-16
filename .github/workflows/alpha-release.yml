@@ -236,7 +236,7 @@ jobs:
       - working-directory: extensions/vscode
         run: npm run test:integration
       - run: go test ./internal/transport/http/...
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-package-${{ needs.validate-source.outputs.candidate_sha }}-linux-amd64
           path: ${{ runner.temp }}/native-client
@@ -296,7 +296,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.x'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-package-${{ env.CANDIDATE_SHA }}-linux-amd64
           path: ${{ runner.temp }}/native-browser
@@ -373,12 +373,12 @@ jobs:
         with:
           ref: ${{ needs.validate-source.outputs.candidate_sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-package-${{ needs.validate-source.outputs.candidate_sha }}-*
           path: ${{ runner.temp }}/native
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-vsix-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/client
@@ -461,7 +461,7 @@ jobs:
         with:
           ref: ${{ needs.validate-source.outputs.candidate_sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-assets-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/release-assets
