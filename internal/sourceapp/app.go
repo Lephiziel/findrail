@@ -217,6 +217,9 @@ func (a *App) progress(j *Job, processed, skipped int, flush, committed bool) {
 		skipped = j.Progress.SkippedEntries
 	}
 	a.bumpProgressLocked(j, j.Phase, processed, skipped, committed)
+	if committed {
+		j.Progress.Committed = true
+	}
 	j.UpdatedAt = now
 	a.signalLocked()
 }
@@ -395,6 +398,9 @@ func (a *App) commitProgress(j *Job, reportID string) {
 	a.signalLocked()
 }
 func friendlyError(err error) (string, string) {
+	if err.Error() == "snapshot_changed" {
+		return "snapshot_changed", "Archive content changed after inspection; no source was imported. Inspect it again."
+	}
 	var scanFailure *ingest.ScanFailure
 	if errors.As(err, &scanFailure) {
 		return scanFailure.Code, "The scan did not commit; the previous committed snapshot and report remain available."

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -123,7 +122,7 @@ func (a *App) ImportSnapshot(claim, name string) (Job, error) {
 	lease.consumed = true
 	a.snapshotLeases[claim] = lease
 	a.mu.Unlock()
-	job, err := a.submit("snapshot-import", "portable snapshot import", "", func(ctx context.Context, _ *Job) (string, error) {
+	job, err := a.submit("snapshot-import", "portable snapshot import", "", func(ctx context.Context, job *Job) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		archive, _, err := a.readSnapshot(ctx, lease.path)
@@ -141,6 +140,7 @@ func (a *App) ImportSnapshot(claim, name string) (Job, error) {
 		if err != nil {
 			return "", err
 		}
+		a.progress(job, len(archive.Documents), 0, true, true)
 		return "imported:" + id, nil
 	})
 	if err != nil {
@@ -159,7 +159,7 @@ func (a *App) ExportSnapshot(sourceID, output string) (Job, error) {
 	if err != nil {
 		return Job{}, errors.New("invalid_path")
 	}
-	return a.submit("snapshot-export", "portable snapshot export", sourceID, func(ctx context.Context, _ *Job) (string, error) {
+	return a.submit("snapshot-export", "portable snapshot export", sourceID, func(ctx context.Context, job *Job) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		unlock, err := a.coordinator.Acquire(ctx, sourceID)
@@ -184,58 +184,46 @@ func (a *App) ExportSnapshot(sourceID, output string) (Job, error) {
 		if !registered {
 			return "", errors.New("not_found")
 		}
-		if err = validateSnapshotOutput(canonical, roots); err != nil {
+		if err = snapshot.ValidateExportTarget(canonical, roots...); err != nil {
 			return "", err
 		}
 		if err = a.takeSnapshotSlot(ctx); err != nil {
 			return "", err
 		}
 		defer a.releaseSnapshotSlot()
-		parent := filepath.Dir(canonical)
-		f, err := os.CreateTemp(parent, ".findrail-snapshot-*")
-		if err != nil {
-			return "", err
-		}
-		tmp := f.Name()
-		defer os.Remove(tmp)
-		if err = f.Chmod(0600); err != nil {
-			f.Close()
-			return "", err
-		}
-		limited := &snapshotOutputLimit{w: f, remaining: SnapshotCompressedLimit}
-		manifest, _, _, err := a.store.StreamSnapshotProfile(ctx, sourceID, "findrail", time.Now().UTC().Format(time.RFC3339Nano), limited, SnapshotCompressedLimit, SnapshotExpandedLimit, SnapshotDocumentLimit, SnapshotPageLimit)
-		if err == nil {
-			err = ctx.Err()
-		}
-		if err == nil {
-			err = f.Sync()
-		}
-		if err == nil {
-			info, statErr := f.Stat()
-			if statErr != nil {
-				err = statErr
-			} else {
-				verified, verifyErr := snapshot.VerifyArchive(ctx, f, info.Size())
-				if verifyErr != nil {
-					err = verifyErr
-				} else if verified.Fingerprint != manifest.Fingerprint {
-					err = errors.New("snapshot verification failed")
-				}
+		_, err = snapshot.PublishNoReplaceStream(canonical, func(w io.Writer) error {
+			f, ok := w.(*os.File)
+			if !ok {
+				return errors.New("archive staging is not a file")
 			}
-		}
-		closeErr := f.Close()
-		if err == nil {
-			err = closeErr
-		}
+			limited := &snapshotOutputLimit{w: f, remaining: SnapshotCompressedLimit}
+			manifest, _, _, streamErr := a.store.StreamSnapshotProfile(ctx, sourceID, "findrail", time.Now().UTC().Format(time.RFC3339Nano), limited, SnapshotCompressedLimit, SnapshotExpandedLimit, SnapshotDocumentLimit, SnapshotPageLimit)
+			if streamErr != nil {
+				return streamErr
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := f.Sync(); err != nil {
+				return err
+			}
+			info, err := f.Stat()
+			if err != nil {
+				return err
+			}
+			verified, err := snapshot.VerifyArchive(ctx, f, info.Size())
+			if err != nil {
+				return err
+			}
+			if verified.Fingerprint != manifest.Fingerprint {
+				return errors.New("snapshot verification failed")
+			}
+			return nil
+		})
 		if err != nil {
 			return "", err
 		}
-		if err = ctx.Err(); err != nil {
-			return "", err
-		}
-		if err = os.Link(tmp, canonical); err != nil {
-			return "", fmt.Errorf("publish snapshot without overwrite: %w", err)
-		}
+		a.progress(job, 0, 0, true, true)
 		return "exported", nil
 	})
 }
@@ -260,37 +248,7 @@ func (a *App) readSnapshot(ctx context.Context, path string) (snapshot.Archive, 
 		return zero, 0, err
 	}
 	defer a.releaseSnapshotSlot()
-	linkInfo, err := os.Lstat(path)
-	if err != nil || !linkInfo.Mode().IsRegular() {
-		return zero, 0, errors.New("archive input must be a regular non-symlink file")
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return zero, 0, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return zero, 0, err
-	}
-	if !info.Mode().IsRegular() || !os.SameFile(linkInfo, info) {
-		return zero, 0, errors.New("archive input must be a regular non-symlink file")
-	}
-	if !info.Mode().IsRegular() || info.Size() > SnapshotCompressedLimit {
-		return zero, 0, errors.New("snapshot input exceeds management profile")
-	}
-	data, err := io.ReadAll(io.LimitReader(f, SnapshotCompressedLimit+1))
-	if err != nil {
-		return zero, 0, errors.New("snapshot input could not be read")
-	}
-	if len(data) > SnapshotCompressedLimit {
-		return zero, 0, errors.New("snapshot input exceeds management profile")
-	}
-	if err = ctx.Err(); err != nil {
-		return zero, 0, err
-	}
-	archive, err := snapshot.InspectProfile(ctx, data, SnapshotExpandedLimit, SnapshotDocumentLimit, SnapshotPageLimit)
-	return archive, info.Size(), err
+	return snapshot.InspectFileProfile(ctx, path, SnapshotCompressedLimit, SnapshotExpandedLimit, SnapshotDocumentLimit, SnapshotPageLimit, true)
 }
 
 func (a *App) takeSnapshotSlot(ctx context.Context) error {
@@ -326,31 +284,4 @@ func randomClaim() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b[:]), nil
-}
-
-func validateSnapshotOutput(path string, roots []string) error {
-	info, err := os.Stat(filepath.Dir(path))
-	if err != nil || !info.IsDir() {
-		return errors.New("output parent must exist")
-	}
-	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
-	if err != nil {
-		return errors.New("invalid output parent")
-	}
-	candidate := filepath.Join(parent, filepath.Base(path))
-	if _, err = os.Lstat(candidate); err == nil {
-		return errors.New("output already exists or is a symlink")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	for _, root := range roots {
-		if root == "" {
-			continue
-		}
-		real, e := filepath.EvalSymlinks(root)
-		if e == nil && (candidate == real || strings.HasPrefix(candidate, real+string(os.PathSeparator))) {
-			return errors.New("output must be outside the index and registered source roots")
-		}
-	}
-	return nil
 }

@@ -365,6 +365,49 @@ func TestManagementRequiresSameOriginCapabilityAndStrictJSON(t *testing.T) {
 	if bytes.Contains(snapshotPreviewRaw, []byte("Private source name")) || bytes.Contains(snapshotPreviewRaw, []byte("/private/path")) || bytes.Contains(snapshotPreviewRaw, []byte("private archive text")) || !bytes.Contains(snapshotPreviewRaw, []byte(`"claim":`)) {
 		t.Fatalf("unsafe or incomplete preview: %s", snapshotPreviewRaw)
 	}
+	var snapshotResult sourceapp.SnapshotSummary
+	if err = json.Unmarshal(snapshotPreviewRaw, &snapshotResult); err != nil || snapshotResult.Claim == "" {
+		t.Fatalf("snapshot inspection result: %+v %v", snapshotResult, err)
+	}
+	pollJob := func(id string) sourceapp.Job {
+		t.Helper()
+		for i := 0; i < 100; i++ {
+			_, raw, _ := bundleCall(http.MethodGet, "/api/v1/jobs/"+id, "", origin, "", "same-origin", nil)
+			var job sourceapp.Job
+			if json.Unmarshal(raw, &job) == nil && (job.Status == "succeeded" || job.Status == "failed" || job.Status == "canceled") {
+				return job
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("job %s did not finish", id)
+		return sourceapp.Job{}
+	}
+	snapshotImportBody, _ := json.Marshal(map[string]string{"claim": snapshotResult.Claim, "name": "HTTP imported synthetic"})
+	status, importRaw, _ := bundleCall(http.MethodPost, "/api/v1/snapshots/import", "", origin, capability.Token, "same-origin", snapshotImportBody)
+	var importEnvelope struct {
+		Job sourceapp.Job `json:"job"`
+	}
+	if status != http.StatusAccepted || json.Unmarshal(importRaw, &importEnvelope) != nil || importEnvelope.Job.ID == "" || bytes.Contains(importRaw, []byte(snapshotResult.Claim)) {
+		t.Fatalf("snapshot import job status=%d body=%s", status, importRaw)
+	}
+	if got := pollJob(importEnvelope.Job.ID); got.Status != "succeeded" || !strings.HasPrefix(got.Result, "imported:") || !got.Progress.Committed {
+		t.Fatalf("snapshot import job result: %+v", got)
+	}
+	outputPath := filepath.Join(t.TempDir(), "http-export.zip")
+	snapshotExportBody, _ := json.Marshal(map[string]string{"output_path": outputPath})
+	status, exportRaw, _ := bundleCall(http.MethodPost, "/api/v1/sources/"+foundBundle.Results[0].SourceID+"/snapshot-export", "", origin, capability.Token, "same-origin", snapshotExportBody)
+	var exportEnvelope struct {
+		Job sourceapp.Job `json:"job"`
+	}
+	if status != http.StatusAccepted || json.Unmarshal(exportRaw, &exportEnvelope) != nil || bytes.Contains(exportRaw, []byte(outputPath)) {
+		t.Fatalf("snapshot export job status=%d body=%s", status, exportRaw)
+	}
+	if got := pollJob(exportEnvelope.Job.ID); got.Status != "succeeded" || got.Result != "exported" || !got.Progress.Committed {
+		t.Fatalf("snapshot export job result: %+v", got)
+	}
+	if info, statErr := os.Stat(outputPath); statErr != nil || !info.Mode().IsRegular() {
+		t.Fatalf("HTTP snapshot output missing or invalid: %v", statErr)
+	}
 	if got := bundleReq(http.MethodPost, "/api/v1/snapshots/inspect", "", origin, capability.Token, "same-origin", []byte(`{"path":"x","path":"y"}`)); got != 400 {
 		t.Fatalf("duplicate path request status=%d", got)
 	}

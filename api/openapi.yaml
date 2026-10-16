@@ -344,7 +344,9 @@ paths:
           application/json:
             schema: {type: object, additionalProperties: false, required: [path], properties: {path: {type: string, minLength: 1, maxLength: 4096}}}
       responses:
-        '202': {description: Existing async job; generic job records contain no archive path or claim}
+        '202':
+          description: Existing async job; generic job records contain no archive path or claim
+          content: {application/json: {schema: {$ref: '#/components/schemas/JobEnvelope'}}}
         '400': {$ref: '#/components/responses/BadRequest'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '413': {description: Request exceeds 32 KiB}
@@ -356,7 +358,9 @@ paths:
       description: Requires same-origin session token. Successful results contain metadata only, never source name/location or document/page text. The one-time opaque claim expires after five minutes, is process-local, and is invalid after restart.
       parameters: [{$ref: '#/components/parameters/ManagementToken'}, {name: job_id, in: path, required: true, schema: {type: string}}]
       responses:
-        '200': {description: Pending status or bounded successful metadata summary with import claim}
+        '200':
+          description: Pending status or bounded successful metadata summary with import claim
+          content: {application/json: {schema: {$ref: '#/components/schemas/SnapshotInspection'}}}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {description: Unknown inspection job}
         '410': {description: Preview lease expired}
@@ -372,10 +376,10 @@ paths:
           application/json:
             schema: {type: object, additionalProperties: false, required: [claim, name], properties: {claim: {type: string}, name: {type: string, minLength: 1, maxLength: 512}}}
       responses:
-        '202': {description: Existing async import job}
+        '202': {description: Existing async import job; result is `imported:<source_id>` or `already_imported:<source_id>`}
         '400': {$ref: '#/components/responses/BadRequest'}
         '403': {$ref: '#/components/responses/Forbidden'}
-        '409': {description: Invalid, expired, replayed claim or changed archive}
+        '409': {description: Invalid, expired, or replayed claim rejected before a job is accepted; a changed archive fails the accepted job before storage mutation}
   /api/v1/sources/{id}/snapshot-export:
     post:
       operationId: exportPortableSnapshot
@@ -388,9 +392,9 @@ paths:
           application/json:
             schema: {type: object, additionalProperties: false, required: [output_path], properties: {output_path: {type: string, minLength: 1, maxLength: 4096}}}
       responses:
-        '202': {description: Existing async export job; job records omit output path and archive contents}
+        '202': {description: Existing async export job; result is `exported`; job records omit output path and archive contents}
         '403': {$ref: '#/components/responses/Forbidden'}
-        '409': {description: Source busy or unsafe output target}
+        '409': {description: Source target is busy before job acceptance}
   /api/v1/collections/{id}/bundle:
     get:
       operationId: exportEvidenceBundle
@@ -1206,11 +1210,35 @@ components:
       type: object
       properties:
         id: {type: string}
+        type: {type: string, enum: [add_folder, add_github, configure, refresh, remove, snapshot-inspect, snapshot-import, snapshot-export]}
+        target: {type: string, description: Snapshot jobs use non-path safe targets}
+        source_id: {type: string}
         status: {type: string, enum: [queued, running, succeeded, failed, canceled]}
         phase: {type: string}
+        result: {type: string, description: Snapshot inspect has no generic result; import exposes status and destination source ID only; export exposes `exported`}
         error_code: {type: string}
         error: {type: string}
         progress: {$ref: '#/components/schemas/Progress'}
+    JobEnvelope:
+      type: object
+      required: [job]
+      properties:
+        job: {$ref: '#/components/schemas/Job'}
+    SnapshotInspection:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [queued, running, succeeded, failed, canceled, expired, not_found]}
+        format: {type: string, enum: [findrail-portable-snapshot]}
+        version: {type: integer, const: 1}
+        kind: {type: string, enum: [filesystem, github, archive]}
+        documents: {type: integer, minimum: 0, maximum: 2000}
+        pages: {type: integer, minimum: 0, maximum: 20000}
+        bytes: {type: integer, minimum: 0, maximum: 33554432, description: Compressed archive bytes}
+        fingerprint: {type: string, pattern: '^[0-9a-f]{64}$'}
+        frozen: {type: boolean, const: true}
+        claim: {type: string, description: One-use opaque process-local claim; five-minute TTL}
+        error: {type: string}
     Progress:
       type: object
       required: [attempt_id, sequence, phase, processed_documents, skipped_entries, elapsed_millis, partial]
