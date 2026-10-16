@@ -898,6 +898,11 @@ func (e *AlreadyImportedError) Error() string {
 // StreamSnapshot exports ordered records from one established read transaction.
 // JSONL payloads are staged by the snapshot codec, never accumulated in slices.
 func (s *Store) StreamSnapshot(ctx context.Context, sourceID, producer, exportedAt string, dst io.Writer) (snapshot.Manifest, int, int, error) {
+	return s.StreamSnapshotProfile(ctx, sourceID, producer, exportedAt, dst, snapshot.MaxArchive, snapshot.MaxUncompressed, snapshot.MaxDocuments, snapshot.MaxPages)
+}
+
+// StreamSnapshotProfile preserves the v1 codec while imposing stricter output limits.
+func (s *Store) StreamSnapshotProfile(ctx context.Context, sourceID, producer, exportedAt string, dst io.Writer, archiveLimit, expandedLimit int64, documentLimit, pageLimit int) (snapshot.Manifest, int, int, error) {
 	tx, err := s.readers.BeginTx(ctx, nil)
 	if err != nil {
 		return snapshot.Manifest{}, 0, 0, err
@@ -926,7 +931,7 @@ func (s *Store) StreamSnapshot(ctx context.Context, sourceID, producer, exported
 			if e = snapshot.ValidateDocumentRecord(d, o); e != nil {
 				return count, e
 			}
-			if count >= snapshot.MaxDocuments {
+			if count >= documentLimit {
 				return count, errors.New("document count exceeds portable snapshot v1 limit")
 			}
 			if e = snapshot.WriteJSONLRecord(w, d); e != nil {
@@ -960,7 +965,7 @@ func (s *Store) StreamSnapshot(ctx context.Context, sourceID, producer, exported
 			if len(p.Text) > snapshot.MaxText || !utf8.ValidString(p.Text) || strings.ContainsRune(p.Text, 0) {
 				return count, errors.New("page text exceeds portable snapshot v1 limit")
 			}
-			if count >= snapshot.MaxPages {
+			if count >= pageLimit {
 				return count, errors.New("page count exceeds portable snapshot v1 limit")
 			}
 			if e = snapshot.WriteJSONLRecord(w, p); e != nil {
@@ -976,7 +981,7 @@ func (s *Store) StreamSnapshot(ctx context.Context, sourceID, producer, exported
 		}
 		return count, nil
 	}
-	manifest, err := snapshot.WriteArchive(ctx, dst, m, documents, pages)
+	manifest, err := snapshot.WriteArchiveProfile(ctx, dst, m, documents, pages, archiveLimit, expandedLimit, documentLimit, pageLimit)
 	if err != nil {
 		return manifest, 0, 0, err
 	}

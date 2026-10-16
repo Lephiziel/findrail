@@ -22,6 +22,7 @@ import (
 	"github.com/Lephiziel/findrail/internal/ingest"
 	"github.com/Lephiziel/findrail/internal/originals"
 	"github.com/Lephiziel/findrail/internal/search"
+	"github.com/Lephiziel/findrail/internal/snapshot"
 	"github.com/Lephiziel/findrail/internal/sourceapp"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	transport "github.com/Lephiziel/findrail/internal/transport/http"
@@ -297,6 +298,9 @@ func TestManagementRequiresSameOriginCapabilityAndStrictJSON(t *testing.T) {
 	if caps["evidence_bundle"] != true {
 		t.Fatalf("management bundle capability=%v", caps["evidence_bundle"])
 	}
+	if caps["portable_snapshots"] != true {
+		t.Fatalf("management snapshot capability=%v", caps["portable_snapshots"])
+	}
 	// Bundle export is a management-gated read, and imports use the same exact
 	// origin/host/session boundary as other mutations.
 	bundleCall := func(method, path, host, originValue, token, site string, body []byte) (int, []byte, http.Header) {
@@ -327,6 +331,42 @@ func TestManagementRequiresSameOriginCapabilityAndStrictJSON(t *testing.T) {
 	bundleReq := func(method, path, host, originValue, token, site string, body []byte) int {
 		status, _, _ := bundleCall(method, path, host, originValue, token, site, body)
 		return status
+	}
+	archiveBytes, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: snapshot.Origin{ID: "http-origin", Kind: "filesystem", Name: "Private source name", Location: "/private/path", IndexedAt: "2026-10-09T11:00:00Z"}}, []snapshot.Document{{ID: "http-doc", Path: "note.md", Title: "Note", URI: "file:///private/path/note.md", MediaType: "text/plain", Text: "private archive text", ContentHash: strings.Repeat("a", 64), SizeBytes: 20, ModifiedAt: "2026-10-09T10:00:00Z"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(t.TempDir(), "private.zip")
+	if err = os.WriteFile(archivePath, archiveBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inspectBody, _ := json.Marshal(map[string]string{"path": archivePath})
+	status, jobRaw, _ := bundleCall(http.MethodPost, "/api/v1/snapshots/inspect", "", origin, capability.Token, "same-origin", inspectBody)
+	if status != 202 || bytes.Contains(jobRaw, []byte(archivePath)) || bytes.Contains(jobRaw, []byte("private archive text")) {
+		t.Fatalf("inspect job status=%d body=%s", status, jobRaw)
+	}
+	var inspectResult struct {
+		Job sourceapp.Job `json:"job"`
+	}
+	if err = json.Unmarshal(jobRaw, &inspectResult); err != nil || inspectResult.Job.ID == "" {
+		t.Fatalf("inspect job: %+v %v", inspectResult, err)
+	}
+	if _, body, _ := bundleCall(http.MethodGet, "/api/v1/snapshots/inspections/"+inspectResult.Job.ID, "", origin, "", "same-origin", nil); !bytes.Contains(body, []byte("session token required")) {
+		t.Fatalf("unauthenticated inspection result: %s", body)
+	}
+	var snapshotPreviewRaw []byte
+	for i := 0; i < 100; i++ {
+		_, snapshotPreviewRaw, _ = bundleCall(http.MethodGet, "/api/v1/snapshots/inspections/"+inspectResult.Job.ID, "", origin, capability.Token, "same-origin", nil)
+		if bytes.Contains(snapshotPreviewRaw, []byte(`"status":"succeeded"`)) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if bytes.Contains(snapshotPreviewRaw, []byte("Private source name")) || bytes.Contains(snapshotPreviewRaw, []byte("/private/path")) || bytes.Contains(snapshotPreviewRaw, []byte("private archive text")) || !bytes.Contains(snapshotPreviewRaw, []byte(`"claim":`)) {
+		t.Fatalf("unsafe or incomplete preview: %s", snapshotPreviewRaw)
+	}
+	if got := bundleReq(http.MethodPost, "/api/v1/snapshots/inspect", "", origin, capability.Token, "same-origin", []byte(`{"path":"x","path":"y"}`)); got != 400 {
+		t.Fatalf("duplicate path request status=%d", got)
 	}
 	if got := bundleReq(http.MethodGet, "/api/v1/collections/missing/bundle", "", origin, "", "", nil); got != 403 {
 		t.Fatalf("tokenless bundle export status=%d", got)
@@ -435,6 +475,7 @@ func TestManagementRequiresSameOriginCapabilityAndStrictJSON(t *testing.T) {
 		defer resp.Body.Close()
 		return resp.StatusCode
 	}
+	jobsBeforeRejectedRequests := len(app.Jobs())
 	for _, tc := range []struct {
 		name, origin, token, site, content string
 		body                               []byte
@@ -457,7 +498,7 @@ func TestManagementRequiresSameOriginCapabilityAndStrictJSON(t *testing.T) {
 			}
 		})
 	}
-	if len(app.Jobs()) != 0 {
+	if len(app.Jobs()) != jobsBeforeRejectedRequests {
 		t.Fatalf("rejected request scheduled work: %+v", app.Jobs())
 	}
 	badHost, _ := http.NewRequest("POST", base+"/api/v1/sources", bytes.NewReader(body))
@@ -474,7 +515,7 @@ func TestManagementRequiresSameOriginCapabilityAndStrictJSON(t *testing.T) {
 	if hostResponse.StatusCode != 403 {
 		t.Fatalf("spoofed Host status %d", hostResponse.StatusCode)
 	}
-	if len(app.Jobs()) != 0 {
+	if len(app.Jobs()) != jobsBeforeRejectedRequests {
 		t.Fatal("spoofed Host scheduled work")
 	}
 	postCtx, cancelPost := context.WithCancel(context.Background())
@@ -733,7 +774,7 @@ func TestReadOnlyHandlerDoesNotExposeMutationController(t *testing.T) {
 	capabilityRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7766/api/v1/capabilities", nil)
 	capabilityResponse := httptest.NewRecorder()
 	handler.ServeHTTP(capabilityResponse, capabilityRequest)
-	if capabilityResponse.Code != 200 || !strings.Contains(capabilityResponse.Body.String(), `"open_originals":false`) {
+	if capabilityResponse.Code != 200 || !strings.Contains(capabilityResponse.Body.String(), `"open_originals":false`) || !strings.Contains(capabilityResponse.Body.String(), `"portable_snapshots":false`) {
 		t.Fatalf("read-only opener capability: %d %s", capabilityResponse.Code, capabilityResponse.Body.String())
 	}
 	openRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7766/api/v1/originals/open", strings.NewReader(`{}`))
@@ -744,7 +785,7 @@ func TestReadOnlyHandlerDoesNotExposeMutationController(t *testing.T) {
 	if openResponse.Code != http.StatusNotFound {
 		t.Fatalf("read-only opener route status %d", openResponse.Code)
 	}
-	for _, path := range []string{"/api/v1/sources", "/api/v1/jobs/anything/cancel"} {
+	for _, path := range []string{"/api/v1/sources", "/api/v1/jobs/anything/cancel", "/api/v1/snapshots/inspect", "/api/v1/snapshots/import", "/api/v1/sources/example/snapshot-export"} {
 		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7766"+path, strings.NewReader(`{"type":"folder"}`))
 		r.Header.Set("Origin", "http://127.0.0.1:7766")
 		w := httptest.NewRecorder()

@@ -279,9 +279,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [management, desktop, open_originals, collection_persistence, diagnostics, client_api_version, search_modes, search_filters, pdf_title_only_evidence, passage_preview]
+                required: [management, portable_snapshots, desktop, open_originals, collection_persistence, diagnostics, client_api_version, search_modes, search_filters, pdf_title_only_evidence, passage_preview]
                 properties:
                   management: {type: boolean}
+                  portable_snapshots: {type: boolean, description: "True only when the complete writable management backend is composed; source snapshot paths are local to the Findrail process host"}
                   desktop: {type: boolean, description: Explicit desktop quit is available only in the desktop composition}
                   open_originals: {type: boolean}
                   collection_persistence: {type: boolean, description: "True only for writable start composition"}
@@ -331,6 +332,65 @@ paths:
               schema: {$ref: '#/components/schemas/DiagnosticsReport'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/snapshots/inspect:
+    post:
+      operationId: inspectPortableSnapshot
+      summary: Validate a local source snapshot asynchronously (start/desktop only)
+      description: The absolute path is read on the Findrail host; this is not a browser upload or URL. Strict JSON body at most 32 KiB; path at most 4096 UTF-8 bytes. Management profile limits are 32 MiB compressed, 64 MiB expanded, 2000 documents and 20000 pages. One archive operation is decoded at a time. Full validation runs as a bounded existing job and takes at most two minutes.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [path], properties: {path: {type: string, minLength: 1, maxLength: 4096}}}
+      responses:
+        '202': {description: Existing async job; generic job records contain no archive path or claim}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '413': {description: Request exceeds 32 KiB}
+        '429': {description: Bounded management job queue is full}
+  /api/v1/snapshots/inspections/{job_id}:
+    get:
+      operationId: getPortableSnapshotInspection
+      summary: Read the gated result for an inspect job
+      description: Requires same-origin session token. Successful results contain metadata only, never source name/location or document/page text. The one-time opaque claim expires after five minutes, is process-local, and is invalid after restart.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}, {name: job_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': {description: Pending status or bounded successful metadata summary with import claim}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown inspection job}
+        '410': {description: Preview lease expired}
+  /api/v1/snapshots/import:
+    post:
+      operationId: importPortableSnapshot
+      summary: Revalidate and atomically import a claimed snapshot asynchronously
+      description: Reopens the selected local file, revalidates hashes, limits and semantic fingerprint, and imports only the validated in-memory snapshot. Name at most 512 UTF-8 bytes. Does not reconnect to the origin.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [claim, name], properties: {claim: {type: string}, name: {type: string, minLength: 1, maxLength: 512}}}
+      responses:
+        '202': {description: Existing async import job}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Invalid, expired, replayed claim or changed archive}
+  /api/v1/sources/{id}/snapshot-export:
+    post:
+      operationId: exportPortableSnapshot
+      summary: Export a source to a new local path asynchronously (start/desktop only)
+      description: Output path is interpreted on the Findrail host. Existing files, symlinks, the index directory and registered filesystem roots are refused. The v1 archive is plaintext. Profile limits match inspect; operation deadline is two minutes.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}, {name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [output_path], properties: {output_path: {type: string, minLength: 1, maxLength: 4096}}}
+      responses:
+        '202': {description: Existing async export job; job records omit output path and archive contents}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Source busy or unsafe output target}
   /api/v1/collections/{id}/bundle:
     get:
       operationId: exportEvidenceBundle

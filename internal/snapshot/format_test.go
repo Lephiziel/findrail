@@ -43,6 +43,24 @@ func TestEncodeInspectRoundTripAndFingerprintGolden(t *testing.T) {
 	}
 }
 
+func TestInspectProfileAppliesStricterExpandedAndRecordLimits(t *testing.T) {
+	origin := Origin{ID: "profile", Kind: "filesystem", Name: "Synthetic", Location: "/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
+	doc := Document{ID: "doc", Path: "note.md", Title: "Note", URI: "file:///synthetic/note.md", MediaType: "text/plain", Text: "small body", ContentHash: strings.Repeat("a", 64), SizeBytes: 10, ModifiedAt: "2026-10-09T11:00:00Z"}
+	data, err := Encode(Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, []Document{doc}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = InspectProfile(context.Background(), data, MaxUncompressed, 0, MaxPages); err == nil {
+		t.Fatal("accepted a document above the selected profile count")
+	}
+	if _, err = InspectProfile(context.Background(), data, 128, 1, MaxPages); err == nil {
+		t.Fatal("accepted archive above the selected expanded profile")
+	}
+	if _, err = InspectProfile(context.Background(), data, MaxUncompressed, 1, MaxPages); err != nil {
+		t.Fatalf("valid profile archive rejected: %v", err)
+	}
+}
+
 func TestInspectRejectsDuplicateJSONKeys(t *testing.T) {
 	var b bytes.Buffer
 	zw := zip.NewWriter(&b)

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	gh "github.com/Lephiziel/findrail/internal/connectors/github"
 	pdfextract "github.com/Lephiziel/findrail/internal/extract/pdf"
 	"github.com/Lephiziel/findrail/internal/ingest"
+	"github.com/Lephiziel/findrail/internal/snapshot"
 	"github.com/Lephiziel/findrail/internal/sourcecoord"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	"github.com/Lephiziel/findrail/pkg/connector"
@@ -39,6 +41,9 @@ type Store interface {
 	PublishGitHub(context.Context, *gh.Snapshot, *sqlite.GitHubSource) (ingest.Result, sqlite.GitHubSource, error)
 	BeginConfigure(context.Context, connector.Source, string, int64, int64) (ingest.Scan, error)
 	RecordGitHubError(context.Context, sqlite.GitHubSource, string)
+	StreamSnapshot(context.Context, string, string, string, io.Writer) (snapshot.Manifest, int, int, error)
+	StreamSnapshotProfile(context.Context, string, string, string, io.Writer, int64, int64, int, int) (snapshot.Manifest, int, int, error)
+	ImportSnapshot(context.Context, string, snapshot.Archive) (string, error)
 }
 
 type Job struct {
@@ -93,6 +98,9 @@ type App struct {
 	wg              sync.WaitGroup
 	newGitHubClient func() *gh.Client
 	coordinator     *sourcecoord.Locks
+	snapshotGate    chan struct{}
+	snapshotLeases  map[string]snapshotLease
+	snapshotResults map[string]string
 }
 
 func New(ctx context.Context, store Store, dataDir, executable string) *App {
@@ -103,7 +111,7 @@ func NewWithCoordinator(ctx context.Context, store Store, dataDir, executable st
 		coordinator = sourcecoord.New()
 	}
 	root, stop := context.WithCancel(ctx)
-	a := &App{store: store, dataDir: dataDir, executable: executable, root: root, stop: stop, byID: map[string]*work{}, active: map[string]string{}, changed: make(chan struct{}), wake: make(chan struct{}, 1), newGitHubClient: gh.NewClient, coordinator: coordinator}
+	a := &App{store: store, dataDir: dataDir, executable: executable, root: root, stop: stop, byID: map[string]*work{}, active: map[string]string{}, changed: make(chan struct{}), wake: make(chan struct{}, 1), newGitHubClient: gh.NewClient, coordinator: coordinator, snapshotGate: make(chan struct{}, 1), snapshotLeases: map[string]snapshotLease{}, snapshotResults: map[string]string{}}
 	for i := 0; i < maxRunning; i++ {
 		a.wg.Add(1)
 		go a.worker()
@@ -161,6 +169,7 @@ func (a *App) pruneLocked() {
 			done++
 			if done > maxHistory {
 				delete(a.byID, a.jobs[i].ID)
+				delete(a.snapshotResults, a.jobs[i].ID)
 				a.jobs = append(a.jobs[:i], a.jobs[i+1:]...)
 			}
 		}

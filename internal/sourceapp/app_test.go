@@ -69,6 +69,48 @@ func TestArchiveSourceCannotBeConfiguredOrRefreshed(t *testing.T) {
 	}
 }
 
+func TestSnapshotInspectClaimImportIsProcessBoundAndReplayProtected(t *testing.T) {
+	a, store, _ := openApp(t)
+	origin := snapshot.Origin{ID: "lease-origin", Kind: "filesystem", Name: "Synthetic", Location: "/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
+	doc := snapshot.Document{ID: "lease-doc", Path: "note.md", Title: "Note", URI: "file:///synthetic/note.md", MediaType: "text/plain", Text: "portable lease fixture", ContentHash: strings.Repeat("a", 64), SizeBytes: 22, ModifiedAt: "2026-10-09T11:00:00Z"}
+	data, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, []snapshot.Document{doc}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "snapshot.zip")
+	if err = os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inspect, err := a.InspectSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := await(t, a, inspect.ID); got.Status != "succeeded" || got.Result != "" {
+		t.Fatalf("inspect generic job leaked result: %+v", got)
+	}
+	preview := a.SnapshotInspection(inspect.ID)
+	if preview.Status != "succeeded" || preview.Claim == "" || preview.Documents != 1 || preview.Fingerprint == "" {
+		t.Fatalf("preview: %+v", preview)
+	}
+	importJob, err := a.ImportSnapshot(preview.Claim, "Imported synthetic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := await(t, a, importJob.ID); got.Status != "succeeded" {
+		t.Fatalf("import job: %+v", got)
+	}
+	if _, err = a.ImportSnapshot(preview.Claim, "Replay"); err == nil {
+		t.Fatal("accepted replayed claim")
+	}
+	if result := a.SnapshotInspection(inspect.ID); result.Claim != "" {
+		t.Fatal("consumed preview claim was still returned")
+	}
+	sources, err := store.Sources(context.Background())
+	if err != nil || len(sources) != 1 {
+		t.Fatalf("sources=%+v err=%v", sources, err)
+	}
+}
+
 func TestFilesystemPolicyRefreshConfigureAndRollback(t *testing.T) {
 	a, store, _ := openApp(t)
 	root := filepath.Join(t.TempDir(), "folder with spaces")
