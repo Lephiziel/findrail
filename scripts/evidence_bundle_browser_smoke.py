@@ -17,7 +17,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select, WebDriverWait
 
 sys.dont_write_bytecode = True
-from smoke import pdf_fixture
+from smoke import docx_fixture, pdf_fixture
 
 
 def free_port():
@@ -36,6 +36,7 @@ def main():
         for root in (source_a, source_b):
             (root / "notes.md").write_text(content, encoding="utf-8")
             (root / "manual.pdf").write_bytes(pdf_fixture(["irrelevant page one", "page two synthetic evidence"] ))
+            (root / "late.docx").write_bytes(docx_fixture("late DOCX synthetic selected quote"))
         (similar_source / "notes.md").write_text("Different contents in a similarly named source.", encoding="utf-8")
         downloads = base / "downloads"; downloads.mkdir()
         address = f"127.0.0.1:{free_port()}"; url = "http://" + address
@@ -91,13 +92,14 @@ def main():
 
             add_selected("First", "First synthetic selected quote.")
             add_selected("page two", "page two synthetic evidence", 2)
+            add_selected("late DOCX", "late DOCX synthetic selected quote")
             browser.find_element(By.ID, "collection-open").click()
-            wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".collection-row")) == 2)
+            wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".collection-row")) == 3)
             browser.find_element(By.ID, "collection-title").clear(); browser.find_element(By.ID, "collection-title").send_keys("Source A collection")
             browser.find_element(By.ID, "collection-save").click()
             wait.until(lambda d: "Collection saved" in d.find_element(By.ID, "collection-status").text)
             notes = browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")
-            notes[0].send_keys("saved note one"); notes[1].send_keys("saved note two")
+            notes[0].send_keys("saved note one"); notes[1].send_keys("saved note two"); notes[2].send_keys("saved note three")
             # Reorder by moving the second citation first through the production move control.
             browser.find_element(By.XPATH, "(//section[contains(@class,'collection-row')])[2]//button[.='Move up']").click()
             browser.find_element(By.ID, "collection-title").clear(); browser.find_element(By.ID, "collection-title").send_keys("Source A collection edited")
@@ -117,8 +119,8 @@ def main():
             bundle_path = downloads / "findrail-evidence-bundle.json"
             wait.until(lambda _: bundle_path.exists())
             original = json.loads(bundle_path.read_text(encoding="utf-8"))
-            assert [x["text"] for x in original["entries"]] == ["page two synthetic evidence", "First synthetic selected quote."]
-            assert [x["note"] for x in original["entries"]] == ["saved note two", "saved note one"]
+            assert [x["text"] for x in original["entries"]] == ["page two synthetic evidence", "First synthetic selected quote.", "late DOCX synthetic selected quote"]
+            assert [x["note"] for x in original["entries"]] == ["saved note two", "saved note one", "saved note three"]
             with urllib.request.urlopen(url + "/api/v1/sources") as r: source_id = json.load(r)["sources"][0]["id"]
             browser.quit(); browser = None; server.terminate(); server.communicate(timeout=8)
 
@@ -203,7 +205,7 @@ def main():
             assert not browser.find_element(By.ID, "bundle-commit").is_enabled()
             browser.set_network_conditions(offline=False, latency=0, download_throughput=5_000_000, upload_throughput=5_000_000)
             browser.find_element(By.ID, "bundle-preview").send_keys(Keys.ENTER)
-            wait.until(lambda d: "2 matches; 0 conflicts" in d.find_element(By.ID, "bundle-status").text)
+            wait.until(lambda d: "3 matches; 0 conflicts" in d.find_element(By.ID, "bundle-status").text)
             browser.execute_script("window.dispatchEvent(new CustomEvent('findrail-inventory',{detail:arguments[0]}))", [
                 {"id": destination, "name": "Notes", "kind": "filesystem", "documents": 99, "last_indexed_at": "changed-during-preview"},
                 {"id": next(source["id"] for source in destinations if source["id"] != destination), "name": "Notes", "kind": "filesystem", "documents": 1, "last_indexed_at": "unchanged"},
@@ -211,15 +213,15 @@ def main():
             assert not browser.find_element(By.ID, "bundle-commit").is_enabled()
             assert "inventory changed" in browser.find_element(By.ID, "bundle-status").text.lower()
             browser.find_element(By.ID, "bundle-preview").send_keys(Keys.ENTER)
-            wait.until(lambda d: "2 matches; 0 conflicts" in d.find_element(By.ID, "bundle-status").text)
+            wait.until(lambda d: "3 matches; 0 conflicts" in d.find_element(By.ID, "bundle-status").text)
             browser.find_element(By.ID, "bundle-title").clear(); browser.find_element(By.ID, "bundle-title").send_keys("Imported Source B")
             browser.find_element(By.ID, "bundle-confirm").send_keys(Keys.SPACE); browser.find_element(By.ID, "bundle-commit").send_keys(Keys.ENTER)
             wait.until(lambda d: d.find_element(By.ID, "collection-title").get_attribute("value") == "Imported Source B")
-            assert [e.get_attribute("value") for e in browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")] == ["saved note two", "saved note one"]
+            assert [e.get_attribute("value") for e in browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")] == ["saved note two", "saved note one", "saved note three"]
             with urllib.request.urlopen(urllib.request.Request(url + "/api/v1/collections", headers=headers)) as response:
                 collection_list = json.load(response)["collections"]
             imported = next(item for item in collection_list if item["title"] == "Imported Source B")
-            assert imported["id"] != original_collection_id and imported["entry_count"] == 2
+            assert imported["id"] != original_collection_id and imported["entry_count"] == 3
             request = urllib.request.Request(url + "/api/v1/collections/" + imported["id"], headers=headers)
             with urllib.request.urlopen(request) as response: imported_snapshot = json.load(response)
             old_evidence = [item.get("evidence", item) for item in original_snapshot["entries"]]
@@ -240,15 +242,15 @@ def main():
             headers = {"Origin": url, "X-Findrail-Token": token}
             picker = browser.find_element(By.ID, "collection-picker")
             try:
-                wait.until(lambda d: "Imported Source B (2)" in d.execute_script("return Array.from(arguments[0].options).map(o=>o.textContent).join('|')", d.find_element(By.ID, "collection-picker")))
+                wait.until(lambda d: "Imported Source B (3)" in d.execute_script("return Array.from(arguments[0].options).map(o=>o.textContent).join('|')", d.find_element(By.ID, "collection-picker")))
             except Exception as error:
                 with urllib.request.urlopen(urllib.request.Request(url + "/api/v1/collections", headers=headers)) as response:
                     body = response.read().decode()
                 raise AssertionError(("imported collection missing after restart", body, browser.find_element(By.ID, "collection-status").text,
                                      browser.execute_script("return [document.getElementById('collection-picker').hidden,Array.from(document.getElementById('collection-picker').options).map(x=>x.text)]"))) from error
-            Select(picker).select_by_visible_text("Imported Source B (2)")
+            Select(picker).select_by_visible_text("Imported Source B (3)")
             wait.until(lambda d: d.find_element(By.ID, "collection-title").get_attribute("value") == "Imported Source B")
-            assert [e.get_attribute("value") for e in browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")] == ["saved note two", "saved note one"]
+            assert [e.get_attribute("value") for e in browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")] == ["saved note two", "saved note one", "saved note three"]
             bundle_path.unlink()
             browser.find_element(By.ID, "collection-open").click()
             browser.find_element(By.ID, "collection-export-bundle").click()
