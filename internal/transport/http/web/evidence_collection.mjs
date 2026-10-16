@@ -8,6 +8,22 @@ const cleanLines = value => value.replace(/\r\n?/g, '\n');
 const jsonCopy = value => JSON.parse(JSON.stringify(value));
 function literalFence(value) { let longest=0,run=0;for(const ch of value){if(ch==='~'){run++;longest=Math.max(longest,run)}else run=0}return '~'.repeat(Math.max(3,longest+1)); }
 
+export function collectionFilename(title) {
+  const prefix = 'findrail-', suffix = '.md';
+  const normalized = String(title).normalize('NFC').toLowerCase().trim()
+    .replace(/(?:\.md)+$/u, '')
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, '-').replace(/^-+|-+$/g, '');
+  let stem = '', size = 0;
+  for (const point of normalized) {
+    const length = bytes(point);
+    if (size + length > 120 - bytes(prefix + suffix)) break;
+    stem += point; size += length;
+  }
+  stem = stem.replace(/-+$/g, '');
+  if (!/[\p{L}\p{N}]/u.test(stem)) stem = 'evidence';
+  return prefix + stem + suffix;
+}
+
 export function safeDecoration(value) {
   return String(value).replace(/[\u0000-\u001f\u007f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/([\\`*_{}\[\]<>#])/g, '\\$1');
 }
