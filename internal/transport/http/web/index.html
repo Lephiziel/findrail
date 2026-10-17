@@ -153,6 +153,10 @@ function portableDelay(flow){return new Promise(resolve=>{flow.wake=resolve;flow
 function finishPortableFailure(flow,text){
  if(!portableActive(flow))return;
  if(portablePending?.id===flow.jobId)portablePending=null;
+ if(flow.exportSummary){
+  flow.state='done';flow.jobId=null;flow.claim=null;$('snapshot-submit').hidden=true;$('snapshot-cancel-job').hidden=true;$('snapshot-check').hidden=true;
+  portableStatus('Snapshot exported, but its metadata verification failed: '+text);$('snapshot-close').focus();return;
+ }
  portableReady(flow,text+(flow.mode==='inspect'?' Inspect again before importing.':''));
 }
 function validPortableSummary(data){return data.format==='findrail-portable-snapshot'&&data.version===1&&['filesystem','github','archive'].includes(data.kind)&&Number.isInteger(data.documents)&&data.documents>=0&&data.documents<=2000&&Number.isInteger(data.pages)&&data.pages>=0&&data.pages<=20000&&Number.isInteger(data.bytes)&&data.bytes>0&&data.bytes<=33554432&&/^[a-f0-9]{64}$/.test(data.fingerprint)&&/^[a-f0-9]{64}$/.test(data.claim)&&data.frozen===true}

@@ -206,3 +206,13 @@ test('expired inspection and a running operation past the deadline require expli
   inspection(next,{status:'running'});await next.open();await next.input('snapshot-path','/synthetic/archive.zip');await next.submit();now+=135001;await next.tick(500);
   assert.match(next.element('snapshot-summary').textContent,/time limit/);assert.equal(next.element('snapshot-submit').disabled,true);assert.equal(next.element('snapshot-check').hidden,false);
 });
+
+test('failed metadata verification preserves the already committed export outcome',async()=>{
+  const h=await harness();h.route('/api/v1/sources/source-a/snapshot-export',()=>response({job:{id:'export-1'}},202));
+  h.setJobs([{id:'export-1',type:'snapshot-export',status:'succeeded',result:'exported'}]);inspection(h);
+  h.route('/api/v1/snapshots/inspections/inspect-1',()=>response({status:'failed',error:'Preview quota reached.'},409));
+  await h.open('export',source);await h.input('snapshot-path','/synthetic/new.zip');await h.submit();await flush();
+  assert.match(h.element('snapshot-summary').textContent,/Snapshot exported, but.*verification failed.*Preview quota/);
+  assert.equal(h.element('snapshot-submit').hidden,true);assert.equal(h.document.activeElement.id,'snapshot-close');
+  await h.submit();assert.equal(h.calls.filter(c=>c.url.endsWith('/snapshot-export')).length,1);
+});

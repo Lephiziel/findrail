@@ -12,6 +12,7 @@ import time
 import urllib.request
 
 from selenium import webdriver
+from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -97,6 +98,13 @@ def main():
                   for(const name of ['pushState','replaceState']){const original=history[name].bind(history);history[name]=(...args)=>{window.__snapshotEffects.writes.push(name);return original(...args)}};
                 ''')
 
+            def click_source(source_id, title):
+                def click(_):
+                    button = browser.find_element(By.CSS_SELECTOR, f'.source-card[data-id="{source_id}"] button[title^="{title}"]')
+                    if not button.is_enabled(): return False
+                    button.click(); return True
+                WebDriverWait(browser, 25, ignored_exceptions=(StaleElementReferenceException,)).until(click)
+
             def close():
                 element('snapshot-close').click()
                 wait.until(lambda _: not element('snapshot-transfer').get_property('open'))
@@ -137,7 +145,7 @@ def main():
             element('collection-close').click()
             # Opening and exporting preserves query, pinned text and dirty notes.
             source_id = inventory()[0]['id']
-            browser.find_element(By.CSS_SELECTOR, f'.source-card[data-id="{source_id}"] button[title^="Export indexed"]').click()
+            click_source(source_id, 'Export indexed')
             wait.until(lambda _: element('snapshot-submit').is_enabled())
             element('snapshot-path').send_keys(str(archive)); element('snapshot-submit').click()
             wait.until(lambda _: 'Snapshot exported and verified' in element('snapshot-summary').text)
@@ -148,7 +156,7 @@ def main():
             assert browser.execute_script('return document.activeElement.textContent') == 'Export snapshot'
             # No accidental overwrite, and no retry of an output request on failure.
             original = archive.read_bytes()
-            browser.find_element(By.CSS_SELECTOR, f'.source-card[data-id="{source_id}"] button[title^="Export indexed"]').click()
+            click_source(source_id, 'Export indexed')
             wait.until(lambda _: element('snapshot-submit').is_enabled())
             element('snapshot-path').send_keys(str(archive)); element('snapshot-submit').click()
             wait.until(lambda _: element('snapshot-submit').is_enabled())
@@ -219,7 +227,7 @@ def main():
             stop(); launch(index_b); page()
             wait.until(lambda _: len(Select(element('source')).options) == 2)
             Select(element('source')).select_by_value(imported); search('page two', 'pdf'); element('close-preview').click()
-            browser.find_element(By.CSS_SELECTOR, f'.source-card[data-id="{imported}"] button[title^="Removes only"]').click()
+            click_source(imported, 'Removes only')
             element('confirm-remove').click(); wait.until(lambda _: inventory() == [])
             wait.until(lambda _: len(Select(element('source')).options) == 1)
             stop(); launch(index_b, 'serve'); browser.get(url + '/')
