@@ -11,6 +11,9 @@ on:
       - 'internal/transport/http/web/evidence_collection*'
       - 'scripts/evidence_bundle_browser_smoke.py'
       - 'scripts/search_preset_browser_smoke.py'
+      - 'scripts/snapshot_browser_smoke.py'
+      - 'internal/transport/http/web/snapshot_ui_test.mjs'
+      - 'docs/portable-snapshots.md'
       - 'internal/transport/http/web/search_ui.mjs'
       - 'internal/transport/http/web/search_preset_test.mjs'
       - 'internal/transport/http/web/source_management_test.mjs'
@@ -34,6 +37,9 @@ on:
       - 'internal/transport/http/web/evidence_collection*'
       - 'scripts/evidence_bundle_browser_smoke.py'
       - 'scripts/search_preset_browser_smoke.py'
+      - 'scripts/snapshot_browser_smoke.py'
+      - 'internal/transport/http/web/snapshot_ui_test.mjs'
+      - 'docs/portable-snapshots.md'
       - 'internal/transport/http/web/search_ui.mjs'
       - 'internal/transport/http/web/search_preset_test.mjs'
       - 'internal/transport/http/web/source_management_test.mjs'
@@ -81,3 +87,4 @@ jobs:
           python scripts/persistent_collection_smoke.py /tmp/findrail
           python scripts/evidence_bundle_browser_smoke.py /tmp/findrail
           python scripts/search_preset_browser_smoke.py /tmp/findrail
+          python scripts/snapshot_browser_smoke.py /tmp/findrail

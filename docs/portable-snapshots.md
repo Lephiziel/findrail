@@ -105,6 +105,48 @@ metadata preview hides original source name/location by default.
 These routes are source-build behaviour for the next unpublished source cycle;
 they do not describe the published alpha.4 binaries.
 
+## Sources UI
+
+In the writable `start`/desktop Sources panel, **Inspect portable snapshot** asks
+for an absolute archive path on the computer running Findrail. It is a text path,
+not a browser file picker or upload. Inspection validates the entire archive in a
+bounded job; the UI displays only format, kind, document/page counts, compressed
+bytes and semantic fingerprint. It never displays document text or origin paths.
+The fingerprint detects archive consistency and is not an author signature.
+Import requires a separate name (1–512 UTF-8 bytes) and confirmation. The
+resulting source is frozen; it is not watched, refreshed, or automatically added
+to an MCP allowlist. Re-importing an identical fingerprint identifies the
+existing source without changing its name. An expired claim or changed archive
+requires a fresh inspection.
+
+Each source card offers **Export snapshot**. Enter a new absolute output path on
+the Findrail host and explicitly submit. Export writes an archive locally; it is
+not a browser download, does not overwrite or open a file, and refuses existing
+files/symlinks and paths inside the index or registered filesystem roots. The
+archive includes indexed plaintext and provenance, not original PDF/DOCX files.
+After the export job succeeds, the Sources UI validates the new archive and
+shows its bounded byte count and fingerprint.
+Source snapshots do not contain evidence collections or notes; use the separate
+evidence-bundle JSON workflow for selected citations and notes.
+
+The path is locked while an operation is submitted or monitored. Changing it
+after a successful inspection discards the import claim and requires a new
+inspection. Closing the dialog stops monitoring; it does not undo a completed
+commit. If a response is lost, times out, or the tab is hidden, use **Check
+operation status** to refresh jobs and sources before explicitly retrying. The UI
+never automatically resubmits an import or export. A changed/removed source
+requires closing the old export dialog and choosing a current source again.
+Paths, claims, and inspection results are not saved in browser storage or history.
+
+The Sources UI accepts paths up to 4096 UTF-8 bytes and names up to 512 UTF-8
+bytes. UI management permits at most one archive inspect/import/export operation
+at a time; operation deadline is two minutes, and management-profile archive
+limits are 32 MiB compressed, 64 MiB expanded, 2000 documents and 20000 pages.
+Server validation remains authoritative. These controls require the
+`portable_snapshots` capability; its absence means unavailable, including on
+read-only `serve`/`demo`. This is unpublished source-cycle behaviour, not an
+alpha.4 feature.
+
 ## CLI journey
 
 Use real source IDs shown by `findrail sources --json`:
