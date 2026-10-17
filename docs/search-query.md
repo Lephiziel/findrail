@@ -152,3 +152,24 @@ full indexed commit URI. Search reads only the committed index snapshot.
 
 Advanced search and the filters are source-build behavior and are not included
 in the existing alpha.2 downloads.
+
+## Portable search preset files
+
+Source-build search UI offers an explicit **Save preset JSON** action and a local
+file picker. A preset is a UTF-8 JSON object (`findrail-search-preset`, version
+1) capped at 16 KiB. The title is entered by the user; the file contains the
+query, Literal/Advanced mode, format/path/title filters, and either explicit
+All-sources scope or a source-ID hint and display name. Empty filters are kept.
+No automatic history, database setting, browser storage, URL state, account or
+sync is involved. Save is a user-triggered download named
+`findrail-search-preset.json`; treat files as potentially sensitive because they
+contain the query.
+
+Loading validates and previews the file locally and does **not** search. A
+source hint is only a hint, never authority: even an exact current-ID match must
+be explicitly selected as the destination. Missing or changed IDs require
+explicit remapping; the UI never falls back to All. An All-scope preset is shown
+as All. Apply fills the controls and invalidates old pagination/search/preview
+work; press Search or Enter separately to run it. Pinned evidence and collection
+notes are unaffected. Preset files are portable manually, not synchronized, and
+do not contain source paths, URIs, result evidence, notes, or credentials.

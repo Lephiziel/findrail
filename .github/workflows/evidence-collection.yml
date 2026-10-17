@@ -10,6 +10,10 @@ on:
       - 'internal/transport/http/web/bundle_import*_test.mjs'
       - 'internal/transport/http/web/evidence_collection*'
       - 'scripts/evidence_bundle_browser_smoke.py'
+      - 'scripts/search_preset_browser_smoke.py'
+      - 'internal/transport/http/web/search_ui.mjs'
+      - 'internal/transport/http/web/search_preset_test.mjs'
+      - 'docs/search-query.md'
       - 'docs/evidence-bundles.md'
       - 'scripts/evidence_collection_smoke.py'
       - 'scripts/persistent_collection_smoke.py'
@@ -28,6 +32,10 @@ on:
       - 'internal/transport/http/web/bundle_import*_test.mjs'
       - 'internal/transport/http/web/evidence_collection*'
       - 'scripts/evidence_bundle_browser_smoke.py'
+      - 'scripts/search_preset_browser_smoke.py'
+      - 'internal/transport/http/web/search_ui.mjs'
+      - 'internal/transport/http/web/search_preset_test.mjs'
+      - 'docs/search-query.md'
       - 'docs/evidence-bundles.md'
       - 'scripts/evidence_collection_smoke.py'
       - 'scripts/persistent_collection_smoke.py'
@@ -70,3 +78,4 @@ jobs:
           python scripts/evidence_collection_smoke.py /tmp/findrail
           python scripts/persistent_collection_smoke.py /tmp/findrail
           python scripts/evidence_bundle_browser_smoke.py /tmp/findrail
+          python scripts/search_preset_browser_smoke.py /tmp/findrail
