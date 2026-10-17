@@ -305,6 +305,14 @@ func TestConcurrentCallsRejectBusyAndCancelReleasesSlot(t *testing.T) {
 	entered, cancelled := make(chan string, 4), make(chan string, 4)
 	release := make(chan struct{})
 	defer close(release)
+	finishCancellation := make(chan struct{})
+	defer func() {
+		select {
+		case <-finishCancellation:
+		default:
+			close(finishCancellation)
+		}
+	}()
 	backend := &controlledBackend{fakeBackend: testBackend(), searchFn: func(ctx context.Context, req search.Request) (search.Response, error) {
 		if req.SourceID != "a" || req.Limit != 10 {
 			return search.Response{}, errors.New("incorrect scoped request")
@@ -316,6 +324,9 @@ func TestConcurrentCallsRejectBusyAndCancelReleasesSlot(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			cancelled <- req.Query
+			if req.Query == "hello0" {
+				<-finishCancellation
+			}
 			return search.Response{}, ctx.Err()
 		case <-release:
 			return search.Response{}, nil
@@ -358,6 +369,21 @@ func TestConcurrentCallsRejectBusyAndCancelReleasesSlot(t *testing.T) {
 	case <-results:
 	case <-time.After(2 * time.Second):
 		t.Fatal("cancelled client call did not return")
+	}
+	// Client cancellation returns before the server handler has unwound. Keep
+	// that cleanup blocked to verify it still owns its bounded admission slot.
+	busy, err = session.CallTool(context.Background(), &sdkmcp.CallToolParams{Name: "findrail_search", Arguments: map[string]any{"query": "still-unwinding", "source_id": "a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireToolCode(t, busy, "server_busy")
+	close(finishCancellation)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(server.slots) != 3 {
+		if time.Now().After(deadline) {
+			t.Fatal("cancelled handler did not release its admission slot")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	// A new call must enter the vacated slot while the other three remain blocked.
 	ctx, cancel := context.WithCancel(context.Background())
