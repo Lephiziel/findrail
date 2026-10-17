@@ -39,3 +39,8 @@ test('UTF-8 and code-point bounds retain exact valid boundary strings',()=>{
  assert.deepEqual(decodeSearchPreset(encodeSearchPreset(boundary)),boundary);
  for(const change of [{title:boundary.title+'x'},{query:boundary.query+'x'},{source:{...boundary.source,display_name:boundary.source.display_name+'x'}}])assert.throws(()=>encodeSearchPreset({...boundary,...change}));
 });
+
+test('codec round-trips whitespace and line breaks exactly for other preset consumers',()=>{
+ const preset={...sample,title:'  title\r\n',query:'first\nsecond',filters:{...sample.filters,path_prefix:'line\rbreak',title_contains:'x\ny'}};
+ assert.deepEqual(decodeSearchPreset(encodeSearchPreset(preset)),preset);
+});

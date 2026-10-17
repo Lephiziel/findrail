@@ -134,6 +134,12 @@ def main():
             wait.until(lambda d: 'UTF-8' in element('preset-status').text)
             assert element('preset-status').is_displayed() and element('preset-preview').get_property('hidden')
             assert element('query').get_attribute('value') == ''
+            # Single-line inputs must not silently join words in a multiline file.
+            multiline = base / 'multiline.json'; data = dict(saved); data['query'] = 'first\nsecond'; multiline.write_text(json.dumps(data), encoding='utf-8')
+            load(multiline); Select(element('preset-source-map')).select_by_value(source); element('preset-apply').click()
+            assert element('query').get_attribute('value') == ''
+            assert 'single-line' in element('preset-status').text and element('preset-status').is_displayed()
+            element('preset-cancel').click()
             load(path)
             assert browser.execute_script('return document.activeElement.id') == 'preset-source-map'
             assert not element('preset-apply').is_enabled()

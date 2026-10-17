@@ -616,3 +616,13 @@ test('pagehide invalidates a pending preset file read and clears its preview',as
  const h=harness();await flush();const file=deferredPresetFile(h);h.notify('pagehide');file.resolve(presetFixture('after pagehide'));await file.complete;
  assert.equal(h.element('preset-preview').hidden,true);assert.equal(h.element('preset-summary').textContent,'');assert.equal(h.element('preset-apply').disabled,true);
 });
+
+test('line breaks that single-line controls cannot preserve reject Apply without altering current settings',async()=>{
+ for(const field of ['query','path_prefix','title_contains']){
+  const h=harness();await flush();h.element('query').value='retained query';h.element('format').value='pdf';
+  const preset=presetFixture();if(field==='query')preset.query='first\nsecond';else preset.filters[field]='first\rsecond';
+  await loadPreset(h,preset);h.handlers.get('preset-apply:click')();
+  assert.equal(h.element('query').value,'retained query');assert.equal(h.element('format').value,'pdf');assert.equal(h.searchURLs.length,0);
+  assert.match(h.element('preset-status').textContent,/single.line|line breaks/);
+ }
+});

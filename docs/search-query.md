@@ -181,3 +181,7 @@ inventory change refreshes destination choices and requires an explicit mapping
 again; a removed/re-added source does not retain the previous choice. Apply
 clears pending result-page previews even when the query text is unchanged.
 Advanced query syntax is checked by the server only after explicit Search.
+
+The web form has single-line query/filter controls. If a file contains CR or LF
+in those fields, Apply reports an error and retains current settings, instead of
+silently joining words. The codec itself preserves such strings exactly.

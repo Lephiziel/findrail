@@ -81,6 +81,7 @@ let searchGeneration=0;const snapshot=()=>({query:$('query').value,mode:$('mode'
  presetMap.addEventListener('change',()=>{if(loadedPreset?.source.scope==='source')$('preset-apply').disabled=!presetMap.value||!presetInventory.some(item=>item.id===presetMap.value)});
  $('preset-apply').addEventListener('click',()=>{
   if(!loadedPreset)return;const preset=loadedPreset;let mapped='';
+  if([preset.query,preset.filters.path_prefix,preset.filters.title_contains].some(value=>/[\r\n]/.test(value))){presetStatus.textContent='Search controls are single-line; this preset contains line breaks. Current settings were kept.';presetFile.focus();return}
   if(preset.source.scope==='source'){mapped=presetMap.value;if(!mapped||!presetInventory.some(item=>item.id===mapped)){presetStatus.textContent='Choose an available destination source.';presetMap.focus();return}}
   $('query').value=preset.query;$('mode').value=preset.mode;$('format').value=preset.filters.format;$('path-prefix').value=preset.filters.path_prefix;$('title-contains').value=preset.filters.title_contains;source.value=mapped;
   previewUI.invalidatePendingPagePreview();invalidateSearchGeneration();results.replaceChildren();$('active-filters').textContent='';status.textContent='Preset applied. Press Search or Enter to run it.';resetPreset();presetStatus.textContent='Preset applied; search has not been run.';$('query').focus();
