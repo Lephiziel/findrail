@@ -69,6 +69,403 @@ func TestArchiveSourceCannotBeConfiguredOrRefreshed(t *testing.T) {
 	}
 }
 
+func TestSnapshotInspectClaimImportIsProcessBoundAndReplayProtected(t *testing.T) {
+	a, store, _ := openApp(t)
+	origin := snapshot.Origin{ID: "lease-origin", Kind: "filesystem", Name: "Synthetic", Location: "/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
+	doc := snapshot.Document{ID: "lease-doc", Path: "note.md", Title: "Note", URI: "file:///synthetic/note.md", MediaType: "text/plain", Text: "portable lease fixture", ContentHash: strings.Repeat("a", 64), SizeBytes: 22, ModifiedAt: "2026-10-09T11:00:00Z"}
+	data, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, []snapshot.Document{doc}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "snapshot.zip")
+	if err = os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inspect, err := a.InspectSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := await(t, a, inspect.ID); got.Status != "succeeded" || got.Result != "" {
+		t.Fatalf("inspect generic job leaked result: %+v", got)
+	}
+	preview := a.SnapshotInspection(inspect.ID)
+	if preview.Status != "succeeded" || preview.Claim == "" || preview.Documents != 1 || preview.Fingerprint == "" {
+		t.Fatalf("preview: %+v", preview)
+	}
+	importJob, err := a.ImportSnapshot(preview.Claim, "Imported synthetic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := await(t, a, importJob.ID); got.Status != "succeeded" {
+		t.Fatalf("import job: %+v", got)
+	}
+	if _, err = a.ImportSnapshot(preview.Claim, "Replay"); err == nil {
+		t.Fatal("accepted replayed claim")
+	}
+	if result := a.SnapshotInspection(inspect.ID); result.Claim != "" {
+		t.Fatal("consumed preview claim was still returned")
+	}
+	sources, err := store.Sources(context.Background())
+	if err != nil || len(sources) != 1 {
+		t.Fatalf("sources=%+v err=%v", sources, err)
+	}
+}
+
+func TestSnapshotImportRevalidatesChangedFileBeforeMutation(t *testing.T) {
+	a, store, _ := openApp(t)
+	makeFile := func(text string) []byte {
+		origin := snapshot.Origin{ID: "changed-origin", Kind: "filesystem", Name: "Synthetic", Location: "/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
+		doc := snapshot.Document{ID: "changed-doc", Path: "note.md", Title: "Note", URI: "file:///synthetic/note.md", MediaType: "text/plain", Text: text, ContentHash: strings.Repeat("a", 64), SizeBytes: int64(len(text)), ModifiedAt: "2026-10-09T11:00:00Z"}
+		data, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, []snapshot.Document{doc}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	path := filepath.Join(t.TempDir(), "replace.zip")
+	if err := os.WriteFile(path, makeFile("claimed content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	inspect, err := a.InspectSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := await(t, a, inspect.ID); got.Status != "succeeded" {
+		t.Fatalf("inspect: %+v", got)
+	}
+	claim := a.SnapshotInspection(inspect.ID).Claim
+	if claim == "" {
+		t.Fatal("missing claim")
+	}
+	if err = os.WriteFile(path, makeFile("changed content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	job, err := a.ImportSnapshot(claim, "Changed after inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := await(t, a, job.ID); got.Status != "failed" || got.ErrorCode != "snapshot_changed" || !strings.Contains(got.Error, "no source was imported") {
+		t.Fatalf("changed-file import: %+v", got)
+	}
+	sources, err := store.Sources(context.Background())
+	if err != nil || len(sources) != 0 {
+		t.Fatalf("changed archive mutated storage: %+v %v", sources, err)
+	}
+}
+
+func TestSnapshotClaimsExpireAndDoNotSurviveAppRestart(t *testing.T) {
+	_, store, dir := openApp(t)
+	origin := snapshot.Origin{ID: "claim-lifetime", Kind: "filesystem", Name: "Synthetic", Location: "/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
+	doc := snapshot.Document{ID: "claim-doc", Path: "note.md", Title: "Note", URI: "file:///synthetic/note.md", MediaType: "text/plain", Text: "claim lifetime", ContentHash: strings.Repeat("a", 64), SizeBytes: 15, ModifiedAt: "2026-10-09T11:00:00Z"}
+	data, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, []snapshot.Document{doc}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "claim.zip")
+	if err = os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	first := New(context.Background(), store, dir, "/unused")
+	inspect, err := first.InspectSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	await(t, first, inspect.ID)
+	claim := first.SnapshotInspection(inspect.ID).Claim
+	if claim == "" {
+		t.Fatal("missing claim")
+	}
+	first.mu.Lock()
+	lease := first.snapshotLeases[claim]
+	lease.expires = time.Now().Add(-time.Second)
+	first.snapshotLeases[claim] = lease
+	first.mu.Unlock()
+	if got := first.SnapshotInspection(inspect.ID); got.Status != "expired" {
+		t.Fatalf("expired lease result: %+v", got)
+	}
+	if _, err = first.ImportSnapshot(claim, "Expired"); err == nil {
+		t.Fatal("expired claim accepted")
+	}
+	c, cancel := context.WithTimeout(context.Background(), time.Second)
+	if err = first.Close(c); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	// A fresh process-local App has no lease state from its predecessor.
+	second := New(context.Background(), store, dir, "/unused")
+	defer func() {
+		c, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = second.Close(c)
+	}()
+	if _, err = second.ImportSnapshot(claim, "After restart"); err == nil {
+		t.Fatal("claim survived app restart")
+	}
+}
+
+func TestSnapshotJobsRejectConcurrentInspectAndCancelWhileWaitingForDecodeSlot(t *testing.T) {
+	a, _, _ := openApp(t)
+	origin := snapshot.Origin{ID: "busy-origin", Kind: "filesystem", Name: "Synthetic", Location: "/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
+	data, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "busy.zip")
+	if err = os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.snapshotGate <- struct{}{}
+	first, err := a.InspectSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.InspectSnapshot(path); err == nil || err.Error() != "busy" {
+		t.Fatalf("concurrent inspect was not rejected busy: %v", err)
+	}
+	if err = a.Cancel(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	<-a.snapshotGate
+	if done := await(t, a, first.ID); done.Status != "canceled" {
+		t.Fatalf("canceled inspect: %+v", done)
+	}
+}
+
+func TestPortableSnapshotManagementExportInspectImportRestartAndForget(t *testing.T) {
+	ctx := context.Background()
+	indexA, indexB := t.TempDir(), t.TempDir()
+	storeA, err := sqlite.Open(ctx, indexA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appA := New(ctx, storeA, indexA, "/unused")
+	defer func() {
+		c, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_ = appA.Close(c)
+		_ = storeA.Close()
+	}()
+	origin := snapshot.Origin{ID: "lifecycle-origin", Kind: "filesystem", Name: "Synthetic PDF source", Location: "/synthetic/source", IndexedAt: "2026-10-09T12:00:00Z"}
+	makeArchive := func(text string) snapshot.Archive {
+		doc := snapshot.Document{ID: "original-pdf", Path: "report.pdf", Title: "Report", URI: "file:///synthetic/source/report.pdf", MediaType: "application/pdf", Text: "first page evidence\n" + text + "\n", ContentHash: strings.Repeat("b", 64), SizeBytes: 100, ModifiedAt: "2026-10-09T11:00:00Z", PageCount: 2}
+		pages := []snapshot.Page{{Path: "report.pdf", Number: 1, Text: "first page evidence"}, {Path: "report.pdf", Number: 2, Text: text}}
+		data, e := snapshot.Encode(snapshot.Manifest{Producer: "synthetic test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, []snapshot.Document{doc}, pages)
+		if e != nil {
+			t.Fatal(e)
+		}
+		decoded, e := snapshot.Inspect(data)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return decoded
+	}
+	originalID, err := storeA.ImportSnapshot(ctx, "Synthetic PDF", makeArchive("secondpageprobe retained page two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveDir := t.TempDir()
+	export := func(app *App, id, name string) string {
+		path := filepath.Join(archiveDir, name)
+		job, e := app.ExportSnapshot(id, path)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if done := await(t, app, job.ID); done.Status != "succeeded" {
+			t.Fatalf("export: %+v", done)
+		}
+		info, e := os.Stat(path)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if os.PathSeparator != '\\' && info.Mode().Perm() != 0600 {
+			t.Fatalf("export mode=%o", info.Mode().Perm())
+		}
+		return path
+	}
+	pdfPath := export(appA, originalID, "pdf.zip")
+	// The management path uses the shared v1 codec but limits the source build's
+	// file/profile and validates before exposing its opaque preview lease.
+	storeB, err := sqlite.Open(ctx, indexB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appB := New(ctx, storeB, indexB, "/unused")
+	closeB := func() {
+		c, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if e := appB.Close(c); e != nil {
+			t.Error(e)
+		}
+		if e := storeB.Close(); e != nil {
+			t.Error(e)
+		}
+	}
+	pdfInspect, err := appB.InspectSnapshot(pdfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, appB, pdfInspect.ID); done.Status != "succeeded" || done.Result != "" {
+		t.Fatalf("inspect job: %+v", done)
+	}
+	pdfPreview := appB.SnapshotInspection(pdfInspect.ID)
+	if pdfPreview.Status != "succeeded" || pdfPreview.Pages != 2 || pdfPreview.Claim == "" {
+		t.Fatalf("PDF preview: %+v", pdfPreview)
+	}
+	pdfImport, err := appB.ImportSnapshot(pdfPreview.Claim, "Imported PDF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := await(t, appB, pdfImport.ID)
+	if done.Status != "succeeded" || !done.Progress.Committed || !strings.HasPrefix(done.Result, "imported:") {
+		t.Fatalf("PDF import: %+v", done)
+	}
+	importedID := strings.TrimPrefix(done.Result, "imported:")
+	response, err := storeB.Search(ctx, search.Request{Query: "secondpageprobe", Limit: 10})
+	if err != nil || len(response.Results) != 1 || response.Results[0].Page != 2 {
+		t.Fatalf("page 2 search: %+v %v", response, err)
+	}
+	evidence, err := storeB.Evidence(ctx, response.Results[0].ID, 2)
+	if err != nil || !strings.Contains(evidence.Text, "secondpageprobe") {
+		t.Fatalf("PDF page 2 evidence: %+v %v", evidence, err)
+	}
+	// Identical content returns the pre-existing ID and preserves its name.
+	dupInspect, err := appB.InspectSnapshot(pdfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	await(t, appB, dupInspect.ID)
+	dupJob, err := appB.ImportSnapshot(appB.SnapshotInspection(dupInspect.ID).Claim, "Must not rename")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, appB, dupJob.ID); done.Status != "succeeded" || done.Result != "already_imported:"+importedID {
+		t.Fatalf("duplicate import: %+v", done)
+	}
+	// A changed fingerprint coexists; it does not replace the imported snapshot.
+	changedBytes, err := snapshot.Encode(snapshot.Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, makeArchive("changedpageprobe distinct page two").Documents, makeArchive("changedpageprobe distinct page two").Pages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedPath := filepath.Join(archiveDir, "changed.zip")
+	if err = os.WriteFile(changedPath, changedBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	changedInspect, err := appB.InspectSnapshot(changedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	await(t, appB, changedInspect.ID)
+	changedJob, err := appB.ImportSnapshot(appB.SnapshotInspection(changedInspect.ID).Claim, "Changed snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedDone := await(t, appB, changedJob.ID)
+	if changedDone.Status != "succeeded" {
+		t.Fatalf("changed import: %+v", changedDone)
+	}
+	changedID := strings.TrimPrefix(changedDone.Result, "imported:")
+	if changedID == importedID || !strings.HasPrefix(changedDone.Result, "imported:") {
+		t.Fatalf("changed snapshot did not coexist: %+v", changedDone)
+	}
+	collection, err := storeB.CreateCollection(ctx, "Keep unrelated collection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A separate text source exercises the filesystem-source export path too.
+	root := filepath.Join(t.TempDir(), "synthetic-root")
+	if err = os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "note.md"), []byte("filesystemsnapshotprobe"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	folderJob, err := appA.AddFolder(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, appA, folderJob.ID); done.Status != "succeeded" {
+		t.Fatalf("folder indexing: %+v", done)
+	}
+	sources, err := storeA.Sources(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var folderID string
+	for _, source := range sources {
+		if source.Kind == "filesystem" {
+			folderID = source.ID
+		}
+	}
+	if folderID == "" {
+		t.Fatal("filesystem source not registered")
+	}
+	folderPath := export(appA, folderID, "folder.zip")
+	folderInspect, err := appB.InspectSnapshot(folderPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	await(t, appB, folderInspect.ID)
+	folderImport, err := appB.ImportSnapshot(appB.SnapshotInspection(folderInspect.ID).Claim, "Imported folder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, appB, folderImport.ID); done.Status != "succeeded" {
+		t.Fatalf("folder import: %+v", done)
+	}
+	// Existing files, output symlinks and protected roots must not be published.
+	for _, target := range []string{filepath.Join(archiveDir, "pdf.zip"), filepath.Join(indexA, "forbidden.zip"), filepath.Join(root, "forbidden.zip")} {
+		job, e := appA.ExportSnapshot(originalID, target)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if done := await(t, appA, job.ID); done.Status != "failed" {
+			t.Fatalf("unsafe export target %q: %+v", target, done)
+		}
+	}
+	link := filepath.Join(archiveDir, "target-link.zip")
+	if os.PathSeparator != '\\' {
+		if err = os.Symlink(filepath.Join(archiveDir, "not-present"), link); err != nil {
+			t.Fatal(err)
+		}
+		job, e := appA.ExportSnapshot(originalID, link)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if done := await(t, appA, job.ID); done.Status != "failed" {
+			t.Fatalf("symlink export: %+v", done)
+		}
+	}
+	closeB()
+	storeB, err = sqlite.Open(ctx, indexB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appB = New(ctx, storeB, indexB, "/unused")
+	response, err = storeB.Search(ctx, search.Request{Query: "secondpageprobe", Limit: 10})
+	if err != nil || len(response.Results) != 1 || response.Results[0].Page != 2 {
+		t.Fatalf("restart lost PDF snapshot: %+v %v", response, err)
+	}
+	if _, err = storeB.LoadCollection(ctx, collection.ID); err != nil {
+		t.Fatalf("restart lost unrelated collection: %v", err)
+	}
+	remove, err := appB.Remove(importedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, appB, remove.ID); done.Status != "succeeded" {
+		t.Fatalf("Forget imported source: %+v", done)
+	}
+	response, err = storeB.Search(ctx, search.Request{Query: "secondpageprobe", Limit: 10})
+	if err != nil || len(response.Results) != 0 {
+		t.Fatalf("Forget left searchable PDF: %+v %v", response, err)
+	}
+	response, err = storeB.Search(ctx, search.Request{Query: "changedpageprobe", Limit: 10})
+	if err != nil || len(response.Results) != 1 {
+		t.Fatalf("Forget removed coexisting source: %+v %v", response, err)
+	}
+	closeB()
+}
+
 func TestFilesystemPolicyRefreshConfigureAndRollback(t *testing.T) {
 	a, store, _ := openApp(t)
 	root := filepath.Join(t.TempDir(), "folder with spaces")
@@ -253,6 +650,59 @@ func TestGitHubAddRefreshOfflinePreservesSnapshotAndStableIdentity(t *testing.T)
 		t.Fatalf("sources: %+v %v", sources, err)
 	}
 	id := sources[0].ID
+	// Exercise the management job lifecycle for a GitHub registration as well as
+	// filesystem and archive sources: export preserves frozen GitHub provenance.
+	githubArchivePath := filepath.Join(t.TempDir(), "github-source.zip")
+	githubExport, err := a.ExportSnapshot(id, githubArchivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, a, githubExport.ID); done.Status != "succeeded" || !done.Progress.Committed {
+		t.Fatalf("GitHub export: %+v", done)
+	}
+	githubInspect, err := a.InspectSnapshot(githubArchivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, a, githubInspect.ID); done.Status != "succeeded" {
+		t.Fatalf("GitHub inspect: %+v", done)
+	}
+	githubPreview := a.SnapshotInspection(githubInspect.ID)
+	if githubPreview.Kind != "github" || githubPreview.Claim == "" {
+		t.Fatalf("GitHub provenance preview: %+v", githubPreview)
+	}
+	githubImport, err := a.ImportSnapshot(githubPreview.Claim, "Frozen GitHub fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	githubImportDone := await(t, a, githubImport.ID)
+	if githubImportDone.Status != "succeeded" || !githubImportDone.Progress.Committed {
+		t.Fatalf("GitHub archive import: %+v", githubImportDone)
+	}
+	githubArchiveID := strings.TrimPrefix(githubImportDone.Result, "imported:")
+	if !strings.HasPrefix(githubImportDone.Result, "imported:") {
+		t.Fatalf("GitHub import result: %+v", githubImportDone)
+	}
+	archiveSources, err := store.Sources(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var githubArchiveFound bool
+	for _, source := range archiveSources {
+		if source.ID == githubArchiveID && source.Archive != nil && source.Archive.Origin.Kind == "github" {
+			githubArchiveFound = true
+		}
+	}
+	if !githubArchiveFound {
+		t.Fatalf("GitHub source provenance not frozen in imported archive: %+v", archiveSources)
+	}
+	removeGitHubArchive, err := a.Remove(githubArchiveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := await(t, a, removeGitHubArchive.ID); done.Status != "succeeded" {
+		t.Fatalf("remove temporary GitHub archive fixture: %+v", done)
+	}
 	result, err := store.Search(context.Background(), search.Request{Query: "oldmarker", Limit: 10})
 	if err != nil || result.Total != 1 {
 		t.Fatalf("initial search: %+v %v", result, err)

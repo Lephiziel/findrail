@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/Lephiziel/findrail/internal/snapshot"
 	"io"
 	"os"
 	"path/filepath"
@@ -39,7 +40,7 @@ func TestNoReplacePublicationIsAtomicAcrossWriters(t *testing.T) {
 		wg.Add(1)
 		go func(body string) {
 			defer wg.Done()
-			_, err := publishNoReplaceStream(target, func(w io.Writer) error { entered <- struct{}{}; <-release; _, e := io.WriteString(w, body); return e })
+			_, err := snapshot.PublishNoReplaceStream(target, func(w io.Writer) error { entered <- struct{}{}; <-release; _, e := io.WriteString(w, body); return e })
 			errs <- err
 		}(content)
 	}
@@ -75,7 +76,7 @@ func TestFailedPublicationRemovesPrivateStageAndPreservesExistingTarget(t *testi
 	if err := os.WriteFile(target, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := publishNoReplaceStream(target, func(w io.Writer) error { _, _ = w.Write([]byte("partial")); return errors.New("injected cancellation") }); err == nil {
+	if _, err := snapshot.PublishNoReplaceStream(target, func(w io.Writer) error { _, _ = w.Write([]byte("partial")); return errors.New("injected cancellation") }); err == nil {
 		t.Fatal("injected failure succeeded")
 	}
 	got, err := os.ReadFile(target)
@@ -104,10 +105,10 @@ func TestExportTargetProtectionCanonicalizesSymlinkParentsAndRoots(t *testing.T)
 	if err := os.Symlink(root, alias); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateExportTarget(filepath.Join(alias, "inside.zip"), root); err == nil {
+	if err := snapshot.ValidateExportTarget(filepath.Join(alias, "inside.zip"), root); err == nil {
 		t.Fatal("symlinked output parent inside source was accepted")
 	}
-	if err := validateExportTarget(filepath.Join(root, "inside.zip"), alias); err == nil {
+	if err := snapshot.ValidateExportTarget(filepath.Join(root, "inside.zip"), alias); err == nil {
 		t.Fatal("symlinked protected source root was ignored")
 	}
 }

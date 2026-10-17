@@ -43,6 +43,40 @@ func TestEncodeInspectRoundTripAndFingerprintGolden(t *testing.T) {
 	}
 }
 
+func TestInspectProfileAppliesStricterExpandedAndRecordLimits(t *testing.T) {
+	origin := Origin{ID: "profile", Kind: "filesystem", Name: "Synthetic", Location: "/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
+	doc := Document{ID: "doc", Path: "note.md", Title: "Note", URI: "file:///synthetic/note.md", MediaType: "text/plain", Text: "small body", ContentHash: strings.Repeat("a", 64), SizeBytes: 10, ModifiedAt: "2026-10-09T11:00:00Z"}
+	data, err := Encode(Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: origin}, []Document{doc}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = InspectProfile(context.Background(), data, MaxUncompressed, 0, MaxPages); err == nil {
+		t.Fatal("accepted a document above the selected profile count")
+	}
+	if _, err = InspectProfile(context.Background(), data, 128, 1, MaxPages); err == nil {
+		t.Fatal("accepted archive above the selected expanded profile")
+	}
+	if _, err = InspectProfile(context.Background(), data, MaxUncompressed, 1, MaxPages); err != nil {
+		t.Fatalf("valid profile archive rejected: %v", err)
+	}
+}
+
+func TestWriteArchiveProfileBoundsExpandedStagingBeforePublishingZIP(t *testing.T) {
+	o := Origin{ID: "write-profile", Kind: "filesystem", Name: "Synthetic", Location: "/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
+	var out bytes.Buffer
+	tooLarge := func(_ context.Context, w io.Writer) (int, error) {
+		_, err := io.WriteString(w, strings.Repeat("x", 2<<20))
+		return 1, err
+	}
+	_, err := WriteArchiveProfile(context.Background(), &out, Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: o}, tooLarge, func(context.Context, io.Writer) (int, error) { return 0, nil }, MaxArchive, 1<<20, 1, 0)
+	if err == nil {
+		t.Fatal("expanded output profile was ignored")
+	}
+	if out.Len() != 0 {
+		t.Fatal("partially staged archive was published to destination")
+	}
+}
+
 func TestInspectRejectsDuplicateJSONKeys(t *testing.T) {
 	var b bytes.Buffer
 	zw := zip.NewWriter(&b)
@@ -212,6 +246,45 @@ func TestInspectRejectsInvalidUTF8CRCCountsVersionAndDuplicateEntries(t *testing
 	_ = zw.Close()
 	if _, err = Inspect(b.Bytes()); err == nil {
 		t.Fatal("duplicate ZIP entry accepted")
+	}
+}
+
+func TestInspectProfileRejectsHashDepthAndCompressedBombBeforePayloadParse(t *testing.T) {
+	o := Origin{ID: "hostile", Kind: "filesystem", Name: "Synthetic", Location: "/synthetic", IndexedAt: "2026-10-09T12:00:00Z"}
+	valid, err := Encode(Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: o}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badHash := rewriteManifest(t, valid, func(m map[string]json.RawMessage) {
+		m["documents_sha256"] = json.RawMessage(`"` + strings.Repeat("0", 64) + `"`)
+	})
+	if _, err = Inspect(badHash); err == nil {
+		t.Fatal("invalid payload hash accepted")
+	}
+	deep := rewriteManifest(t, valid, func(m map[string]json.RawMessage) {
+		m["producer"] = json.RawMessage(strings.Repeat("[", 40) + "0" + strings.Repeat("]", 40))
+	})
+	if _, err = Inspect(deep); err == nil {
+		t.Fatal("excessive JSON nesting accepted")
+	}
+	doc := Document{ID: "bomb", Path: "bomb.txt", Title: "Bomb", URI: "file:///synthetic/bomb.txt", MediaType: "text/plain", Text: strings.Repeat("x", 1<<20), ContentHash: strings.Repeat("a", 64), SizeBytes: 1 << 20, ModifiedAt: "2026-10-09T11:00:00Z"}
+	bomb, err := Encode(Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: o}, []Document{doc}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bomb) > 64<<10 {
+		t.Fatalf("synthetic compression bomb was not compact: %d bytes", len(bomb))
+	}
+	if _, err = InspectProfile(context.Background(), bomb, 64<<10, 1, 0); err == nil {
+		t.Fatal("compressed archive exceeding expanded profile accepted")
+	}
+	badScheme := Document{ID: "scheme", Path: "note.md", Title: "Note", URI: "https://example.invalid/note.md", MediaType: "text/plain", Text: "body", ContentHash: strings.Repeat("a", 64), SizeBytes: 4, ModifiedAt: "2026-10-09T11:00:00Z"}
+	unsafe, err := Encode(Manifest{Producer: "test", ExportedAt: "2026-10-09T12:00:00Z", Origin: o}, []Document{badScheme}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Inspect(unsafe); err == nil {
+		t.Fatal("unsafe URI scheme accepted")
 	}
 }
 
