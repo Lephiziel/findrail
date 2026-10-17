@@ -138,7 +138,7 @@ test('source removal invalidates evidence that was fetched before removal', asyn
 
 test('archive source card identifies frozen provenance and offers no refresh/configure action', async () => {
   const hostile = '<img src=x onerror=alert(1)>';
-  const h = harness([{id:'archive-1',kind:'archive',name:hostile,root:'',documents:1,last_indexed_at:'2026-10-09T12:00:00Z',
+  const h = harness([{id:'archive-1',kind:'archive',name:'Portable notes',root:'',documents:1,last_indexed_at:'2026-10-09T12:00:00Z',
     archive:{origin:{kind:'filesystem',location:hostile},fingerprint:'abc',
       original_indexed_at:'2026-10-09T11:00:00Z',imported_at:'2026-10-09T12:00:00Z'}}]);
   await vm.runInContext(`(async()=>{${managementScript};globalThis.__loadSources=loadSources})()`,h.context); await flush(); await flush();
@@ -146,8 +146,8 @@ test('archive source card identifies frozen provenance and offers no refresh/con
   assert.equal(cards.length,1);
   const flat=[];const walk=n=>{flat.push(n);for(const c of n.children||[])walk(c)};walk(cards[0]);
   assert.ok(flat.some(n=>n.textContent==='Archive snapshot'));
-  assert.ok(flat.some(n=>n.textContent===hostile),'hostile name must remain literal text');
-  assert.ok(flat.some(n=>n.textContent.includes('Historical original location: '+hostile)));
+  assert.ok(flat.some(n=>n.textContent.includes('Frozen indexed snapshot')));
+  assert.ok(!flat.some(n=>n.textContent.includes(hostile)),'archive inventory must not disclose its private origin path');
   const labels=flat.filter(n=>n.tag==='button').map(n=>n.textContent);
   assert.ok(labels.includes('Search this source')&&labels.includes('Remove from index'));
   assert.ok(!labels.includes('Refresh')&&!labels.includes('Configure'));
