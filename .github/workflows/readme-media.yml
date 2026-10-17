@@ -39,7 +39,7 @@ jobs:
           PY
       - name: Capture real search and PDF page evidence
         run: python3 scripts/readme_media.py "$FINDRAIL_MEDIA_BINARY" --output "$RUNNER_TEMP/readme-media"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: readme-media-alpha3
           path: ${{ runner.temp }}/readme-media/

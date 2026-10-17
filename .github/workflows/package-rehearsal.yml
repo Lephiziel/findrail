@@ -161,7 +161,7 @@ jobs:
           if '${{ matrix.target }}' == 'linux-amd64': checks.extend(['alpha2_schema2_upgrade_restore','alpha3_schema6_upgrade_restore','published_alpha4_schema7_to_schema8_saved_collection_restore_rollback'])
           p.write_text(json.dumps({'candidate_sha': os.environ['CANDIDATE_SHA'], 'candidate_version':os.environ['CANDIDATE_VERSION'], 'schema_version':package.schema_version(), 'target':'${{ matrix.target }}', 'source_clean':os.environ['JOB_STATUS']=='success', 'status':os.environ['JOB_STATUS'],'checks':checks if os.environ['JOB_STATUS']=='success' else []}, sort_keys=True, indent=2)+'\n')
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: candidate-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}-${{ matrix.target }}

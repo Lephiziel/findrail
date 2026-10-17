@@ -125,7 +125,7 @@ jobs:
         run: |
           python scripts/diagnostics_browser_smoke.py "$CANDIDATE_DIR/findrail"
           python scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" --alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY" --report "$RUNNER_TEMP/packaged-journey-report.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: packaged-journey-${{ env.CANDIDATE_SHA }}
