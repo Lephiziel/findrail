@@ -309,3 +309,5 @@ if __name__ == "__main__":
     main()
     from passage_window_browser_smoke import main as passage_windows
     passage_windows()
+    from snapshot_browser_smoke import main as snapshots
+    snapshots()

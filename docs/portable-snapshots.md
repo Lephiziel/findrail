@@ -127,8 +127,16 @@ archive includes indexed plaintext and provenance, not original PDF/DOCX files.
 After the export job succeeds, the Sources UI validates the new archive and
 shows its bounded byte count and fingerprint.
 Source snapshots do not contain evidence collections or notes; use the separate
-evidence-bundle workflow for selected citations and notes. Neither ZIP format
-transfers the other one's contents.
+evidence-bundle JSON workflow for selected citations and notes.
+
+The path is locked while an operation is submitted or monitored. Changing it
+after a successful inspection discards the import claim and requires a new
+inspection. Closing the dialog stops monitoring; it does not undo a completed
+commit. If a response is lost, times out, or the tab is hidden, use **Check
+operation status** to refresh jobs and sources before explicitly retrying. The UI
+never automatically resubmits an import or export. A changed/removed source
+requires closing the old export dialog and choosing a current source again.
+Paths, claims, and inspection results are not saved in browser storage or history.
 
 The Sources UI accepts paths up to 4096 UTF-8 bytes and names up to 512 UTF-8
 bytes. UI management permits at most one archive inspect/import/export operation
