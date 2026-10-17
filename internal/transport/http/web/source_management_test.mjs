@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 const lifecycle = readFileSync(new URL('./search_ui.mjs', import.meta.url), 'utf8');
+const presetScript = lifecycle.slice(0,lifecycle.indexOf('const initializedDocuments')).replace(/^import .*;$/m,'').replace(/^export /gm,'');
 const lifecycleOpen = lifecycle.indexOf('{\n', lifecycle.indexOf('export function initializeSearchUI(')) + 2;
 const script = lifecycle.slice(lifecycleOpen, lifecycle.lastIndexOf('\n}'))
   .replace(/^if \(!document \|\| initializedDocuments\.has\(document\)\) return;\ninitializedDocuments\.add\(document\);\n/m, '')
@@ -59,7 +60,7 @@ function harness(sourcePayload = [], capabilities = {management:true}) {
     querySelectorAll: selector => [...elements.values()].filter(node=>matches(node,selector)),
   };
   document.body=element('body');document.activeElement=document.body;
-  const context = vm.createContext({window, document, AbortController, URLSearchParams, TextEncoder,
+  const context = vm.createContext({window, document, AbortController, URLSearchParams, TextEncoder, TextDecoder,
     Event, CustomEvent:class extends Event{constructor(type,{detail}){super(type);this.detail=detail}}, requestAnimationFrame: fn => frames.push(fn),
     setTimeout: schedule, clearTimeout: id => timers.delete(id),
     Option: function(text, value) { this.text = text; this.value = value; },
@@ -79,6 +80,7 @@ function harness(sourcePayload = [], capabilities = {management:true}) {
         ? {enabled: true, sources: []} : {sources: currentSources}};
     },
   });
+  vm.runInContext(presetScript, context);
   vm.runInContext(previewScript, context);
   vm.runInContext(script, context);
   return {context, timers, element, document, handlers, windowEvents, setSources(value){currentSources=value},runFrames(){while(frames.length)frames.shift()()},
@@ -530,4 +532,87 @@ test('opening a changed collection document starts from its current beginning',a
  assert.equal(manual.searchParams.get('start_char'),'0');
  h.resolveEvidence({...lateEvidence,text:'Current beginning',text_start_char:0});await flush();
  assert.match(h.element('preview-notice').textContent,/Document changed; showing the beginning/);
+});
+
+
+const presetFixture=(query='synthetic query',scope='all')=>({format:'findrail-search-preset',version:1,title:'Synthetic preset',query,mode:'literal',filters:{format:'all',path_prefix:'',title_contains:''},source:{scope,id_hint:scope==='source'?'a':'',display_name:scope==='source'?'Synthetic':''}});
+function deferredPresetFile(h){let resolve;const pending=new Promise(done=>{resolve=done});h.element('preset-file').files=[{size:1024,arrayBuffer:()=>pending}];const complete=h.handlers.get('preset-file:change')();return {complete,resolve(value){resolve(new TextEncoder().encode(JSON.stringify(value)).buffer)}}}
+async function loadPreset(h,value){const file=deferredPresetFile(h);file.resolve(value);await file.complete;}
+
+test('a newer preset file wins over an earlier delayed file read',async()=>{
+ const h=harness();await flush();const first=deferredPresetFile(h),second=deferredPresetFile(h);
+ second.resolve(presetFixture('newest query'));await second.complete;
+ first.resolve(presetFixture('obsolete query'));await first.complete;
+ h.handlers.get('preset-apply:click')();
+ assert.equal(h.element('query').value,'newest query');
+ assert.equal(h.searchURLs.length,0);
+});
+
+test('cancel invalidates a pending preset file read and returns focus',async()=>{
+ const h=harness();await flush();h.element('query').value='current controls';const file=deferredPresetFile(h);
+ h.handlers.get('preset-cancel:click')();file.resolve(presetFixture('canceled query'));await file.complete;
+ assert.equal(h.element('preset-preview').hidden,true);
+ assert.equal(h.element('preset-apply').disabled,true);
+ assert.equal(h.element('query').value,'current controls');
+ assert.equal(h.document.activeElement,h.element('preset-file'));
+});
+
+test('selecting a new file immediately disables applying the previous preset',async()=>{
+ const h=harness();await flush();await loadPreset(h,presetFixture());const file=deferredPresetFile(h);
+ assert.equal(h.element('preset-apply').disabled,true);
+ file.resolve(presetFixture('replacement'));await file.complete;
+});
+
+test('source inventory changes refresh preset destinations and require a new explicit choice',async()=>{
+ const sources=[{id:'a',name:'Synthetic',kind:'filesystem',root:'/synthetic',documents:1}];
+ const h=harness(sources);await flush();await loadPreset(h,presetFixture('scoped','source'));
+ h.element('preset-source-map').value='a';h.handlers.get('preset-source-map:change')();assert.equal(h.element('preset-apply').disabled,false);
+ h.notify('findrail-inventory',[{id:'b',name:'New source',kind:'filesystem',root:'/new',documents:1}]);
+ assert.equal(h.element('preset-source-map').value,'');
+ assert.equal(h.element('preset-apply').disabled,true);
+ assert.deepEqual(h.element('preset-source-map').children.map(option=>option.value),['','b']);
+});
+
+test('applying the same query invalidates its pending result preview',async()=>{
+ const h=harness([{id:'a',name:'Synthetic',kind:'filesystem',root:'/synthetic',documents:1}]);await flush();
+ h.element('query').value='same query';h.element('mode').value='literal';h.element('source').value='';h.element('format').value='all';
+ const preview=vm.runInContext("preview('doc',0,'a','text/plain',null,'',snapshot())",h.context);await flush();
+ await loadPreset(h,presetFixture('same query'));h.handlers.get('preset-apply:click')();
+ h.resolveEvidence({id:'doc',source_id:'a',title:'Late evidence',source_name:'Synthetic',source_kind:'filesystem',media_type:'text/plain',path:'note.md',text:'obsolete preview',modified_at:'2026-01-01T00:00:00Z',uri:'file:///synthetic/note.md'});
+ await preview;
+ assert.equal(h.element('preview').open,false);
+ assert.equal(vm.runInContext('previewUI.currentEvidence',h.context),null);
+ assert.equal(h.searchURLs.length,0);
+});
+
+test('Escape from preset mapping cancels the load and returns to its file input',async()=>{
+ const h=harness([{id:'a',name:'Synthetic',kind:'filesystem',root:'/synthetic',documents:1}]);await flush();await loadPreset(h,presetFixture('scoped','source'));
+ h.handlers.get('preset-preview:keydown')?.({key:'Escape',preventDefault(){},stopPropagation(){}});
+ assert.equal(h.element('preset-preview').hidden,true);
+ assert.equal(h.document.activeElement,h.element('preset-file'));
+});
+
+test('preset apply clears a pending cursor response and only explicit Search starts the next request',async()=>{
+ const h=harness([],{search_pagination:true});await flush();h.element('query').value='old query';
+ h.handlers.get('search-form:submit')({preventDefault(){}});await flush();
+ h.resolveSearch(0,{total:40,offset:0,returned:20,results:[],next_cursor:'old-cursor',end_reason:null});await flush();
+ h.handlers.get('page-next:click')();await flush();
+ await loadPreset(h,presetFixture('new query'));h.handlers.get('preset-apply:click')();
+ h.resolveSearch(1,{total:40,offset:20,returned:20,results:[],next_cursor:'stale-next',end_reason:null});await flush();
+ assert.equal(h.element('search-pager').hidden,true);assert.equal(h.element('results').children.length,0);assert.equal(h.searchURLs.length,2);
+ assert.match(h.element('status').textContent,/Preset applied/);
+ h.handlers.get('search-form:submit')({preventDefault(){}});await flush();
+ const request=new URLSearchParams(h.searchURLs[2].split('?')[1]);assert.equal(request.get('q'),'new query');assert.equal(request.has('cursor'),false);
+});
+
+test('source removal and re-add cannot reuse an earlier preset mapping',async()=>{
+ const current={id:'a',name:'Synthetic',kind:'filesystem',root:'/synthetic',documents:1};const h=harness([current]);await flush();
+ await loadPreset(h,presetFixture('scoped','source'));h.element('preset-source-map').value='a';h.handlers.get('preset-source-map:change')();
+ h.notify('source-removed','a');h.notify('findrail-inventory',[current]);
+ assert.equal(h.element('preset-source-map').value,'');assert.equal(h.element('preset-apply').disabled,true);assert.equal(h.searchURLs.length,0);
+});
+
+test('pagehide invalidates a pending preset file read and clears its preview',async()=>{
+ const h=harness();await flush();const file=deferredPresetFile(h);h.notify('pagehide');file.resolve(presetFixture('after pagehide'));await file.complete;
+ assert.equal(h.element('preset-preview').hidden,true);assert.equal(h.element('preset-summary').textContent,'');assert.equal(h.element('preset-apply').disabled,true);
 });

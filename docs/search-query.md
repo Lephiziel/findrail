@@ -173,3 +173,11 @@ as All. Apply fills the controls and invalidates old pagination/search/preview
 work; press Search or Enter separately to run it. Pinned evidence and collection
 notes are unaffected. Preset files are portable manually, not synchronized, and
 do not contain source paths, URIs, result evidence, notes, or credentials.
+
+The codec preserves strings exactly and emits a fixed field order. File errors
+and download confirmations remain visible outside the preview. Choosing another
+file, Cancel, Escape, or leaving the page invalidates pending file reads. An
+inventory change refreshes destination choices and requires an explicit mapping
+again; a removed/re-added source does not retain the previous choice. Apply
+clears pending result-page previews even when the query text is unchanged.
+Advanced query syntax is checked by the server only after explicit Search.
