@@ -33,11 +33,11 @@ jobs:
       CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha }}
       CANDIDATE_VERSION: ${{ github.event_name == 'pull_request' && '0.1.0-alpha.5' || inputs.candidate_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - uses: actions/setup-go@v5
@@ -125,7 +125,7 @@ jobs:
         run: |
           python scripts/diagnostics_browser_smoke.py "$CANDIDATE_DIR/findrail"
           python scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" --alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY" --report "$RUNNER_TEMP/packaged-journey-report.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: packaged-journey-${{ env.CANDIDATE_SHA }}

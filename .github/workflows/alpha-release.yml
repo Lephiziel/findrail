@@ -201,7 +201,7 @@ jobs:
           if os.environ['TARGET']=='linux-amd64': checks.extend(['generated_mcp_configs_sdk_against_extracted_candidate','alpha2_schema2_upgrade_restore','alpha3_schema6_upgrade_restore','published_alpha4_schema7_to_schema8_saved_collection_restore_rollback','alpha4_same_host_resource_comparison'])
           out.write_text(json.dumps({'candidate_sha':os.environ['CANDIDATE_SHA'],'candidate_version':os.environ['VERSION'],'schema_version':package.schema_version(),'target':os.environ['TARGET'],'source_clean':os.environ['JOB_STATUS']=='success','status':os.environ['JOB_STATUS'],'checks':checks if os.environ['JOB_STATUS']=='success' else []}, sort_keys=True, indent=2)+'\n')
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: release-package-${{ needs.validate-source.outputs.candidate_sha }}-${{ matrix.target }}
@@ -218,7 +218,7 @@ jobs:
         with:
           ref: ${{ needs.validate-source.outputs.candidate_sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.x'
           cache: npm
@@ -236,7 +236,7 @@ jobs:
       - working-directory: extensions/vscode
         run: npm run test:integration
       - run: go test ./internal/transport/http/...
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-package-${{ needs.validate-source.outputs.candidate_sha }}-linux-amd64
           path: ${{ runner.temp }}/native-client
@@ -273,7 +273,7 @@ jobs:
           unzip -Z1 extensions/vscode/findrail-readonly-0.1.0.vsix | grep -qx 'extension/package.json'
           mkdir -p "$RUNNER_TEMP/vsix"
           cp extensions/vscode/findrail-readonly-0.1.0.vsix "$RUNNER_TEMP/vsix/"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-vsix-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/vsix/findrail-readonly-0.1.0.vsix
@@ -289,14 +289,14 @@ jobs:
       CANDIDATE_SHA: ${{ needs.validate-source.outputs.candidate_sha }}
       CANDIDATE_VERSION: ${{ needs.validate-source.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.x'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-package-${{ env.CANDIDATE_SHA }}-linux-amd64
           path: ${{ runner.temp }}/native-browser
@@ -359,7 +359,7 @@ jobs:
           FINDRAIL_CHROME: ${{ runner.temp }}/chrome-for-testing/chrome/linux-139.0.7258.66/chrome-linux64/chrome
           FINDRAIL_CHROMEDRIVER: ${{ runner.temp }}/chrome-for-testing/chromedriver/linux-139.0.7258.66/chromedriver-linux64/chromedriver
         run: python3 scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" --alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY" --report "$RUNNER_TEMP/packaged-journey-report.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-browser-journey-${{ env.CANDIDATE_SHA }}
           path: ${{ runner.temp }}/packaged-journey-report.json
@@ -373,12 +373,12 @@ jobs:
         with:
           ref: ${{ needs.validate-source.outputs.candidate_sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-package-${{ needs.validate-source.outputs.candidate_sha }}-*
           path: ${{ runner.temp }}/native
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-vsix-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/client
@@ -406,14 +406,14 @@ jobs:
                       'archive_safe_extraction_member_modes_and_license_inventory','all_target_build_info_revision_version_schema_cleanliness']
           }, sort_keys=True, indent=2)+'\n')
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-assets-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/release-assets/
           if-no-files-found: error
           overwrite: true
           retention-days: 30
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-verification-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/verification-summary.json
@@ -461,7 +461,7 @@ jobs:
         with:
           ref: ${{ needs.validate-source.outputs.candidate_sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-assets-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/release-assets
