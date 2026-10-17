@@ -18,7 +18,7 @@ jobs:
         with:
           ref: ${{ inputs.candidate_sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-assets-${{ inputs.candidate_sha }}
           path: ${{ runner.temp }}/release-assets
