@@ -289,7 +289,7 @@ jobs:
       CANDIDATE_SHA: ${{ needs.validate-source.outputs.candidate_sha }}
       CANDIDATE_VERSION: ${{ needs.validate-source.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
