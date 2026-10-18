@@ -11,6 +11,8 @@ Integration started from clean main
 `c11622c277b4a72a2618e734470feec54febde17`. The original source baseline
 `6b157fe3a6fe2f3f3808732ce72a8e74a118f763` is its ancestor. All required
 dependencies are merged; the pagination task was delivered in three stages.
+The candidate gate also includes merged PR #80 (`71b3da4e50f8a46de6da68d281b13299c8c0565e`),
+which adds the independent A/B/C portable transfer and runner cleanup checks.
 
 | Task | Merged PR | Merge revision |
 |---|---|---|
@@ -46,7 +48,7 @@ Download these artifacts from that same run:
   directories during aggregation so identical report filenames cannot overwrite
   another platform's evidence.
 - `release-browser-journey-<HEAD>`: `packaged-journey-report.json`. Progress is
-  saved before and after each case and uploaded on failure too. An interrupted,
+  atomically saved before and after each case and uploaded on failure too. An interrupted,
   failed, skipped, or absent case is not accepted as a pass.
 - `release-assets-<HEAD>`: exactly five native archives, the installed-client
   VSIX, `release-manifest.json` and `SHA256SUMS.txt`. Verification reports and
@@ -54,7 +56,12 @@ Download these artifacts from that same run:
 
 `candidate_record.py summary` rejects missing/duplicate target records, another
 revision/version, incomplete browser coverage, different native/archive hashes,
-and a browser binary digest that differs from the packaged Linux binary.
+and a browser binary digest that differs from the packaged Linux binary. It
+requires every named acceptance case with a finite nonnegative duration, both
+complete child journeys (the common browser and A/B/C transfer), their matching
+binary digests, all four Linux resource records, the two pinned comparison
+revisions, and the actual paging/JSON/snapshot boundary measurements. A single
+synthetic passing case or an omitted resource report cannot certify the gate.
 The reusable final verifier independently rechecks the complete asset set.
 The publisher, its triggers/permissions and publication condition are unchanged.
 Acceptance also requires `release-state` to return `noop` for immutable alpha.4
@@ -75,6 +82,7 @@ tail commit needs a new run on its head like any other commit.
 | Common browser, bundle transfer | Notes/reordering/save, dirty-export refusal, JSON download, second data directory with a different source ID, explicit mapping, preview/confirmation, atomic import, exact text/note/order/offset comparison and restart restoration. |
 | Common browser, preset | Save/load file, preview, explicit remap, Apply with no implicit search/storage/history write, then explicit Search. Existing selected evidence is retained. |
 | Common browser, source transfer | New host output path, export job and verified metadata, inspect/claim/import job, frozen DOCX search, `already_imported`, restart, Forget/re-add and a delayed pre-Forget preview that must not reopen. |
+| Independent A/B/C transfer | Export a live source from A, import frozen sources in B and C, verify exact non-BMP offsets and PDF page 2, delete originals in A, transfer a compatible frozen-source bundle B→C, retain newer local edits after an uncertain commit, reject incompatible live/bundle identities, invalidate claims/cursors after restart, preserve unrelated evidence on Forget, and check read-only serve/demo. |
 | Focused browser cases | Existing passage/keyboard/Quit, snapshot error/cancelled-response, persistent collection, temporary collection, bundle and preset scenarios run separately on the same extracted candidate. This keeps fault handling out of one oversized browser case. |
 | Generated MCP configurations | Actual extracted candidate via `FINDRAIL_MCP_TEST_BINARY`, VS Code/Claude Desktop profiles × protocols 2026-07-28/2025-11-25, late/manual passage navigation, UTF-8/EOF and source isolation. |
 | Installed VSIX | Actual installed 0.1.0 extension runs against extracted Linux candidate with Client API 1 and legacy Search compatibility. |

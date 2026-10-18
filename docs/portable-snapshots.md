@@ -153,7 +153,7 @@ Use real source IDs shown by `findrail sources --json`:
 
 ```bash
 findrail export-source --data-dir INDEX_A --source SOURCE_ID --output 'notes.findrail.zip' --json
-findrail inspect-export 'notes.findrail.zip' --json
+findrail inspect-export --json 'notes.findrail.zip'
 findrail import-source --data-dir INDEX_B --name 'Notes snapshot' --json 'notes.findrail.zip'
 findrail search --data-dir INDEX_B --source IMPORTED_SOURCE_ID --mode advanced '"retry budget"'
 findrail start --data-dir INDEX_B --no-open
@@ -173,7 +173,7 @@ PowerShell:
 
 ```powershell
 findrail.exe export-source --data-dir 'C:\Data\Index A' --source SOURCE_ID --output 'notes.findrail.zip' --json
-findrail.exe inspect-export 'notes.findrail.zip' --json
+findrail.exe inspect-export --json 'notes.findrail.zip'
 findrail.exe import-source --data-dir 'D:\Index B' --name 'Notes snapshot' --json 'notes.findrail.zip'
 findrail.exe search --data-dir 'D:\Index B' --source IMPORTED_SOURCE_ID --mode advanced '"retry budget"'
 findrail.exe forget --data-dir 'D:\Index B' IMPORTED_SOURCE_ID

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Small per-document v1 boundary spot check; not a scale benchmark."""
 import json
+import hashlib
 import pathlib
 import platform
 import subprocess
@@ -18,6 +19,7 @@ def run(binary, *args):
 
 def main():
     binary=pathlib.Path(sys.argv[1]).resolve();size=8<<20
+    with binary.open('rb') as stream:binary_sha256=hashlib.file_digest(stream,'sha256').hexdigest()
     pattern=bytes(range(32,127));payload=(pattern*((size+len(pattern)-1)//len(pattern)))[:size]
     with tempfile.TemporaryDirectory(prefix='findrail-portable-resource-') as temp:
         base=pathlib.Path(temp);root=base/'near-limit';root.mkdir();(root/'boundary.txt').write_bytes(payload)
@@ -34,7 +36,7 @@ def main():
         stdout,stderr=proc.communicate(timeout=5);elapsed=time.monotonic()-start
         if proc.returncode:raise RuntimeError((stdout,stderr))
         result=json.loads(stdout)
-        print(json.dumps({'platform':platform.platform(),'toolchain':subprocess.run(['go','version'],capture_output=True,text=True).stdout.strip(),
+        print(json.dumps({'binary_sha256':binary_sha256,'platform':platform.platform(),'toolchain':subprocess.run(['go','version'],capture_output=True,text=True).stdout.strip(),
             'document_text_bytes':size,'archive_bytes':result['archive_bytes'],'elapsed_seconds':round(elapsed,3),
             'peak_rss_bytes':peak,'cancellation':'unit-tested via canceled context; CLI interruption removes private staging and publishes no target'},sort_keys=True))
 

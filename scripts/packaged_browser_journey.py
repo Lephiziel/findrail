@@ -22,7 +22,7 @@ from selenium.webdriver.support.ui import Select
 
 sys.dont_write_bytecode = True
 from smoke import docx_fixture, pdf_fixture
-from candidate_record import CaseRecorder
+from candidate_record import CaseRecorder, digest
 from source_cycle_browser import run as source_cycle
 
 
@@ -32,16 +32,26 @@ def free_port():
         return sock.getsockname()[1]
 
 
+def write_paging_fixture(root):
+    """Shared >200-result corpus for standalone and integrated candidate cases."""
+    for index in range(260):
+        (root / f"paging-{index:03}.md").write_text(
+            f"pagingjourney shared ranking unicode雪 synthetic document {index:03}\n", encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=pathlib.Path)
     parser.add_argument("--report", type=pathlib.Path)
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
-    report = {"status": "running", "cases": []}
+    metadata = json.loads((binary.parent / "BUILD-INFO.json").read_text(encoding="utf-8"))
+    report = {"status": "running", "cases": [], "candidate_sha": metadata["revision"],
+              "binary_sha256": digest(binary)}
     recorder = CaseRecorder(report, args.report)
     basic_case = {"case": "empty_start_folder_paging_late_response_corpus_fence_quotes_reload_restart", "status": "running"}
     report["cases"].append(basic_case)
+    basic_started = time.monotonic()
     recorder.save()
     with tempfile.TemporaryDirectory(prefix="Findrail packaged journey – ") as temporary:
         base = pathlib.Path(temporary)
@@ -64,9 +74,7 @@ def main():
         (root / "meeting.docx").write_bytes(docx_fixture("docxjourney unique word text"))
         (root / "late.md").write_text("padding " * 10000 + "needletextlate exact text quote 😀e\u0301", encoding="utf-8")
         (root / "late.docx").write_bytes(docx_fixture("padding " * 10000 + "needledocxlate exact Word quote 😀e\u0301"))
-        for index in range(260):
-            (root / f"paging-{index:03}.md").write_text(
-                f"pagingjourney shared ranking unicode雪 synthetic document {index:03}\n", encoding="utf-8")
+        write_paging_fixture(root)
         port = free_port()
         address = f"127.0.0.1:{port}"
         url = f"http://{address}"
@@ -74,7 +82,7 @@ def main():
 
         def launch():
             return subprocess.Popen([str(binary), "start", "--data-dir", str(data), "--enable-originals", "--no-open", "--addr", address],
-                                    cwd=base, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                                    cwd=base, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
 
         server = launch()
 
@@ -82,7 +90,7 @@ def main():
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
                 if proc.poll() is not None:
-                    raise AssertionError("candidate start exited: " + proc.stderr.read())
+                    raise AssertionError("candidate start exited with status " + str(proc.returncode))
                 try:
                     with urllib.request.urlopen(url + "/healthz", timeout=1) as response:
                         if response.status == 200:
@@ -366,7 +374,7 @@ def main():
             assert browser.find_element(By.ID, "collection-count").text == "0"
             search("idempotencymarker")
             assert "1 matching" in browser.find_element(By.ID, "status").text
-            basic_case["status"] = "passed"
+            basic_case.update(status="passed", elapsed_seconds=round(time.monotonic()-basic_started, 3))
 
             def restart(destination):
                 nonlocal data, server
@@ -380,7 +388,7 @@ def main():
             print("Common packaged browser journey passed: Unicode folder/paging/late citations/notes/bundle transfer/preset remap/snapshot jobs/frozen search/restart/Forget.")
         except BaseException as exc:
             report["status"] = "failed"
-            if basic_case["status"] == "running": basic_case.update(status="failed", error_type=type(exc).__name__)
+            if basic_case["status"] == "running": basic_case.update(status="failed", error_type=type(exc).__name__, elapsed_seconds=round(time.monotonic()-basic_started, 3))
             raise
         finally:
             recorder.save()
