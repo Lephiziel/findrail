@@ -100,10 +100,13 @@ def main():
             def inspect(tree):
                 value = json.loads(subprocess.check_output([ps, '-NoProfile', '-File', str(inspect_script), '-ShortcutPath', str(entry)], text=True))
                 expected_binary = tree / 'findrail-desktop.exe'
-                if (not os.path.samefile(value['Target'], expected_binary) or
-                        hashlib.sha256(pathlib.Path(value['Target']).read_bytes()).digest() != hashlib.sha256(expected_binary.read_bytes()).digest() or
-                        value['Description'] != 'Findrail managed shortcut'):
-                    raise AssertionError('shortcut target/provenance mismatch')
+                try:
+                    same_target = os.path.samefile(value['Target'], expected_binary)
+                    same_hash = hashlib.sha256(pathlib.Path(value['Target']).read_bytes()).digest() == hashlib.sha256(expected_binary.read_bytes()).digest()
+                except OSError:
+                    same_target = same_hash = False
+                if not same_target or not same_hash or value['Description'] != 'Findrail managed shortcut':
+                    raise AssertionError(f"shortcut target/provenance mismatch (target_exists={pathlib.Path(value['Target']).exists()}, expected_exists={expected_binary.exists()}, target_name={pathlib.Path(value['Target']).name!r}, expected_name={expected_binary.name!r})")
             inspect_expected = lambda tree: inspect(tree)
         else:
             raise RuntimeError(f'unsupported native OS: {os_name}')
