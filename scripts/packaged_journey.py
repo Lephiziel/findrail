@@ -17,7 +17,7 @@ import time
 
 import package
 import release_assets
-from candidate_record import CaseRecorder, run_identity, require_transfer, require_common
+from candidate_record import CaseRecorder, digest, run_identity, require_transfer, require_common
 from upgrade_smoke import directory_digest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
