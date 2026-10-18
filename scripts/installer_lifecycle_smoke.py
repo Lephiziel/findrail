@@ -83,7 +83,14 @@ def main():
                     command += ['-Binary', str(tree / 'findrail-desktop.exe'), '-DestinationDirectory', str(destination)]
                 else:
                     command += [str(destination)]
-                return subprocess.run(command, check=True, capture_output=True, text=True)
+                result = subprocess.run(command, capture_output=True, text=True)
+                if result.returncode:
+                    detail = (result.stderr or result.stdout or 'no PowerShell diagnostic').strip()
+                    for private_path in (str(root), os.environ.get('USERPROFILE', ''), os.environ.get('RUNNER_TEMP', '')):
+                        if private_path:
+                            detail = detail.replace(private_path, '<runner-path>')
+                    raise RuntimeError(f'PowerShell installer failed ({result.returncode}): {detail}')
+                return result
             entry = destination / 'Findrail.lnk'
             def inspect(tree):
                 script = "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($args[0]); [pscustomobject]@{Target=$s.TargetPath;Description=$s.Description}|ConvertTo-Json -Compress"
