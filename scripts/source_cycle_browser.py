@@ -117,7 +117,18 @@ def run(browser, base, source, url, restart, recorder, paging):
     recorder.run("saved_bundle_notes_order_dirty_guard_and_cursor_navigation", bundle_export_and_paging)
 
     def preset_and_source_export():
+        # The browser journey has just committed the larger cursor corpus from
+        # another process. Wait for the watcher and the management panel to
+        # converge before opening a source-bound operation; otherwise the UI's
+        # deliberate stale-source guard correctly disables the export.
+        settle()
         state["source_a"] = inventory()[0]["id"]
+        source = next(row for row in inventory() if row["id"] == state["source_a"])
+        wait.until(lambda _: browser.execute_script("""
+            const card=document.querySelector('.source-card[data-id="'+CSS.escape(arguments[0])+'"]');
+            const expected='Last successful update '+new Date(arguments[1]).toLocaleString();
+            return !!card&&card.textContent.includes(expected);
+        """, source["id"], source["last_indexed_at"]))
         search("needletextlate"); Select(element("source")).select_by_value(state["source_a"])
         element("preset-title").send_keys("Integrated preset – 雪")
         element("preset-save").click(); wait.until(lambda _: preset.is_file())
