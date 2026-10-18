@@ -23,7 +23,7 @@ def main():
     parser.add_argument('--report', type=pathlib.Path)
     args = parser.parse_args()
     archive = args.archive.resolve()
-    temp_prefix = 'findrail install ' if os.name == 'nt' else 'findrail install 📦 '
+    temp_prefix = 'fr ' if os.name == 'nt' else 'findrail install 📦 '
     with tempfile.TemporaryDirectory(prefix=temp_prefix) as temp:
         root = pathlib.Path(temp)
         expected_target = {'Linux': 'linux-amd64' if platform.machine().lower() in ('x86_64', 'amd64') else 'linux-arm64',
@@ -37,7 +37,7 @@ def main():
         package.verify_archive(archive, expected_target, version)
         # WScript.Shell expands percent-delimited environment references in
         # shortcut targets, so Windows uses only valid Unicode/space path chars.
-        first_name = 'первый путь' if os.name == 'nt' else 'первый путь % "$ \\'
+        first_name = 'путь space' if os.name == 'nt' else 'первый путь % "$ \\'
         first = package.extract_verified(archive, root / first_name)
         second = package.extract_verified(archive, root / 'updated extraction 📦')
         info = json.loads((first / 'BUILD-INFO.json').read_text(encoding='utf-8'))
