@@ -394,7 +394,7 @@ def main():
             wait.until(lambda d: len(d.find_elements(By.CLASS_NAME, "collection-row")) == 2)
             def add_note(_):
                 try:
-                    textarea = browser.find_element(By.CSS_SELECTOR, ".collection-row textarea")
+                    textarea = browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")[-1]
                     if textarea.get_attribute("value") == "note from packaged journey":
                         return True
                     textarea.send_keys("note from packaged journey")
