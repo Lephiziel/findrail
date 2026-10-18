@@ -58,7 +58,7 @@ test('result action sends only document identity, action, and indexed page',asyn
   const h=harness();await flush();const card={children:[],append(...nodes){this.children.push(...nodes)}};
   const item={id:'doc-result',source_id:'source',source_kind:'filesystem',original_identity:identity,page:4};
   h.window.dispatchEvent(new CustomEvent('findrail-result-created',{detail:{item,card}}));
-  const actionBox=card.children[0];assert.deepEqual(actionBox.children.map(x=>x.textContent),['Открыть оригинал','Открыть папку']);
+  const actionBox=card.children[0];assert.deepEqual(actionBox.children.map(x=>x.textContent),['Open current original','Open current folder']);
   actionBox.children[0].handlers.click();await flush();
   assert.deepEqual(h.lastBody,{document_id:'doc-result',original_identity:identity,action:'file',page:4});
   assert.equal(Object.hasOwn(h.lastBody,'path'),false);

@@ -54,6 +54,9 @@ var previewUIModule []byte
 //go:embed web/collections_ui.mjs
 var collectionsUIModule []byte
 
+//go:embed web/freshness.mjs
+var freshnessModule []byte
+
 type Backend interface {
 	search.Engine
 	Sources(context.Context) ([]sqlite.SourceStatus, error)
@@ -524,6 +527,10 @@ func handlerWithOptions(backend Backend, config options) http.Handler {
 	mux.HandleFunc("GET /assets/collections_ui.mjs", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Write(collectionsUIModule)
+	})
+	mux.HandleFunc("GET /assets/freshness.mjs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Write(freshnessModule)
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

@@ -123,16 +123,18 @@ def main():
         def verify_refresh_focus(document_id, quote):
             old = browser.switch_to.active_element
             assert focused_result(document_id), "Preview did not return to its still-present document"
+            browser.execute_script("""
+                window.__refreshSearches=0;window.__refreshFetch=window.fetch;
+                window.fetch=(input,options)=>{if(new URL(String(input),location.href).pathname.startsWith('/api/v1/search'))window.__refreshSearches++;
+                    return window.__refreshFetch(input,options)};
+            """)
             (notes / "keyboard-refresh.md").write_text("Unrelated synthetic refresh fixture.", encoding="utf-8")
-            def replaced(_):
-                try:
-                    old.is_enabled()
-                    return False
-                except StaleElementReferenceException:
-                    return True
-            WebDriverWait(browser, 20).until(replaced)
-            refreshed = WebDriverWait(browser, 10).until(lambda d: focused_result(document_id))
-            refreshed.send_keys(Keys.ENTER)
+            WebDriverWait(browser, 20).until(lambda d: "4 documents" in d.find_element(By.CSS_SELECTOR, ".source-card").text)
+            assert old.is_enabled(), "status refresh replaced the existing result snapshot"
+            assert browser.switch_to.active_element == old, "inventory refresh moved keyboard focus"
+            assert browser.execute_script("return window.__refreshSearches") == 0, "inventory polling implicitly reran Search"
+            browser.execute_script("window.fetch=window.__refreshFetch")
+            old.send_keys(Keys.ENTER)
             wait_for_quote(quote)
             browser.switch_to.active_element.send_keys(Keys.ESCAPE)
             WebDriverWait(browser, 20).until(lambda d: not d.find_element(By.ID, "preview").get_property("open"))
