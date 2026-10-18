@@ -28,10 +28,13 @@ For a long-session source candidate, opt into HTTP cursor traversal and the
 existing bounded evidence-bundle boundary checks with
 `--source-cycle-boundaries`. This exercises page limits 20, 50 and 100 through
 the actual `/api/v1/search/pages` endpoint and traverses no more than the API's
-1,000-result window. It does not raise the legacy search limit or request an
+1,000-result window; it is available only for 10k and 100k scale profiles. It
+does not raise the legacy search limit or request an
 evaluation result set above 100. Each size restarts traversal from the first
-page; cursors are process-local. `total`, contiguous offsets and unique result
-IDs are checked.
+page; cursors are process-local. `total`, contiguous offsets, unique IDs and
+identical ordering across page sizes are checked. Page request latencies include
+all traversal requests (no page warmup is excluded); sample count is the number
+of pages (10/20/50 for limits 100/50/20 at the full window).
 
 Example large run (deliberately not part of ordinary CI):
 
@@ -41,12 +44,28 @@ python3 scripts/search_resource_check.py --binary /tmp/findrail \
   --source-cycle-boundaries --report /tmp/findrail-resource-100k.json
 ```
 
+For a matched 10k source-baseline comparison, build the baseline from commit
+`bb5b4d80a7558b7a9dd3a7749f519eec5cefe0ca` in its own checkout, then run:
+
+```sh
+python3 scripts/search_resource_check.py --binary /tmp/findrail-baseline \
+  --compare /tmp/findrail-candidate --documents 10000 --seed 42 --queries 5 \
+  --source-cycle-boundaries --report /tmp/findrail-resource-10k-compare.json
+```
+
+The baseline and candidate are indexed in separate temporary data directories.
+The 100k opt-in comparison uses the same command with
+`--documents 100000 --allow-large` and a distinct report path.
+
 Large-profile reports are local artifacts and are not uploaded. Keep baseline
 and candidate builds, their reports, and data directories isolated; never run an
-older binary against a candidate-migrated index. A successful report does not
-mean a refresh/cancellation-under-concurrent-search workload was measured; this
-harness profile currently measures indexing, ordinary/paged HTTP search, and
-evidence preview only.
+older binary against a candidate-migrated index. This profile changes a
+synthetic document and records one successful full-source refresh, then changes
+a second document and cancels another full scan with SIGTERM while a separate
+thread continuously issues HTTP search requests. It checks successful reads,
+unsuccessful cancellation, and preservation of the previous committed content.
+This local process cancellation is not a UI cancellation or cross-platform
+signal guarantee.
 
 The supported profiles are 100 (smoke), 1,000, 10,000, and 100,000. The latter
 requires explicit `--allow-large`. Generation enforces a 256 MiB cap on both
@@ -56,11 +75,12 @@ uses separate temporary source and data directories and removes both on success
 or failure, and on Ctrl+C or catchable POSIX SIGTERM. `--queries` is 1–100
 measured repetitions per named synthetic query after an excluded warmup. Reports
 contain only bounded metadata and aggregate results, never argv, paths,
-environment values, or generated contents. A failed/partial run is marked
+environment-variable values, or generated contents. A failed/partial run is marked
 failed and must not be used as a baseline.
 
-The report captures fixture version, seed and corpus SHA-256; binary SHA-256,
-version, revision, Go runtime and schema; host OS/architecture; indexing wall
+The report captures fixture version, seed and corpus SHA-256; UTF-8 generated
+text bytes and on-disk synthetic source-file bytes; binary SHA-256,
+version, revision, Go runtime and schema; host OS/architecture/processor; indexing wall
 time and indexed counts; DB/WAL/SHM aggregate size after indexing and before
 server startup; loopback server startup, first HTTP query and repeated persistent
 HTTP latency p50/p95; and bounded search/evidence response bytes. The first
@@ -86,9 +106,9 @@ different native hosts are not evidence of Go-code speedup.
 
 ## Measurements
 
-### 2026-10-18 native TASK17 scale run (draft candidate)
+### 2026-10-18 native TASK17 source-candidate scale run
 
-Host: Linux x86_64, Go 1.27.2, Python 3.14.8. Fixture v2, seed 42, synthetic
+Host: Linux x86_64, Intel Core i7-10700KF, Go 1.27.2, Python 3.14.8. Fixture v2, seed 42, synthetic
 corpus SHA-256 `a2e69b1a1a28c5617ae93f6295578f105730ca235b47e15604dc2a21c4ab1c08`
 (10k) and `5680cc710acd926ad0114c69169eb4d31de428c657b27a5850ce2ef4aae6714a`
 (100k). Candidate source revision `e7c7af2e004a59d0625049de1490e4969008f217`,
@@ -101,31 +121,46 @@ each (ten warm samples); page profile timing includes complete traversal to the
 | Metric | 10,000 documents | 100,000 documents |
 |---|---:|---:|
 | Indexed / skipped; synthetic PDF pages | 10,000 / 0; 2,500 | 100,000 / 0; 25,000 |
-| Generated input / extracted text bytes | 4,834,814 / 4,817,314 | 48,311,393 / 48,136,393 |
-| Index wall ms | 8,278.596 | 92,062.148 |
-| DB + WAL + SHM bytes after index, before doctor/search | 15,405,056 | 153,378,816 |
-| Server startup ms | 6.975 | 7.506 |
-| First HTTP request after startup ms (not cold cache) | 15.941 | 174.682 |
-| Warm HTTP p50 / p95 ms (10 samples) | 8.387 / 15.459 | 73.748 / 169.536 |
-| Page 20/50/100 full-window traversal p50 ms | not measured in comparison run | 168.641 / 165.424 / 162.296 |
-| Page-window returned / total common matches | not recorded | 1,000 / 50,000 |
-| Sampled max server RSS (not process peak) | 26,755,072 | 26,845,184 |
+| Generated text / source-file / extracted bytes | 4,834,814 / 7,098,867 / 4,817,314 | 48,311,393 / 71,046,137 / 48,136,393 |
+| Index wall ms | 7,907.697 | 80,511.550 |
+| DB + WAL + SHM bytes after index, before doctor/search | 15,425,536 | 153,350,144 |
+| Server startup ms | 7.104 | 7.310 |
+| First HTTP request after startup ms (not cold cache) | 16.201 | 134.088 |
+| Warm HTTP p50 / p95 ms (10 samples) | 8.232 / 15.964 | 65.468 / 127.146 |
+| Page 20/50/100 full-window request p50/p95 ms | 31.343/40.536; 31.676/39.967; 33.029/42.886 | 153.075/168.763; 151.884/168.962; 157.140/175.426 |
+| Page-window returned / total common matches | 1,000 / 5,000 | 1,000 / 50,000 |
+| Sampled max server RSS (not process peak) | 28,868,608 | 26,849,280 |
+| Successful refresh wall ms (single run) | 6,393.166 | 61,520.620 |
+| Canceled refresh / concurrent HTTP reads | 262.112 ms / 17 successes | 262.405 ms / 2 successes |
 
 The 10k run compares the production-source baseline at
 `bb5b4d80a7558b7a9dd3a7749f519eec5cefe0ca` (binary SHA-256
 `bb719e0bab52c12cb33dd5b17930c0f8fe6438999be76677fb06337f8cfeedb4`) and this
-candidate on the same Linux host with matching fixture hash. The candidate's
-warm HTTP p50/p95 was 8.387/15.459 ms versus baseline 8.125/14.802 ms (only ten
-samples each); index time was 8,278.596 ms versus baseline 8,243.150 ms. This
-small observed difference is not a stable regression estimate. Reports are
-temporary local artifacts, not checked in. 100k was candidate-only. The measured
+candidate on the same Linux host with matching fixture hash and identical
+workload. Baseline versus candidate: index 7,888.520 / 7,907.697 ms; warm HTTP
+p50/p95 8.478/16.344 / 8.232/15.964 ms (ten samples each); successful full
+refresh 6,330.365 / 6,393.166 ms. During canceled refresh, the baseline/candidate
+completed 17 / 17 concurrent search requests, with p50/p95 16.005/16.932 /
+15.801/17.042 ms, and both retained the previously committed document. At 100k,
+baseline/candidate index times were 80,760.358 / 80,511.550 ms; warm HTTP
+p50/p95 65.684/127.120 / 65.468/127.146 ms; and successful refresh times
+65,502.029 / 61,520.620 ms. Both canceled scans retained committed content and
+completed two concurrent reads; their observed read p50/p95 were 138.804/139.756
+and 149.897/151.627 ms. Page-request p95 across limits was 168–175 ms for both
+binaries. These small samples are not stable regression estimates. This does not
+establish the <150 ms goal as an SLO; an earlier draft run's aggregate warm HTTP
+p95 was 169.536 ms, illustrating sensitivity to small samples and host
+conditions. A narrow follow-up, if selected after review, is to profile
+total-count and page-fetch query costs separately on this fixed 100k fixture
+before deciding on targeted search optimization. The reviewed aggregate JSON
+snapshots are [10k](resource-reports/2026-10-18-task17-10000.json) and
+[100k](resource-reports/2026-10-18-task17-100000.json). Future harness runs write
+reports only to the requested local path; nothing is uploaded automatically.
+The measured
 candidate SHA is the fetched base, not this tooling commit; these figures do not
 include the harness change. RSS was sampled per request, not captured as peak;
 native Linux synthetic results do not generalize to other OSes or real-user
 workloads. The p95 <150 ms target remains an engineering goal, not an SLO.
-
-TASK17 remains incomplete: this profile does not yet measure successful refresh
-or refresh cancellation while concurrent reads execute.
 
 ### 2026-10-15 native review measurement
 
