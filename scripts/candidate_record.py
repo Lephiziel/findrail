@@ -77,6 +77,12 @@ LINUX_RESOURCE_REPORTS = (
     'snapshot-resource-boundary.json',
 )
 
+INSTALLER_CASES = (
+    'install', 'repeat-install', 'update-new-extraction', 'uninstall',
+    'repeat-uninstall', 'data-and-originals-preserved',
+    'reinstall-existing-data-reopen', 'foreign-collision-and-uninstall-refused',
+)
+
 
 def digest(path):
     value = hashlib.sha256()
@@ -141,6 +147,12 @@ def native(directory, revision, version, target, status):
                     raise ValueError("native record provenance differs from candidate")
                 binary = root / ("findrail.exe" if target.startswith("windows-") else "findrail")
                 record["binary_sha256"] = digest(binary)
+                installer = read_record(directory / f"install-lifecycle-{target}.json")
+                desktop = root / ("findrail-desktop.exe" if target.startswith("windows-") else
+                                  "Findrail.app/Contents/MacOS/Findrail" if target.startswith("darwin-") else "findrail-desktop")
+                record["desktop_binary_sha256"] = digest(desktop)
+                record["installer_lifecycle"] = installer
+                require_installer_lifecycle(record)
             resources = {p.name: read_record(p) for p in sorted(directory.glob("*resource*.json"))}
             if any(item.get("status", "success") != "success" for item in resources.values()):
                 raise ValueError("resource measurement is incomplete")
@@ -167,6 +179,36 @@ def read_record(path):
     if not isinstance(result, dict):
         raise ValueError("verification record must be an object")
     return result
+
+
+def require_installer_lifecycle(record):
+    target = record.get("target", "")
+    system, architecture = target.split("-", 1)
+    expected_os = {"linux": "Linux", "darwin": "Darwin", "windows": "Windows"}.get(system)
+    machines = {"amd64": {"x86_64", "amd64"}, "arm64": {"aarch64", "arm64"}}.get(architecture)
+    report = record.get("installer_lifecycle")
+    if not isinstance(report, dict):
+        raise ValueError("native installer lifecycle report is missing")
+    for value in (record.get("desktop_binary_sha256"), report.get("binary_sha256"),
+                  report.get("archive_sha256")):
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError("native installer lifecycle digest is missing or invalid")
+    if (not expected_os or not machines or report.get("candidate_sha") != record.get("candidate_sha") or
+            report.get("candidate_version") != record.get("candidate_version") or report.get("os") != expected_os or
+            report.get("status") != "passed" or
+            str(report.get("architecture", "")).lower() not in machines or
+            report.get("archive_sha256") != record.get("archive", {}).get("sha256") or
+            report.get("binary_sha256") != record.get("desktop_binary_sha256") or
+            report.get("scope") != "disposable owned destination; synthetic documents/data only"):
+        raise ValueError("native installer lifecycle provenance is incomplete")
+    cases = report.get("cases")
+    if (not isinstance(cases, list) or any(not isinstance(case, dict) for case in cases) or
+            [case.get("id") for case in cases] != list(INSTALLER_CASES)):
+        raise ValueError("native installer lifecycle cases are missing or out of order")
+    for case in cases:
+        duration = case.get("duration_ms")
+        if case.get("status") != "passed" or type(duration) is not int or duration < 0:
+            raise ValueError("native installer lifecycle case is incomplete")
 
 
 def require_cases(cases, required, label):
@@ -257,6 +299,17 @@ def summarize(native_directory, assets, browser_report, revision, version):
         actual = assets / archive["basename"]
         if archive["sha256"] != digest(actual) or archive["size"] != actual.stat().st_size:
             raise ValueError("native record archive differs from the aggregated asset")
+        require_installer_lifecycle(record)
+        with tempfile.TemporaryDirectory(prefix="findrail-installer-identity-") as temporary:
+            extracted = package.extract_verified(actual, pathlib.Path(temporary) / "extract")
+            target = record["target"]
+            desktop = extracted / ("findrail-desktop.exe" if target.startswith("windows-") else
+                                   "Findrail.app/Contents/MacOS/Findrail" if target.startswith("darwin-") else
+                                   "findrail-desktop")
+            cli = extracted / ("findrail.exe" if target.startswith("windows-") else "findrail")
+            if (record.get("desktop_binary_sha256") != digest(desktop) or
+                    record.get("binary_sha256") != digest(cli)):
+                raise ValueError("native executable digests differ from the aggregated archive")
     browser = read_record(browser_report)
     linux = next(record for record in records if record["target"] == "linux-amd64")
     require_resources(linux, revision)

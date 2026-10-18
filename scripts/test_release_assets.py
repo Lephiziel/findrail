@@ -1,5 +1,6 @@
 import io
 import copy
+import hashlib
 import json
 import pathlib
 import sys
@@ -19,6 +20,9 @@ class ReleaseAssetTests(unittest.TestCase):
         source, revision = self.candidate(root, version='0.1.0-alpha.5', schema=8)
         assets = root / 'assets'
         release.assemble(source, assets, '0.1.0-alpha.5', revision)
+        import shutil
+        for report in (root / 'lifecycle-reports').glob('install-lifecycle-*.json'):
+            shutil.copyfile(report, source / report.name)
         records = root / 'native'
         for target in release.TARGETS:
             system, machine = target.split('-')
@@ -113,6 +117,44 @@ class ReleaseAssetTests(unittest.TestCase):
                     path.write_text(json.dumps(bad))
                     with self.assertRaises(ValueError):candidate_record.summarize(records,assets,browser,revision,'0.1.0-alpha.5')
 
+    def test_native_readiness_requires_complete_installer_lifecycle_case_records(self):
+        with tempfile.TemporaryDirectory() as temp:
+            records, assets, browser, revision, _ = self.summary_fixture(pathlib.Path(temp))
+            path = records / 'darwin-arm64' / 'verification.json'
+            original = json.loads(path.read_text())
+            for mutate in (
+                lambda record: record['installer_lifecycle']['cases'].pop(),
+                lambda record: record['installer_lifecycle']['cases'][0].update(status='failed'),
+                lambda record: record['installer_lifecycle'].update(candidate_sha='0' * 40),
+            ):
+                bad = copy.deepcopy(original); mutate(bad); path.write_text(json.dumps(bad))
+                with self.assertRaises(ValueError):
+                    candidate_record.summarize(records, assets, browser, revision, '0.1.0-alpha.5')
+            path.write_text(json.dumps(original))
+    def test_installer_summary_rejects_missing_or_forged_binary_binding(self):
+        with tempfile.TemporaryDirectory() as temp:
+            records, assets, browser, revision, _ = self.summary_fixture(pathlib.Path(temp))
+            path = records/'linux-amd64/verification.json'
+            original = json.loads(path.read_text())
+            for change in ('missing', 'empty', 'malformed', 'coherent_forgery', 'wrong_cli'):
+                bad = copy.deepcopy(original)
+                if change == 'missing':
+                    bad.pop('desktop_binary_sha256')
+                    bad['installer_lifecycle'].pop('binary_sha256')
+                elif change in ('empty', 'malformed'):
+                    value = '' if change == 'empty' else 'not-a-sha256'
+                    bad['desktop_binary_sha256'] = value
+                    bad['installer_lifecycle']['binary_sha256'] = value
+                elif change == 'coherent_forgery':
+                    bad['desktop_binary_sha256'] = '0'*64
+                    bad['installer_lifecycle']['binary_sha256'] = '0'*64
+                else:
+                    bad['binary_sha256'] = '0'*64
+                path.write_text(json.dumps(bad))
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    candidate_record.summarize(records, assets, browser, revision, '0.1.0-alpha.5')
+            path.write_text(json.dumps(original))
+
     def test_native_failure_does_not_relabel_clean_source_as_dirty(self):
         with tempfile.TemporaryDirectory() as temp:
             source, revision = self.candidate(pathlib.Path(temp), version='0.1.0-alpha.5', schema=8)
@@ -162,6 +204,20 @@ class ReleaseAssetTests(unittest.TestCase):
                         executable = path in {'findrail', 'findrail-desktop', 'Findrail.app/Contents/MacOS/Findrail'} or path in release.package.EXECUTABLE_RESOURCES
                         item.mode = 0o755 if executable else 0o644
                         tf.addfile(item, io.BytesIO(data))
+        if version == '0.1.0-alpha.5':
+            cases = [{'id': case, 'status': 'passed', 'duration_ms': 1} for case in candidate_record.INSTALLER_CASES]
+            for name, target in release.expected_archives(version).items():
+                platform_name, architecture = target.split('-')
+                launcher = b'launcher' if platform_name == 'darwin' else b'desktop'
+                report = {'candidate_sha': revision, 'candidate_version': version,
+                          'os': {'linux':'Linux','darwin':'Darwin','windows':'Windows'}[platform_name],
+                          'architecture': {'amd64': {'linux':'x86_64','darwin':'x86_64','windows':'AMD64'},
+                                           'arm64': {'linux':'aarch64','darwin':'arm64'}}[architecture][platform_name],
+                          'archive_sha256': candidate_record.digest(source / name),
+                          'binary_sha256': hashlib.sha256(launcher).hexdigest(),
+                          'scope':'disposable owned destination; synthetic documents/data only','status':'passed','cases':cases}
+                report_dir = root / 'lifecycle-reports'; report_dir.mkdir(exist_ok=True)
+                (report_dir / f'install-lifecycle-{target}.json').write_text(json.dumps(report))
         with zipfile.ZipFile(source / release.VSIX, 'w') as zf:
             zf.writestr('extension/package.json', json.dumps({'version': '0.1.0', 'name': 'findrail-readonly',
                 'publisher': 'findrail-local', 'main': './dist/extension.js', 'extensionKind': ['ui']}))
