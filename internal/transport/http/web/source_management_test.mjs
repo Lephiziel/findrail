@@ -2,20 +2,21 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { sourceFreshness, sourceHealth } from './freshness.mjs';
 
 const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 const lifecycle = readFileSync(new URL('./search_ui.mjs', import.meta.url), 'utf8');
-const presetScript = lifecycle.slice(0,lifecycle.indexOf('const initializedDocuments')).replace(/^import .*;$/m,'').replace(/^export /gm,'');
+const presetScript = lifecycle.slice(0,lifecycle.indexOf('const initializedDocuments')).replace(/^import .*;$/gm,'').replace(/^export /gm,'');
 const lifecycleOpen = lifecycle.indexOf('{\n', lifecycle.indexOf('export function initializeSearchUI(')) + 2;
 const script = lifecycle.slice(lifecycleOpen, lifecycle.lastIndexOf('\n}'))
   .replace(/^if \(!document \|\| initializedDocuments\.has\(document\)\) return;\ninitializedDocuments\.add\(document\);\n/m, '')
-  .replace(/^import .*;$/m, '');
+  .replace(/^import .*;$/gm, '');
 const previewModule = readFileSync(new URL('./preview_ui.mjs', import.meta.url), 'utf8');
 const previewFunctionStart = previewModule.indexOf('export function createPreviewLifecycle(');
 const previewFunctionEnd = previewModule.indexOf('\n}\n\nexport async function initializePreviewUI', previewFunctionStart) + 2;
 const previewScript = previewModule.slice(previewFunctionStart, previewFunctionEnd).replace(/^export /, '');
 const managementScript = [...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)][1][1]
-  .replace(/^import .*;$/m, '');
+  .replace(/^import .*;$/gm, '');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function harness(sourcePayload = [], capabilities = {management:true}) {
@@ -60,7 +61,7 @@ function harness(sourcePayload = [], capabilities = {management:true}) {
     querySelectorAll: selector => [...elements.values()].filter(node=>matches(node,selector)),
   };
   document.body=element('body');document.activeElement=document.body;
-  const context = vm.createContext({window, document, AbortController, URLSearchParams, TextEncoder, TextDecoder,
+  const context = vm.createContext({window, document, AbortController, URLSearchParams, TextEncoder, TextDecoder, sourceFreshness, sourceHealth,
     Event, CustomEvent:class extends Event{constructor(type,{detail}){super(type);this.detail=detail}}, requestAnimationFrame: fn => frames.push(fn),
     setTimeout: schedule, clearTimeout: id => timers.delete(id),
     Option: function(text, value) { this.text = text; this.value = value; },
@@ -393,14 +394,14 @@ test('automatic result refresh preserves an explicit saved-evidence preview requ
   assert.equal(vm.runInContext('previewUI.currentEvidence?.id',h.context),'doc-old');
 });
 
-test('forgetting the selected source clears cursor navigation until a new search',async()=>{
+test('forgetting a selected source does not implicitly rerun Search or splice old results',async()=>{
   const h=await pagingContractHarness();
   h.element('source').value='source-a';h.handlers.get('source:change')();await flush();
   h.resolveSearch(1,{total:40,offset:0,returned:0,results:[],next_cursor:'old-source-cursor',end_reason:null});await flush();
   h.setSources([]);h.notify('sources-changed');await flush();
-  assert.equal(h.element('search-pager').hidden,true);
+  assert.equal(h.element('search-pager').hidden,false);
   assert.equal(h.searchURLs.length,2);
-  assert.match(h.element('status').textContent,/no longer available/);
+  assert.match(h.element('status').textContent,/Existing results are unchanged/);
 });
 
 test('an initial page timeout exposes First and retries the current form without a cursor',async()=>{
@@ -443,24 +444,22 @@ async function focusedResultHarness() {
   return {h,find,first,second,refresh};
 }
 
-test('automatic result refresh keeps focus during the request and follows document identity after reordering',async()=>{
+test('inventory-only refresh preserves result identity and does not steal focus or rerun Search',async()=>{
   const {h,find,first,second,refresh}=await focusedResultHarness(),old=find(first.id);
-  await refresh();assert.equal(h.document.activeElement,old,'a pending refresh must retain the live focused control');
-  h.resolveSearch(1,{total:2,results:[second,first]});await flush();
-  assert.notEqual(find(first.id),old);assert.equal(h.document.activeElement,find(first.id));
+  await refresh();assert.equal(h.document.activeElement,old);
+  assert.equal(find(first.id),old);assert.equal(h.searchURLs.length,1);
 });
 
-test('automatic refresh falls back to Search for a removed result without focusing its replacement',async()=>{
+test('inventory removal retains displayed result snapshot until explicit Search',async()=>{
   const {h,first,second,refresh}=await focusedResultHarness();await refresh();
-  h.resolveSearch(1,{total:1,results:[second]});await flush();
-  assert.equal(h.document.activeElement,h.element('query'));
-  assert.equal(h.element('results').querySelectorAll('.result-preview').some(button=>button.dataset.documentId===first.id),false);
+  assert.equal(h.searchURLs.length,1);
+  assert.equal(h.element('results').querySelectorAll('.result-preview').some(button=>button.dataset.documentId===first.id),true);
 });
 
-test('a delayed automatic search does not take focus back from query editing',async()=>{
+test('inventory refresh does not initiate a delayed search while the query is being edited',async()=>{
   const {h,first,second,refresh}=await focusedResultHarness();await refresh();h.element('query').focus();
-  h.resolveSearch(1,{total:2,results:[second,first]});await flush();
   assert.equal(h.document.activeElement,h.element('query'));
+  assert.equal(h.searchURLs.length,1);
 });
 
 test('Preview close resolves its return control in the animation frame and does not steal another dialog focus',async()=>{

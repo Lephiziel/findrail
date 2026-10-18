@@ -73,6 +73,7 @@ func TestLocalSearchAPIAndBrowserBoundary(t *testing.T) {
 		{"/assets/search_ui.mjs", "127.0.0.1:7766", "", 200, "initializeSearchUI"},
 		{"/assets/preview_ui.mjs", "127.0.0.1:7766", "", 200, "initializePreviewUI"},
 		{"/assets/collections_ui.mjs", "127.0.0.1:7766", "", 200, "initializeCollectionsUI"},
+		{"/assets/freshness.mjs", "127.0.0.1:7766", "", 200, "sourceFreshness"},
 		{"/assets/keyboard_navigation.mjs", "attacker.example:7766", "", 403, "local host"},
 		{"/assets/keyboard_navigation.mjs", "127.0.0.1:7766", "https://attacker.example", 403, "same origin"},
 		{"/assets/citation.mjs", "127.0.0.1:7766", "http://127.0.0.1:7766", 200, "export function formatCitation"},

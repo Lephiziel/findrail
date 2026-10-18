@@ -287,6 +287,22 @@ def main():
                 wait.until(lambda d: d.find_element(By.ID, "page-range").text.startswith("1–20"))
 
             run_paging_journey()
+            hostile_case = {"case": "freshness_hostile_source_text_and_narrow_viewport", "status": "running"}
+            report["cases"].append(hostile_case)
+            hostile_started = time.monotonic()
+            hostile_title = "<img src=x onerror=window.fixturePwned=true>.md"
+            (root / hostile_title).write_text("hostilelabeljourney synthetic safe text", encoding="utf-8")
+            wait.until(lambda d: any(item.get("documents") == 266 for item in json.load(urllib.request.urlopen(url + "/api/v1/sources", timeout=3))["sources"]))
+            search("hostilelabeljourney")
+            assert browser.find_element(By.CSS_SELECTOR, ".result h2").text == hostile_title
+            assert browser.find_elements(By.CSS_SELECTOR, "#results img, #results script") == []
+            assert browser.execute_script("return window.fixturePwned===true") is False
+            old_viewport = browser.get_window_size()
+            browser.set_window_size(390, 844)
+            assert browser.execute_script("return document.documentElement.scrollWidth<=window.innerWidth")
+            assert browser.execute_script("return document.querySelector('.result').scrollWidth<=document.querySelector('.result').clientWidth+1")
+            browser.set_window_size(old_viewport["width"], old_viewport["height"])
+            hostile_case.update(status="passed", elapsed_seconds=round(time.monotonic()-hostile_started, 3))
             search("idempotencymarker")
             assert "1 matching" in browser.find_element(By.ID, "status").text
             open_preview("idempotencymarker")
@@ -318,7 +334,55 @@ def main():
             wait.until(lambda d: "added" in d.find_element(By.ID, "collection-status").get_property("textContent").lower())
             browser.find_element(By.ID, "add-evidence").click()
             assert "Duplicate" in browser.find_element(By.ID, "collection-status").get_property("textContent")
+            freshness_case = {"case": "freshness_failed_refresh_preserves_selected_quote_dirty_note_and_results", "status": "running"}
+            report["cases"].append(freshness_case)
+            freshness_started = time.monotonic()
             browser.find_element(By.ID, "close-preview").click()
+            browser.find_element(By.ID, "collection-open").click()
+            wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".collection-row textarea")) == 1)
+            note = browser.find_element(By.CSS_SELECTOR, ".collection-row textarea")
+            note.send_keys(" unsaved freshness note")
+            browser.find_element(By.ID, "collection-close").click()
+            search("idempotencymarker")
+            open_preview("idempotencymarker")
+            wait.until(lambda d: "idempotencymarker" in d.find_element(By.ID, "preview-body").text)
+            browser.execute_script("""
+                const body=document.getElementById('preview-body'),walker=document.createTreeWalker(body,NodeFilter.SHOW_TEXT);
+                let node;while(node=walker.nextNode()){const at=node.textContent.indexOf('idempotencymarker');if(at>=0){
+                    const range=document.createRange();range.setStart(node,at);range.setEnd(node,at+'idempotencymarker'.length);
+                    getSelection().removeAllRanges();getSelection().addRange(range);return}}
+                throw Error('quote not found in indexed preview');
+            """)
+            selected_quote = browser.execute_script("return getSelection().toString()")
+            assert selected_quote == "idempotencymarker", selected_quote
+            browser.execute_script("""
+                window.__freshFetch=window.fetch.bind(window);window.__freshSearches=0;
+                window.fetch=(input,options)=>{if(new URL(String(input),location.href).pathname.startsWith('/api/v1/search'))window.__freshSearches++;
+                    return window.__freshFetch(input,options)};
+            """)
+            source_id = browser.find_element(By.CSS_SELECTOR, ".source-card").get_attribute("data-id")
+            (root / "broken.docx").write_bytes(b"synthetic invalid DOCX archive")
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                with urllib.request.urlopen(url + "/api/v1/sync", timeout=3) as response:
+                    sync_status = json.load(response)
+                if any(item.get("source_id") == source_id and item.get("state") == "error" for item in sync_status.get("sources", [])):
+                    break
+                time.sleep(.1)
+            else:
+                raise AssertionError("synthetic failed refresh did not reach source status")
+            wait.until(lambda d: "did not commit" in d.find_element(By.ID, "health").text.lower())
+            assert browser.find_element(By.ID, "preview").get_attribute("open") is not None
+            assert browser.execute_script("return getSelection().toString()") == selected_quote
+            assert browser.execute_script("return window.__freshSearches") == 0, "status/refresh polling implicitly submitted Search"
+            assert "remains searchable" in browser.find_element(By.ID, "preview-freshness").text
+            browser.find_element(By.ID, "close-preview").click()
+            browser.find_element(By.ID, "collection-open").click()
+            wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".collection-row textarea")) == 1)
+            assert "unsaved freshness note" in browser.find_element(By.CSS_SELECTOR, ".collection-row textarea").get_attribute("value")
+            browser.find_element(By.ID, "collection-close").click()
+            browser.execute_script("window.fetch=window.__freshFetch")
+            freshness_case.update(status="passed", elapsed_seconds=round(time.monotonic()-freshness_started, 3))
             search("page2journey", "pdf")
             open_preview("page2journey")
             wait.until(lambda d: "Page 2 / 2" in d.find_element(By.ID, "page-label").text)
@@ -389,6 +453,9 @@ def main():
         except BaseException as exc:
             report["status"] = "failed"
             if basic_case["status"] == "running": basic_case.update(status="failed", error_type=type(exc).__name__, elapsed_seconds=round(time.monotonic()-basic_started, 3))
+            for case in report["cases"]:
+                if case.get("case", "").startswith("freshness_") and case["status"] == "running":
+                    case.update(status="failed", error_type=type(exc).__name__, elapsed_seconds=round(time.monotonic()-basic_started, 3))
             raise
         finally:
             recorder.save()
