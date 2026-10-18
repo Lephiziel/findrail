@@ -68,7 +68,7 @@ class ReleaseGateTests(unittest.TestCase):
                 {'tag_sha': 'a' * 40, 'manifest': {**manifest, 'source_revision': 'a' * 40}},
                 [{'name': name} for name in names])
         with self.assertRaisesRegex(ValueError, 'unknown published'):
-            release_gate.existing_release_decision('0.1.0-alpha.5', '1' * 40, sha, release, [])
+            release_gate.existing_release_decision('0.1.0-alpha.6', '1' * 40, sha, release, [])
 
     def alpha4_release(self):
         sha = '1d47f9d54ff81ab566fcf3f8c0c6bf9af86a33f7'
@@ -86,10 +86,22 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertEqual(release_gate.existing_release_decision(
             '0.1.0-alpha.4', 'db1c088470db1e5fd189d1d17f060fc265eb1976', sha, release, assets), 'noop')
 
-    def test_alpha5_is_not_an_existing_published_release_contract(self):
-        sha, release, assets = self.alpha4_release()
-        with self.assertRaisesRegex(ValueError, 'unknown published'):
-            release_gate.existing_release_decision('0.1.0-alpha.5', 'c' * 40, sha, release, assets)
+    def test_alpha5_complete_release_is_noop_after_main_moves(self):
+        sha = '2' * 40
+        names = {f'findrail_0.1.0-alpha.5_{target}' + ('.zip' if target.startswith('windows-') else '.tar.gz') for target in release_assets.TARGETS}
+        names.add(release_assets.VSIX)
+        manifest = {'manifest_version': 1, 'source_revision': sha, 'app_version': '0.1.0-alpha.5',
+                    'schema_version': 8, 'client_api_version': 1, 'extension_version': '0.1.0',
+                    'assets': [{'basename': name} for name in sorted(names)]}
+        release = {'tag_sha': sha, 'manifest': manifest}
+        assets = [{'name': name} for name in sorted(names | {'release-manifest.json', 'SHA256SUMS.txt'})]
+        self.assertEqual(release_gate.existing_release_decision('0.1.0-alpha.5', 'c' * 40, sha, release, assets), 'noop')
+        for key, value in [('schema_version', 7), ('source_revision', '3' * 40), ('app_version', '0.1.0-alpha.4')]:
+            bad = {**release, 'manifest': {**manifest, key: value}}
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                release_gate.existing_release_decision('0.1.0-alpha.5', 'c' * 40, sha, bad, assets)
+        with self.assertRaises(ValueError):
+            release_gate.existing_release_decision('0.1.0-alpha.5', 'c' * 40, sha, release, assets[:-1])
 
     def test_alpha4_rejects_wrong_schema_revision_and_incomplete_assets(self):
         sha, release, assets = self.alpha4_release()

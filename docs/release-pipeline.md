@@ -142,7 +142,9 @@ actual generated values are authoritative):
 
 The published manifest is pinned to the historical alpha.3 tag SHA
 `d5dc1bec50efcb3c26d09e9b24b14cf3c0b2f4cb`, schema 6, API 1 and extension 0.1.0.
-The alpha.4 contract is pinned to schema 7, API 1 and extension 0.1.0.
+The alpha.4 contract is pinned to schema 7, API 1 and extension 0.1.0. The
+prepared alpha.5 contract is explicitly pinned to schema 8, API 1 and extension
+0.1.0, independent of later source migrations.
 Its manifest revision must match the actual immutable tag; all archives'
 BUILD-INFO records must match that revision, version and schema. Packaging
 derives the built schema from source and checks the contiguous migration
@@ -182,7 +184,7 @@ plus `SHA256SUMS.txt`, without a VSIX or manifest. The publisher has write
 permission only in the final job, rechecks that the tag does not already exist,
 and refuses to replace or move an existing tag/release.
 
-A complete alpha.4 release is a no-op after main moves, including when source
+A complete alpha.4 or alpha.5 release is a no-op after main moves, including when source
 checks package an unpublished alpha.5 candidate. The gate checks
 schema 7, the exact eight-file set, all remote checksum bytes, embedded archive
 provenance and the VSIX identity against the release's tag revision, rather
@@ -202,8 +204,8 @@ on a main push, the candidate alpha.5 does not equal `VERSION` alpha.4 and the
 publisher is also skipped.
 Dispatch rehearsals require the exact current main SHA and `publish=false` for
 preparation. Alpha.5 is not accepted as an existing published-release contract.
-At the current source schema 8, alpha.5 remains an unpublished preview and does
-not redefine the alpha.4 schema-7 release contract. The migration checks pin the
+Alpha.5 has an explicit schema-8 contract and remains an unpublished preview
+until the owner authorizes publication. The migration checks pin the
 published alpha.4 Linux amd64 archive to SHA-256
 `41f91c62b618a64dc083f7a63403f7f4fcc6f8b13ffb613acfee6704927f6a1a`; mismatch
 fails closed rather than updating the reference silently.

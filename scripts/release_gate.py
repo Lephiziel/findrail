@@ -38,7 +38,7 @@ def existing_release_decision(version, current_sha, tag_sha, release, assets, ap
         raise ValueError('existing release contains duplicate assets')
     expected = ALPHA2_ASSETS if version == '0.1.0-alpha.2' else None
     if expected is None:
-        schemas = {'0.1.0-alpha.3': 6, '0.1.0-alpha.4': 7}
+        schemas = {'0.1.0-alpha.3': 6, '0.1.0-alpha.4': 7, '0.1.0-alpha.5': 8}
         if version not in schemas:
             raise ValueError('unknown published release contract')
         if version == '0.1.0-alpha.3' and tag_sha != ALPHA3_REVISION:

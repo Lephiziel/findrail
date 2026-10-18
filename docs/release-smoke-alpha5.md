@@ -127,6 +127,22 @@ for the exact identity and per-case results.
 
 ## Scope and limitations
 
+## Publication sequence (owner-only)
+
+Prepare a separate release PR with the deliberate VERSION change to alpha.5,
+recording its exact head SHA and Actions run. Require every gate on that exact
+head with publication skipped. After separate owner authorization, use only the
+existing canonical-main gated publisher; never publish from a PR, fork, or
+rehearsal. Download all eight public assets and verify them using
+`python3 scripts/release_assets.py verify --directory ./release-assets --version
+0.1.0-alpha.5 --revision <resolved-tag-commit-sha>`. Record run URL, tag SHA,
+manifest, filenames, sizes and checksums. Only then update README release links
+and review source-management, portable-snapshots and evidence-bundles guides to
+reflect shipped UI behavior. Keep the 18 October source-cycle record historical.
+
+Rollback means stopping the app and restoring the entire stopped pre-upgrade
+backup before using the previous binary; do not attempt an in-place downgrade.
+
 Only product behavior exercised by the exact-SHA reports is claimed. Browser
 automation uses a controlled local environment and synthetic files. Cross-build
 is not native execution. The browser is not a manual test of every browser or
