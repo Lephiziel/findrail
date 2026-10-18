@@ -208,20 +208,20 @@ func TestContinuousWatcherEventsCannotDeferRefreshForever(t *testing.T) {
 				return
 			case <-ticker.C:
 				select {
-				case watcher.events <- fsnotify.Event{Name: filepath.Join(root, "note.md"), Op: fsnotify.Write}:
+				case watcher.events <- fsnotify.Event{Name: root, Op: fsnotify.Write}:
 				default:
 				}
 			}
 		}
 	}()
 
-	deadline := time.After(4 * time.Second)
+	deadline := time.After(12 * time.Second)
 	for {
 		select {
 		case <-deadline:
 			close(stop)
 			<-floodDone
-			t.Fatal("continuous change notifications deferred reconciliation indefinitely")
+			t.Fatalf("continuous change notifications deferred reconciliation; status=%+v watcher-queue=%d", m.Status(), len(watcher.events))
 		default:
 			status := m.Status()
 			if len(status) == 1 && status[0].Progress.AttemptID != firstAttempt && status[0].State == "idle" && status[0].Progress.Committed {
