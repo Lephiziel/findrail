@@ -51,3 +51,18 @@ test('missing or unknown folder mode and enabled state cannot imply known health
   assert.equal(sourceHealth([source],{sources:[{source_id:'fs',state:'idle',mode:'events'}]}).state,'warning');
   assert.match(sourceFreshness(source,{state:'idle',mode:'events',last_success_at:'2026-10-16T09:00:00Z'}),new RegExp(new Date(source.last_indexed_at).toLocaleString().replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
 });
+
+test('code-only failure and warning remain visible, while unknown codes stay unavailable', () => {
+  const source={id:'fs',kind:'filesystem',documents:1,last_indexed_at:'2026-10-18T09:00:00Z'};
+  const watcher={source_id:'fs',state:'idle',mode:'events'};
+  assert.match(sourceFreshness(source,{...watcher,last_error_code:'canceled'}),/Latest attempt did not commit \(canceled\)/);
+  assert.match(sourceFreshness(source,{...watcher,watch_warning_code:'watch_degraded'}),/watcher degraded/);
+  for(const field of ['last_error_code','watch_warning_code']){
+    const unknown={...watcher,[field]:'future-code'};
+    assert.match(sourceFreshness(source,unknown),/Current folder status unavailable/);
+    const health=sourceHealth([source],{enabled:true,sources:[unknown]});
+    assert.equal(health.state,'warning');
+    assert.match(health.text,/folder status unavailable/);
+    assert.doesNotMatch(health.text,/attempt\(s\) did not commit|watcher\(s\) degraded/);
+  }
+});

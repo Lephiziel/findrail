@@ -1,5 +1,8 @@
 const validTime = value => typeof value === 'string' && value !== '' && Number.isFinite(Date.parse(value));
 const time = value => validTime(value) ? new Date(value).toLocaleString() : '';
+const errorCodes = new Set(['scan_failed', 'canceled', 'deadline_exceeded', 'stale_source', 'attempt_initialization_failed']);
+const warningCodes = new Set(['watch_unavailable', 'watch_degraded']);
+const unknownCode = watcher => !!(watcher?.last_error_code && !errorCodes.has(watcher.last_error_code) || watcher?.watch_warning_code && !warningCodes.has(watcher.watch_warning_code));
 
 // Pure presentation helpers: absent optional API fields stay unknown, never green.
 export function sourceFreshness(source, watcher) {
@@ -23,10 +26,10 @@ export function sourceFreshness(source, watcher) {
   const attempt = watcher?.state === 'starting' ? 'Refresh is starting.' :
     watcher?.state === 'indexing' ? `Refresh in progress${progress?.attempt_id ? ` · ${progress.phase || 'working'} · ${progress.processed_documents || 0} processed · ${progress.skipped_entries || 0} skipped` : ''}; the last committed snapshot remains searchable.` :
     watcher?.state === 'error' ? `Latest refresh failed${watcher.last_error ? `: ${watcher.last_error}` : '.'} The last committed snapshot remains searchable.` :
-    watcher?.progress?.failure_code ? `Latest attempt did not commit (${watcher.progress.failure_code}); the last committed snapshot remains searchable.` :
+    errorCodes.has(watcher?.last_error_code) || watcher?.progress?.failure_code ? `Latest attempt did not commit (${watcher.last_error_code || watcher.progress.failure_code}); the last committed snapshot remains searchable.` :
     watcher?.progress?.attempt_id && watcher.progress.committed ? 'Latest refresh committed.' : '';
-  const watch = watcher?.watch_warning || watcher?.watch_warning_code ? `Automatic watcher degraded; using ${watcher.mode || 'fallback'} refresh.` : watcher?.mode === 'polling' ? 'Automatic polling refresh.' : '';
-  const unknown = !['starting', 'idle', 'indexing', 'error'].includes(watcher?.state) || !['events', 'polling'].includes(watcher?.mode);
+  const watch = !unknownCode(watcher) && (watcher?.watch_warning || watcher?.watch_warning_code) ? `Automatic watcher degraded; using ${watcher.mode || 'fallback'} refresh.` : watcher?.mode === 'polling' ? 'Automatic polling refresh.' : '';
+  const unknown = unknownCode(watcher) || !['starting', 'idle', 'indexing', 'error'].includes(watcher?.state) || !['events', 'polling'].includes(watcher?.mode);
   return `${docs} · ${indexed ? `Last successful update ${indexed}` : 'No successful update time available'}${attempt ? ` · ${attempt}` : ''}${watch ? ` · ${watch}` : ''}${unknown ? ' · Current folder status unavailable; retry to check.' : ''}${watcher?.last_error && watcher.state !== 'error' ? ` · ${watcher.last_error}` : ''}`;
 }
 
@@ -37,11 +40,11 @@ export function sourceHealth(sources, sync) {
   const states = new Map(sync.sources.map(item => [item.source_id, item]));
   const failed = fs.filter(source => {
     const watcher = states.get(source.id);
-    return watcher?.state === 'error' || watcher?.progress?.failure_code || watcher?.last_error_code;
+    return watcher?.state === 'error' || watcher?.progress?.failure_code || errorCodes.has(watcher?.last_error_code);
   });
   const running = fs.filter(source => states.get(source.id)?.state === 'indexing');
-  const degraded = fs.filter(source => states.get(source.id)?.watch_warning || states.get(source.id)?.watch_warning_code || states.get(source.id)?.mode === 'polling');
-  const unknown = fs.filter(source => !['idle', 'indexing', 'error'].includes(states.get(source.id)?.state) || !['events', 'polling'].includes(states.get(source.id)?.mode));
+  const degraded = fs.filter(source => !unknownCode(states.get(source.id)) && (states.get(source.id)?.watch_warning || states.get(source.id)?.watch_warning_code) || states.get(source.id)?.mode === 'polling');
+  const unknown = fs.filter(source => unknownCode(states.get(source.id)) || !['idle', 'indexing', 'error'].includes(states.get(source.id)?.state) || !['events', 'polling'].includes(states.get(source.id)?.mode));
   const text = [
     sync.enabled === false ? 'Automatic folder refresh is off; this does not verify current files.' : 'Folder freshness is based on the last committed index; idle does not verify current files.',
     running.length ? `${running.length} folder refresh in progress; committed results remain available.` : '',
