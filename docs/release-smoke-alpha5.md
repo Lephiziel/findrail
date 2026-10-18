@@ -115,14 +115,15 @@ ZIPs are outside the indexes and registered folders. It checks:
   related entries while preserving unrelated sources and separate exports.
 - No browser storage/history writes or page requests outside the local server.
 
-TASK 11 / PR #79 is a prerequisite for the snapshot UI part. Missing controls
-fail a named case; they are never treated as a successful or skipped transfer.
-Until the dependency is merged into main and the full exact-head gates pass,
-TASK 12 remains incomplete and its PR remains draft. These are executable
-acceptance criteria, not a record of a successful run; consult the PR's exact
-head reports for actual results. Existing TASK 11 and bundle smokes retain their
-malformed-file, changed-after-inspect, cancellation, late-response and read-only
-checks; their implementation is reused rather than copied here.
+TASK 11 / PR #79 is a prerequisite for the snapshot UI part. It is merged into
+main; missing controls fail a named case and are never treated as a successful
+or skipped transfer. Acceptance is established only by the required gates on the
+exact PR head. Existing TASK 11 and bundle smokes retain their malformed-file,
+changed-after-inspect, cancellation, late-response and read-only checks; their
+implementation is reused rather than copied here. For this candidate run, the
+packaged journey report records the integrated transfer, preset and bundle cases
+as passed with `browser_skipped=false`; consult the PR's linked Actions artifacts
+for the exact identity and per-case results.
 
 ## Scope and limitations
 
