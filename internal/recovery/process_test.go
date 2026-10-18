@@ -90,7 +90,11 @@ func TestCrashHelper(t *testing.T) {
 	if os.Getenv("FINDRAIL_RECOVERY_HELPER") != "1" {
 		t.Skip("helper process")
 	}
-	ctx := context.Background()
+	// Keep a live deadline while parked at a barrier. With Background's nil
+	// Done channel the helper can be diagnosed as a deadlocked Go program and
+	// exit on its own before the parent performs the controlled termination.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	barrier := os.Getenv("FINDRAIL_RECOVERY_BARRIER")
 	if os.Getenv("FINDRAIL_RECOVERY_OPERATION") == "bundle-before-publish" || os.Getenv("FINDRAIL_RECOVERY_OPERATION") == "forget-before-publish" {
 		registerCrashBarrier(barrier)
@@ -338,6 +342,7 @@ func runCrashCase(t *testing.T, operation string) {
 	barrier := filepath.Join(root, "barrier")
 
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCrashHelper$")
+	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "FINDRAIL_RECOVERY_HELPER=1", "FINDRAIL_RECOVERY_DATA="+dataDir, "FINDRAIL_RECOVERY_BARRIER="+barrier, "FINDRAIL_RECOVERY_OPERATION="+operation)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err = cmd.Start(); err != nil {
