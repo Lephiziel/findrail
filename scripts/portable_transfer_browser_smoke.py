@@ -317,7 +317,9 @@ def run(binary, report):
         a, b, c = (Session(binary, base, name, stack) for name in ("A", "B", "C"))
         environment = cases.run("A_fresh_candidate_server_browser", a.start)
         report["environment"] = {"os": platform.platform(), "python": platform.python_version(), **environment}
-        expected_offsets = {text_quote: len(prefix), word_quote: len(prefix), pdf_quote: len(pdf_prefix)}
+        # The production PDF extractor emits a leading line break for this
+        # synthetic page. Offsets refer to indexed page text, not PDF Tj bytes.
+        expected_offsets = {text_quote: len(prefix), word_quote: len(prefix), pdf_quote: len("\n" + pdf_prefix)}
         source_a = None
         def collect_a():
             nonlocal source_a
@@ -333,7 +335,8 @@ def run(binary, report):
         def export_a():
             cid, path, bundle = a.save_export("Transfer A")
             for entry in bundle["entries"]:
-                assert entry["start_char"] == expected_offsets[entry["text"]]
+                assert entry["start_char"] == expected_offsets[entry["text"]], (
+                    entry["relative_path"], entry["start_char"], expected_offsets[entry["text"]])
                 assert entry["page"] == (2 if entry["text"] == pdf_quote else 0)
             assert [e["note"] for e in bundle["entries"]] == ["note 2 for Transfer A", "note 1 for Transfer A", "note 3 for Transfer A"]
             saved_a.update(id=cid, path=path, bundle=bundle)

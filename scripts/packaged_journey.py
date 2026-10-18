@@ -15,6 +15,7 @@ import tempfile
 import time
 
 import package
+import release_assets
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -83,13 +84,16 @@ def validate_candidate(binary, revision, version):
         raise ValueError("candidate SHA must be a full commit SHA")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+", version):
         raise ValueError("candidate version must be an exact alpha version")
+    expected_schema = release_assets.contract_schema(version)
+    if expected_schema != package.schema_version():
+        raise ValueError("candidate contract must match the checked-out source schema")
     build_info = binary.parent / "BUILD-INFO.json"
     metadata = json.loads(build_info.read_text(encoding="utf-8"))
     system = {"Linux": "linux", "Darwin": "darwin", "Windows": "windows"}.get(platform.system())
     machine = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine().lower())
     target = f"{system}-{machine}"
     if (not system or not machine or metadata.get("dirty") is not False or
-            package.build_info_schema(metadata) != package.schema_version() or
+            package.build_info_schema(metadata) != expected_schema or
             (metadata.get("revision"), metadata.get("version"), metadata.get("target")) != (revision, version, target)):
         raise ValueError("BUILD-INFO.json must match candidate SHA/version, be clean, and target this runner")
     actual = command([str(binary), "version"]).stdout.strip()

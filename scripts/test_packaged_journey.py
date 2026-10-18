@@ -17,7 +17,7 @@ import packaged_journey as journey
 
 class CandidateIdentityTests(unittest.TestCase):
     def test_identity_requires_clean_native_exact_version(self):
-        sha, version = "a" * 40, "0.1.0-alpha.3"
+        sha, version = "a" * 40, "0.1.0-alpha.5"
         good = {"revision": sha, "version": version, "dirty": False, "target": "linux-amd64", "schema_version": journey.package.schema_version()}
         cases = [({}, f"findrail {version}", True),
                  ({"dirty": True}, f"findrail {version}", False),
@@ -40,6 +40,13 @@ class CandidateIdentityTests(unittest.TestCase):
                             self.assertEqual(journey.validate_candidate(binary, sha, version), good)
                         else:
                             with self.assertRaises(ValueError): journey.validate_candidate(binary, sha, version)
+
+    def test_unsupported_or_historical_version_cannot_claim_current_schema(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = pathlib.Path(temp) / "findrail"
+            for version in ("0.1.0-alpha.99", "0.1.0-alpha.3", "0.1.0-alpha.4"):
+                with self.subTest(version=version), self.assertRaises(ValueError):
+                    journey.validate_candidate(binary, "a" * 40, version)
 
 
 class ReportTests(unittest.TestCase):
@@ -105,6 +112,16 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(report["status"], "failed")
             self.assertEqual(report["cases"][-1]["case"], journey.BROWSER_SMOKES[0])
             self.assertEqual(report["cases"][-1]["status"], "failed")
+
+    def test_missing_prebuilt_fixture_fails_without_a_compile_fallback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = self.args(pathlib.Path(temp))
+            args.evidence_fixture = None
+            status, report = self.execute(args)
+            self.assertEqual(status, 1)
+            self.assertEqual(report["cases"][-1]["case"], "evidence_collection_smoke.py")
+            self.assertEqual(report["cases"][-1]["status"], "failed")
+            self.assertNotIn("offline_fixture_sha256", report)
 
     def test_zero_exit_cannot_certify_incomplete_or_wrong_candidate_transfer(self):
         for status, sha in (("incomplete", "a" * 40), ("passed", "b" * 40)):
