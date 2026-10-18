@@ -200,7 +200,29 @@ def run(browser, base, source, url, restart, recorder, paging):
         wait.until(lambda _: len(browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")) == 3)
         assert [e.get_attribute("value") for e in browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")] == [e["note"] for e in state["bundle"]["entries"]]
         element("collection-close").click()
+        wait.until(lambda _: any(o.get_attribute("value") == frozen for o in Select(element("source")).options))
+        Select(element("source")).select_by_value(frozen); search("needledocxlate", "docx")
+        browser.execute_script("""
+            window.__cycleFetch=window.fetch.bind(window);window.__cycleHold=true;
+            window.fetch=async(input,options)=>{const response=await window.__cycleFetch(input,options);
+                if(window.__cycleHold&&String(input).includes('/api/v1/documents/')){
+                    window.__cycleHold=false;return new Promise(resolve=>{window.__releaseCyclePreview=()=>resolve(response)})}
+                return response};
+        """)
+        browser.find_element(By.CSS_SELECTOR, ".result-preview").click()
+        wait.until(lambda _: browser.execute_script("return typeof window.__releaseCyclePreview==='function'"))
+        element("close-preview").click()
         source_action(frozen, "Removes only"); element("confirm-remove").send_keys(Keys.ENTER)
         wait.until(lambda _: len(inventory()) == 1)
         wait.until(lambda _: not any(o.get_attribute("value") == frozen for o in Select(element("source")).options))
+        inspect(); element("snapshot-name").send_keys("Re-added frozen source"); element("snapshot-submit").click()
+        wait.until(lambda _: "imported" in element("snapshot-summary").text); element("snapshot-close").click()
+        wait.until(lambda _: len(inventory()) == 2)
+        assert next(s for s in inventory() if s["kind"] == "archive")["id"] == frozen
+        browser.execute_script("window.__releaseCyclePreview();window.fetch=window.__cycleFetch")
+        time.sleep(.2)
+        assert not element("preview").get_property("open"), "late pre-Forget response reopened a preview after re-add"
+        assert element("collection-count").text == "3", "late preview changed the saved collection"
+        source_action(frozen, "Removes only"); element("confirm-remove").send_keys(Keys.ENTER)
+        wait.until(lambda _: len(inventory()) == 1)
     recorder.run("portable_inspect_claim_import_frozen_search_duplicate_restart_forget", frozen_import_restart_forget)

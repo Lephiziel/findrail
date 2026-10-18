@@ -227,7 +227,7 @@ def main():
                                             args.alpha3_binary.resolve(strict=True), "--alpha4-binary",
                                             args.alpha4_binary.resolve(strict=True), timeout=300))
             recorder.run("desktop_launch_smoke.py", lambda: run_script("desktop_launch_smoke.py", binary, timeout=90))
-            browser_scripts = ["packaged_browser_journey.py", "persistent_collection_smoke.py",
+            browser_scripts = ["packaged_browser_journey.py", "passage_window_browser_smoke.py", "snapshot_browser_smoke.py", "persistent_collection_smoke.py",
                                "evidence_collection_smoke.py", "evidence_bundle_browser_smoke.py",
                                "search_preset_browser_smoke.py"]
             if args.skip_browser:

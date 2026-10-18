@@ -69,13 +69,22 @@ def native(directory, revision, version, target, status):
         try:
             package.verify_archive(archive, target, version)
             with tempfile.TemporaryDirectory(prefix="findrail-record-") as temp:
-                root = package.extract_verified(archive, pathlib.Path(temp))
+                root = package.extract_verified(archive, pathlib.Path(temp) / "extract")
                 metadata = json.loads((root / "BUILD-INFO.json").read_text(encoding="utf-8"))
                 record.update(source_clean=metadata.get("dirty") is False, build_info=metadata)
                 if (metadata.get("revision"), metadata.get("version"), metadata.get("target"), metadata.get("dirty")) != (revision, version, target, False):
                     raise ValueError("native record provenance differs from candidate")
                 binary = root / ("findrail.exe" if target.startswith("windows-") else "findrail")
                 record["binary_sha256"] = digest(binary)
+            resources = {p.name: json.loads(p.read_text(encoding="utf-8")) for p in sorted(directory.glob("*resource*.json"))}
+            if any(item.get("status", "success") != "success" for item in resources.values()):
+                raise ValueError("resource measurement is incomplete")
+            record["resources"] = resources
+            system = {"Linux": "linux", "Darwin": "darwin", "Windows": "windows"}.get(platform.system())
+            machine = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine().lower())
+            record["observed_target"] = f"{system}-{machine}"
+            if target != record["observed_target"]:
+                raise ValueError("archive target does not match native runner")
             if status == "success": record["status"] = "passed"
         except (ValueError, OSError, KeyError) as error:
             record["error_type"] = type(error).__name__

@@ -93,6 +93,10 @@ def main():
 
         try:
             ready(server)
+            with urllib.request.urlopen(url + "/api/v1/capabilities", timeout=3) as response:
+                capabilities = json.load(response)
+            assert capabilities["client_api_version"] == 1
+            assert all(capabilities.get(name) is True for name in ("management", "passage_preview", "search_pagination", "evidence_bundle", "portable_snapshots"))
             options = webdriver.ChromeOptions()
             options.binary_location = os.environ.get("FINDRAIL_CHROME") or shutil.which("chromium") or shutil.which("google-chrome") or ""
             if not options.binary_location:
@@ -340,7 +344,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    from passage_window_browser_smoke import main as passage_windows
-    passage_windows()
-    from snapshot_browser_smoke import main as snapshots
-    snapshots()

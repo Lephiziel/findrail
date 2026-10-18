@@ -118,36 +118,33 @@ def configure_legacy_docx(binary, data, cwd, folder_id):
             process.communicate(timeout=2)
 
 
-def upgrade_alpha3_schema6(candidate, published_alpha3, root, source_root):
+def upgrade_alpha3_schema6(candidate, published_alpha3, root):
     if published_alpha3 is None:
         raise SystemExit('published alpha.3 binary required to verify stopped-backup restore')
+    from smoke import pdf_fixture
     data = root / 'alpha3-schema6-data'
-    data.mkdir()
-    dbpath, source_id = create_schema2(data, source_root)
+    historical_source = root / 'actual-published-alpha3-source'
+    historical_source.mkdir()
+    (historical_source / 'guide.pdf').write_bytes(pdf_fixture(['intro', 'oldcandidateevidence retained page two']))
+    indexed = json.loads(invoke(published_alpha3, ['index', '--data-dir', str(data), '--report', '--json', str(historical_source)]).stdout)
+    source_id = indexed['source']['id']
+    dbpath = data / 'findrail.db'
     db = sqlite3.connect(dbpath)
-    for name in ('003_github_snapshots.sql', '004_docx_policy.sql',
-                 '005_archive_sources.sql', '006_indexing_reports.sql'):
-        db.executescript((ROOT / 'internal/store/sqlite/migrations' / name).read_text())
-    db.execute("INSERT INTO indexing_reports(source_id,report_id,snapshot_id,report_json,committed_at,operation,finished_at,indexed_documents,skipped_files,pruned_directories,coverage,reasons_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-               (source_id, 'synthetic-alpha3-report', 'synthetic-alpha3-snapshot', '{}',
-                '2026-10-13T12:00:00Z', 'index', '2026-10-13T12:00:00Z', 1, 0, 0,
-                'filesystem_candidates', '[]'))
-    db.commit()
     if db.execute('PRAGMA user_version').fetchone()[0] != 6:
-        raise SystemExit('synthetic published alpha.3 fixture is not schema 6')
+        raise SystemExit('actual published alpha.3 did not create schema 6')
     before = {
         'sources': db.execute('SELECT COUNT(*) FROM sources').fetchone()[0],
         'source_provenance': db.execute('SELECT id,kind,name,root FROM sources ORDER BY id').fetchall(),
         'documents': db.execute('SELECT COUNT(*) FROM documents').fetchone()[0],
         'document_provenance': db.execute('SELECT id,source_id,title,uri,path,media_type,page_count FROM documents ORDER BY id').fetchall(),
-        'hash': db.execute("SELECT content_hash FROM documents WHERE id='legacy-pdf-doc'").fetchone()[0],
+        'hash': db.execute("SELECT content_hash FROM documents ORDER BY id LIMIT 1").fetchone()[0],
         'search': db.execute("SELECT COUNT(*) FROM documents_fts WHERE documents_fts MATCH 'oldcandidateevidence'").fetchone()[0],
-        'pages': db.execute("SELECT page_number,content FROM document_pages WHERE document_id='legacy-pdf-doc' ORDER BY page_number").fetchall(),
+        'pages': db.execute("SELECT page_number,content FROM document_pages ORDER BY document_id,page_number").fetchall(),
         'report': db.execute('SELECT report_id,report_json,indexed_documents FROM indexing_reports WHERE source_id=?', (source_id,)).fetchone(),
     }
     db.close()
     if before['sources'] != 1 or before['documents'] != 1 or before['search'] != 1 or before['pages'][1][0] != 2:
-        raise SystemExit('synthetic alpha.3 schema-6 baseline evidence is invalid')
+        raise SystemExit('actual alpha.3 schema-6 baseline evidence is invalid')
     # Prove the fixture is readable by the real old executable before migration.
     old_listing = json.loads(invoke(published_alpha3, ['sources', '--data-dir', str(data), '--json']).stdout)
     old_search = json.loads(invoke(published_alpha3, ['search', '--data-dir', str(data), '--json', 'oldcandidateevidence']).stdout)
@@ -173,15 +170,19 @@ def upgrade_alpha3_schema6(candidate, published_alpha3, root, source_root):
         'source_provenance': upgraded.execute('SELECT id,kind,name,root FROM sources ORDER BY id').fetchall(),
         'documents': upgraded.execute('SELECT COUNT(*) FROM documents').fetchone()[0],
         'document_provenance': upgraded.execute('SELECT id,source_id,title,uri,path,media_type,page_count FROM documents ORDER BY id').fetchall(),
-        'hash': upgraded.execute("SELECT content_hash FROM documents WHERE id='legacy-pdf-doc'").fetchone()[0],
+        'hash': upgraded.execute("SELECT content_hash FROM documents ORDER BY id LIMIT 1").fetchone()[0],
         'search': upgraded.execute("SELECT COUNT(*) FROM documents_fts WHERE documents_fts MATCH 'oldcandidateevidence'").fetchone()[0],
-        'pages': upgraded.execute("SELECT page_number,content FROM document_pages WHERE document_id='legacy-pdf-doc' ORDER BY page_number").fetchall(),
+        'pages': upgraded.execute("SELECT page_number,content FROM document_pages ORDER BY document_id,page_number").fetchall(),
         'report': upgraded.execute('SELECT report_id,report_json,indexed_documents FROM indexing_reports WHERE source_id=?', (source_id,)).fetchone(),
     }
     collection_tables = upgraded.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('evidence_collections','evidence_collection_entries') ORDER BY name").fetchall()
     upgraded.close()
     if schema != 8 or before != after or len(collection_tables) != 2:
         raise SystemExit(f'published alpha.3 upgrade was not additive/preserved (schema={schema}, before={before}, after={after})')
+    schema8_digest = directory_digest(data)
+    rejected = invoke(published_alpha3, ['sources', '--data-dir', str(data), '--json'], ok=False)
+    if 'unsupported index schema 8' not in rejected.stderr.lower() or directory_digest(data) != schema8_digest:
+        raise SystemExit('published alpha.3 did not reject schema 8 without changing it')
 
     # Persist a named collection through a real candidate server restart.
     port = free_port(); authority = f'127.0.0.1:{port}'; base = 'http://' + authority
@@ -249,7 +250,7 @@ def upgrade_alpha3_schema6(candidate, published_alpha3, root, source_root):
         raise SystemExit('published alpha.3 did not read its restored schema-6 backup unchanged')
     if directory_digest(restored) != stopped_digest:
         raise SystemExit('published alpha.3 changed its restored stopped backup')
-    print(f'Synthetic alpha.3 schema-6 fixture migrated to schema 8 with search, source/document provenance, indexing report, and collection tables; stopped backup restored and opened read-only by the published alpha.3 binary; new collection {collection_id!r} restored after candidate restart. No downgrade attempted.')
+    print(f'Published alpha.3-created schema-6 fixture migrated to schema 8 with search, source/document provenance, indexing report, and collection tables; stopped backup restored and opened read-only by the published alpha.3 binary; new collection {collection_id!r} restored after candidate restart. No downgrade attempted.')
 
 
 def upgrade_alpha4_schema7(candidate, published_alpha4, root):
@@ -477,8 +478,8 @@ def main():
         restored_db.close()
         if restored_schema != 2 or restored_state != ('legacy-pdf-doc', 'synthetic-hash'):
             raise SystemExit('rollback did not preserve the original schema-2 fixture')
-        print(f'Packaged alpha.2 schema-2 upgrade passed: source inventory, FTS/PDF page, schema-{expected_schema} disabled DOCX default, unavailable pre-scan diagnostics, Configure/index/restart, stopped full-directory rollback including sidecars; restored schema remains 2. No reverse migration was attempted.')
-        upgrade_alpha3_schema6(binary, args.alpha3_binary.resolve() if args.alpha3_binary else None, root, source_root)
+        print(f'Synthetic schema-2 upgrade passed: source inventory, FTS/PDF page, schema-{expected_schema} disabled DOCX default, unavailable pre-scan diagnostics, Configure/index/restart, stopped full-directory rollback including sidecars; restored schema remains 2. This is not an actual alpha.2 binary restore. No reverse migration was attempted.')
+        upgrade_alpha3_schema6(binary, args.alpha3_binary.resolve() if args.alpha3_binary else None, root)
         upgrade_alpha4_schema7(binary, args.alpha4_binary.resolve() if args.alpha4_binary else None, root)
 
 

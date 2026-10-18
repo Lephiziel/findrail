@@ -16,6 +16,7 @@ import time
 import sys
 import urllib.parse
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 FIXTURE_VERSION = 2
@@ -141,6 +142,99 @@ def remaining_timeout(deadline, maximum):
     return min(maximum, remaining)
 
 
+def paging_profile(base_url, expected, deadline):
+    """Measure the existing seeded workload through the bounded cursor API."""
+    ids, sizes, latencies = [], [], []
+    cursor = None
+    for _ in range(10):
+        params = {"q": QUERIES["common"], "limit": 100}
+        if cursor: params["cursor"] = cursor
+        started = time.perf_counter()
+        with urllib.request.urlopen(base_url + "/api/v1/search/pages?" + urllib.parse.urlencode(params),
+                                    timeout=remaining_timeout(deadline, 10)) as response:
+            raw = response.read((512 << 10) + 1)
+        latencies.append((time.perf_counter() - started) * 1000); sizes.append(len(raw))
+        if len(raw) > 512 << 10: raise RuntimeError("page exceeded encoded response cap")
+        page = json.loads(raw)
+        if page["total"] != expected or page["offset"] != len(ids): raise RuntimeError("paging fixture shape changed")
+        ids.extend(item["id"] for item in page["results"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            if page["end_reason"] != "complete": raise RuntimeError("paging window incomplete")
+            break
+    if cursor or len(ids) != expected or len(set(ids)) != expected: raise RuntimeError("paging lost or duplicated results")
+    return {"pages": len(sizes), "returned": len(ids), "beyond_237": len(ids) > 237,
+            "max_response_bytes": max(sizes), "latency_ms": latency_summary(latencies)}
+
+
+def bundle_boundary_profile(binary, data_dir, source_id, deadline):
+    """Preview exactly 2 MiB of quoted JSON, then reject one byte beyond it.
+
+    Uses the harness's existing synthetic source and management API. Nothing is
+    imported, and the report contains sizes/timings only, never quotes or claims.
+    """
+    with sqlite3.connect((data_dir / "findrail.db").as_uri() + "?mode=ro", uri=True) as db:
+        path, media, content_hash, body = db.execute("SELECT path,media_type,content_hash,content FROM documents WHERE path='doc-000000.md'").fetchone()
+    quote = body[100:100 + 65536]
+    if len(quote.encode()) != 65536: raise RuntimeError("boundary fixture must contain a full ASCII window")
+    entry = {"source_alias": "s1", "relative_path": path, "media_type": media, "content_hash": content_hash,
+             "page": 0, "start_char": 100, "text": quote, "note": ""}
+    bundle = {"format": "findrail-evidence-bundle", "version": 1, "title": "Synthetic boundary",
+              "sources": [{"alias": "s1", "kind": "filesystem", "display_name": "Synthetic"}], "entries": [entry] * 32}
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]
+    url = f"http://127.0.0.1:{port}"
+    server = subprocess.Popen([str(binary), "start", "--no-open", "--data-dir", str(data_dir), "--addr", f"127.0.0.1:{port}"],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        while True:
+            if server.poll() is not None: raise RuntimeError("boundary management server exited")
+            try:
+                with urllib.request.urlopen(url + "/api/v1/session", timeout=1) as response: token = json.load(response)["token"]
+                break
+            except OSError:
+                remaining_timeout(deadline, 1); time.sleep(.05)
+        payload = json.dumps({"bundle": bundle, "mappings": {"s1": source_id}}, separators=(",", ":")).encode()
+        headers = {"Origin": url, "Content-Type": "application/json", "X-Findrail-Token": token, "Sec-Fetch-Site": "same-origin"}
+        started = time.perf_counter()
+        request = urllib.request.Request(url + "/api/v1/collections/import/preview", data=payload, headers=headers)
+        with urllib.request.urlopen(request, timeout=remaining_timeout(deadline, 15)) as response: raw = response.read((256 << 10) + 1)
+        elapsed = (time.perf_counter() - started) * 1000
+        result = json.loads(raw)
+        if len(raw) > 256 << 10 or len(result["entries"]) != 32 or any(e["status"] != "quota_conflict" for e in result["entries"]):
+            raise RuntimeError("codec boundary did not report the collection's stricter retained-text quota")
+        # A retained entry contains both evidence text and excerpt. Thus 1 MiB
+        # of quotes reaches the existing collection's 2 MiB text quota; 2 MiB
+        # is valid codec input but cannot fit that collection. Keep both limits.
+        accepted_bundle = dict(bundle, entries=[entry] * 16)
+        accepted_payload = json.dumps({"bundle": accepted_bundle, "mappings": {"s1": source_id}}, separators=(",", ":")).encode()
+        request = urllib.request.Request(url + "/api/v1/collections/import/preview", data=accepted_payload, headers=headers)
+        with urllib.request.urlopen(request, timeout=remaining_timeout(deadline, 15)) as response:
+            accepted = json.loads(response.read((256 << 10) + 1))
+        if len(accepted["entries"]) != 16 or any(e["status"] != "match" for e in accepted["entries"]):
+            raise RuntimeError("retained-text collection boundary was not previewed completely")
+        bundle["entries"] = [entry] * 32 + [dict(entry, text="x", start_char=100)]
+        rejected = json.dumps({"bundle": bundle, "mappings": {"s1": source_id}}, separators=(",", ":")).encode()
+        request = urllib.request.Request(url + "/api/v1/collections/import/preview", data=rejected, headers=headers)
+        try:
+            urllib.request.urlopen(request, timeout=remaining_timeout(deadline, 15)).close()
+            raise RuntimeError("JSON quote quota accepted one byte beyond the boundary")
+        except urllib.error.HTTPError as error:
+            status = error.code; error.close()
+            if status != 413: raise RuntimeError("JSON quote quota returned an unexpected status")
+        rss = server_rss_bytes(server.pid)
+    finally:
+        stop_process(server)
+    with sqlite3.connect((data_dir / "findrail.db").as_uri() + "?mode=ro", uri=True) as db:
+        if db.execute("SELECT count(*) FROM evidence_collections").fetchone()[0] != 0:
+            raise RuntimeError("JSON preview persisted a collection")
+    return {"codec_boundary_selected_text_bytes": 2 << 20, "codec_boundary_entries": 32,
+            "codec_boundary_status": "quota_conflict", "accepted_selected_text_bytes": 1 << 20, "accepted_entries": 16,
+            "request_bytes": len(payload), "preview_response_bytes": len(raw),
+            "preview_wall_ms": round(elapsed, 3), "one_byte_over_quota_status": status,
+            "sampled_server_rss_bytes": rss, "persistent_collections_created": 0}
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--binary", required=True, type=Path)
@@ -149,6 +243,7 @@ def main():
     p.add_argument("--queries", type=int, default=5)
     p.add_argument("--report", required=True, type=Path)
     p.add_argument("--compare", type=Path, help="optional second prepared binary; rerun identical seed/workload on this host")
+    p.add_argument("--source-cycle-boundaries", action="store_true", help="measure cursor pages and the JSON quote boundary on a source candidate")
     p.add_argument("--allow-large", action="store_true", help="required for 100000-document profile")
     a = p.parse_args()
     if a.documents == 100000 and not a.allow_large: p.error("100000 documents requires --allow-large")
@@ -237,8 +332,12 @@ def main():
                             else:
                                 raise RuntimeError("synthetic common query produced no evidence")
                     per_query[qid] = {"repeats": len(query_latencies), "latency_ms": latency_summary(query_latencies)}
+                if a.source_cycle_boundaries:
+                    report["metrics"]["paging_window"] = paging_profile(base_url, expected_counts["common"], deadline)
             finally:
                 stop_process(server)
+            if a.source_cycle_boundaries:
+                report["metrics"]["evidence_bundle_boundary"] = bundle_boundary_profile(binary, data_dir, index_json["source"]["id"], deadline)
             report["metrics"].update(search_repeats=len(latencies), warm_http_request_latency_ms=latency_summary(latencies), warm_queries=per_query, synthetic_query_ids=list(QUERIES), known_result_shape=bool(result_counts and all(x > 0 for x in result_counts)), result_count_min=min(result_counts), result_count_max=max(result_counts))
             if rss_samples:
                 report["metrics"]["max_sampled_server_rss_bytes"] = max(rss_samples)

@@ -10,9 +10,51 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import release_assets as release
+import candidate_record
 
 
 class ReleaseAssetTests(unittest.TestCase):
+    def test_machine_summary_binds_each_native_archive_and_browser_binary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            source, revision = self.candidate(root, version='0.1.0-alpha.5', schema=8)
+            assets = root / 'assets'
+            release.assemble(source, assets, '0.1.0-alpha.5', revision)
+            records = root / 'native'
+            for target in release.TARGETS:
+                system, machine = target.split('-')
+                with patch.object(candidate_record.platform, 'system', return_value={'linux':'Linux','darwin':'Darwin','windows':'Windows'}[system]), \
+                     patch.object(candidate_record.platform, 'machine', return_value=machine):
+                    record = candidate_record.native(source, revision, '0.1.0-alpha.5', target, 'success')
+                self.assertEqual(record['status'], 'passed')
+                path = records / target / 'verification.json'; path.parent.mkdir(parents=True)
+                path.write_text(json.dumps(record))
+            browser = root / 'browser.json'
+            journey = {'candidate_sha':revision,'candidate_version':'0.1.0-alpha.5','status':'passed','browser_skipped':False,
+                       'binary_sha256':record['binary_sha256'],'cases':[{'case':'synthetic','status':'passed'}]}
+            browser.write_text(json.dumps(journey))
+            result = candidate_record.summarize(records, assets, browser, revision, '0.1.0-alpha.5')
+            self.assertEqual(len(result['native']), 5); self.assertEqual(len(result['assets']), 8)
+            for changes in ({'candidate_sha':'b'*40}, {'status':'incomplete'}, {'browser_skipped':True}, {'binary_sha256':'0'*64},
+                            {'cases':[{'case':'synthetic','status':'skipped'}]}):
+                with self.subTest(changes=changes):
+                    browser.write_text(json.dumps(journey | changes))
+                    with self.assertRaises(ValueError): candidate_record.summarize(records, assets, browser, revision, '0.1.0-alpha.5')
+            browser.write_text(json.dumps(journey))
+            path = records / 'linux-amd64' / 'verification.json'
+            changed = json.loads(path.read_text()); changed['archive']['sha256']='0'*64; path.write_text(json.dumps(changed))
+            with self.assertRaises(ValueError): candidate_record.summarize(records, assets, browser, revision, '0.1.0-alpha.5')
+
+    def test_native_failure_does_not_relabel_clean_source_as_dirty(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, revision = self.candidate(pathlib.Path(temp), version='0.1.0-alpha.5', schema=8)
+            with patch.object(candidate_record.platform, 'system', return_value='Linux'), \
+                 patch.object(candidate_record.platform, 'machine', return_value='x86_64'):
+                record = candidate_record.native(source, revision, '0.1.0-alpha.5', 'linux-amd64', 'failure')
+                self.assertEqual(record['status'], 'failed'); self.assertTrue(record['source_clean'])
+                wrong = candidate_record.native(source, revision, '0.1.0-alpha.5', 'linux-arm64', 'success')
+                self.assertEqual(wrong['status'], 'failed')
+
     def candidate(self, root, revision='a' * 40, dirty=False, version='0.1.0-alpha.4', schema=None,
                   include_schema=True, metadata_version=None, target_override=None):
         source = root / 'input'
