@@ -34,6 +34,9 @@ page; cursors are process-local. `total`, contiguous offsets, unique IDs and
 identical ordering across page sizes are checked. Page request latencies include
 all traversal requests (no page warmup is excluded); sample count is the number
 of pages (10/20/50 for limits 100/50/20 at the full window).
+The legacy `paging_window` top-level `pages`, `returned`, `beyond_237`,
+`max_response_bytes`, and `latency_ms` fields remain populated from limit 100 for
+compatibility; per-size details are additive under `page_sizes`.
 
 Example large run (deliberately not part of ordinary CI):
 

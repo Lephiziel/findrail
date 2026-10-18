@@ -39,6 +39,9 @@ class GeneratorTests(unittest.TestCase):
             profile = resource_check.paging_profile('http://127.0.0.1', 1500, time.monotonic()+10)
         self.assertEqual(profile['window_limit'], 1000)
         self.assertEqual(profile['total'], 1500)
+        self.assertEqual(profile['returned'], 1000)
+        self.assertTrue(profile['beyond_237'])
+        self.assertEqual(profile['pages'], 10)
         self.assertEqual(set(calls), {20, 50, 100})
         self.assertTrue(all(v['returned'] == 1000 for v in profile['page_sizes'].values()))
         self.assertEqual({size: values['pages'] for size, values in profile['page_sizes'].items()},

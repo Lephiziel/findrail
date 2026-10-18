@@ -198,7 +198,12 @@ def paging_profile(base_url, expected, deadline):
                                     "window_complete": expected <= 1000,
                                     "sample_count": len(latencies), "warmup_requests": 0,
                                     "max_response_bytes": max(sizes), "latency_ms": latency_summary(latencies)}
-    return {"window_limit": 1000, "total": expected, "page_sizes": profiles}
+    legacy = profiles["100"]
+    target = min(expected, 1000)
+    return {"window_limit": 1000, "total": expected, "pages": legacy["pages"],
+            "returned": target, "beyond_237": target > 237,
+            "max_response_bytes": legacy["max_response_bytes"],
+            "latency_ms": legacy["latency_ms"], "page_sizes": profiles}
 
 
 def refresh_profile(binary, data_dir, source, base_url, expected, deadline):
