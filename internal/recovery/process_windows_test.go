@@ -46,11 +46,15 @@ func TestWindowsCrashHelper(t *testing.T) {
 	if os.Getenv("FINDRAIL_WINDOWS_RECOVERY_HELPER") != "1" {
 		t.Skip("helper process")
 	}
-	store, err := sqlite.Open(context.Background(), os.Getenv("FINDRAIL_WINDOWS_RECOVERY_DATA"))
+	// A live deadline prevents runtime deadlock detection from terminating the
+	// parked helper before the parent's explicit Process.Kill boundary.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := sqlite.Open(ctx, os.Getenv("FINDRAIL_WINDOWS_RECOVERY_DATA"))
 	if err != nil {
 		os.Exit(21)
 	}
-	_, err = ingest.Refresh(context.Background(), store, windowsBarrierConnector{root: "synthetic", barrier: os.Getenv("FINDRAIL_WINDOWS_RECOVERY_BARRIER")})
+	_, err = ingest.Refresh(ctx, store, windowsBarrierConnector{root: "synthetic", barrier: os.Getenv("FINDRAIL_WINDOWS_RECOVERY_BARRIER")})
 	_ = store.Close()
 	if err != nil {
 		os.Exit(22)
@@ -96,6 +100,7 @@ func TestWindowsProcessTerminationRecovery(t *testing.T) {
 	}
 	barrier := filepath.Join(root, "barrier")
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWindowsCrashHelper$")
+	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "FINDRAIL_WINDOWS_RECOVERY_HELPER=1", "FINDRAIL_WINDOWS_RECOVERY_DATA="+dataDir, "FINDRAIL_WINDOWS_RECOVERY_BARRIER="+barrier)
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
