@@ -23,7 +23,8 @@ def main():
     parser.add_argument('--report', type=pathlib.Path)
     args = parser.parse_args()
     archive = args.archive.resolve()
-    with tempfile.TemporaryDirectory(prefix='findrail install 📦 ') as temp:
+    temp_prefix = 'findrail install ' if os.name == 'nt' else 'findrail install 📦 '
+    with tempfile.TemporaryDirectory(prefix=temp_prefix) as temp:
         root = pathlib.Path(temp)
         expected_target = {'Linux': 'linux-amd64' if platform.machine().lower() in ('x86_64', 'amd64') else 'linux-arm64',
                            'Darwin': 'darwin-amd64' if platform.machine().lower() in ('x86_64', 'amd64') else 'darwin-arm64',
