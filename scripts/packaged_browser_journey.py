@@ -40,7 +40,7 @@ def main():
     binary = args.binary.resolve(strict=True)
     report = {"status": "running", "cases": []}
     recorder = CaseRecorder(report, args.report)
-    basic_case = {"case": "empty_start_folder_paging_quotes_originals_reload_restart", "status": "running"}
+    basic_case = {"case": "empty_start_folder_paging_late_response_corpus_fence_quotes_reload_restart", "status": "running"}
     report["cases"].append(basic_case)
     recorder.save()
     with tempfile.TemporaryDirectory(prefix="Findrail packaged journey – ") as temporary:
@@ -208,22 +208,74 @@ def main():
                 Select(browser.find_element(By.ID, "page-size")).select_by_value("20")
                 wait.until(lambda d: d.find_element(By.ID, "page-range").text.startswith("1–20"))
 
-                # A metadata-only commit invalidates the SQLite cursor without
-                # altering the source inventory or any selected local evidence.
-                token = browser.execute_async_script("const done=arguments[0];window.findrailBootstrap.then(boot=>done(boot.token));")
-                headers = {"Origin": url, "X-Findrail-Token": token, "Content-Type": "application/json"}
-                request = urllib.request.Request(url + "/api/v1/collections", data=json.dumps({"title": "Synthetic cursor fence"}).encode(), headers=headers, method="POST")
-                with urllib.request.urlopen(request, timeout=5) as response:
-                    temporary_collection = json.load(response)
-                request = urllib.request.Request(url + "/api/v1/collections/" + temporary_collection["id"] + "?revision=1", data=b"", headers=headers, method="DELETE")
-                with urllib.request.urlopen(request, timeout=5) as response:
-                    assert response.status == 204
-                browser.find_element(By.ID, "page-next").click()
-                wait.until(lambda d: "Data changed; restart" in d.find_element(By.ID, "status").text)
-                assert browser.switch_to.active_element.get_attribute("id") == "page-first"
-                assert not browser.find_elements(By.CSS_SELECTOR, "#results .result"), "stale pages were mixed into a new snapshot"
-                assert browser.find_element(By.ID, "query").get_attribute("value") == "pagingjourney"
-                browser.find_element(By.ID, "page-first").click()
+                # Delay a real continuation response across a new explicit
+                # search. Releasing it must not restore the previous page.
+                browser.execute_script("""
+                    window.__pagingFetch=window.fetch.bind(window);window.__holdNextPage=true;
+                    window.fetch=async(input,options)=>{const response=await window.__pagingFetch(input,options);
+                        const u=new URL(String(input),location.href);
+                        if(window.__holdNextPage&&u.pathname==='/api/v1/search/pages'&&u.searchParams.has('cursor')){
+                            window.__holdNextPage=false;return new Promise(resolve=>{window.__releaseLatePage=()=>resolve(response)})}
+                        return response};
+                """)
+                try:
+                    browser.find_element(By.ID, "page-next").click()
+                    wait.until(lambda d: d.execute_script("return typeof window.__releaseLatePage==='function'"))
+                    search("docxjourney")
+                    browser.execute_async_script("const done=arguments[0];window.__releaseLatePage();setTimeout(done,100)")
+                    assert len(browser.find_elements(By.CSS_SELECTOR, "#results .result")) == 1
+                    assert "docxjourney" in browser.find_element(By.CSS_SELECTOR, "#results .snippet").text
+                finally:
+                    browser.execute_script("window.fetch=window.__pagingFetch;delete window.__releaseLatePage")
+                browser.find_element(By.ID, "query").clear()
+                browser.find_element(By.ID, "query").send_keys("pagingjourney")
+                browser.find_element(By.ID, "search-form").submit()
+                wait.until(lambda d: d.find_element(By.ID, "page-range").text.startswith("1–20"))
+
+                # Keep inventory polling one response behind while a real
+                # source commit lands. The continuation itself still uses the
+                # production API, which must reject its now-stale cursor.
+                browser.execute_async_script("""
+                    const done=arguments[0];window.__inventoryFetch=window.fetch.bind(window);
+                    window.__inventoryFetch('/api/v1/sources').then(r=>r.text()).then(text=>{
+                        window.fetch=(input,options)=>new URL(String(input),location.href).pathname==='/api/v1/sources'
+                            ?Promise.resolve(new Response(text,{status:200,headers:{'Content-Type':'application/json'}}))
+                            :window.__inventoryFetch(input,options);done()});
+                """)
+                marker = root / "cursor-corpus.md"
+                def commit_corpus():
+                    result = subprocess.run([str(binary), "index", "--data-dir", str(data), "--max-docx-bytes", str(8 << 20), "--json", str(root)],
+                                            cwd=base, capture_output=True, text=True, encoding="utf-8", timeout=30, check=True)
+                    return json.loads(result.stdout)
+                try:
+                    marker.write_text("Unrelated synthetic corpus change for cursor fencing.\n", encoding="utf-8")
+                    assert commit_corpus()["seen"] == 266
+                    browser.find_element(By.ID, "page-next").click()
+                    wait.until(lambda d: "Data changed; restart" in d.find_element(By.ID, "status").text)
+                    assert browser.switch_to.active_element.get_attribute("id") == "page-first"
+                    assert not browser.find_elements(By.CSS_SELECTOR, "#results .result"), "stale pages were mixed into a new snapshot"
+                    assert browser.find_element(By.ID, "query").get_attribute("value") == "pagingjourney"
+                finally:
+                    marker.unlink(missing_ok=True)
+                    try:
+                        assert commit_corpus()["seen"] == 265
+                    finally:
+                        browser.execute_script("window.fetch=window.__inventoryFetch")
+                # A watcher can publish one final scan following the external
+                # index command; let it settle before requesting a new cursor.
+                last, since = None, time.monotonic()
+                def settled(_):
+                    nonlocal last, since
+                    with urllib.request.urlopen(url + "/api/v1/sources", timeout=3) as response:
+                        rows = json.load(response)["sources"]
+                    current = [(s["documents"], s.get("last_indexed_at")) for s in rows]
+                    if current != last: last, since = current, time.monotonic()
+                    return rows and rows[0]["documents"] == 265 and time.monotonic() - since >= 2
+                wait.until(settled)
+                if browser.find_element(By.ID, "page-first").is_enabled():
+                    browser.find_element(By.ID, "page-first").click()
+                else:
+                    browser.find_element(By.ID, "search-form").submit()
                 wait.until(lambda d: d.find_element(By.ID, "page-range").text.startswith("1–20"))
 
             run_paging_journey()
