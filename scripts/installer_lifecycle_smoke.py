@@ -99,7 +99,10 @@ def main():
             entry = destination / 'Findrail.lnk'
             def inspect(tree):
                 value = json.loads(subprocess.check_output([ps, '-NoProfile', '-File', str(inspect_script), '-ShortcutPath', str(entry)], text=True))
-                if pathlib.Path(value['Target']) != tree / 'findrail-desktop.exe' or value['Description'] != 'Findrail managed shortcut':
+                expected_binary = tree / 'findrail-desktop.exe'
+                if (not os.path.samefile(value['Target'], expected_binary) or
+                        hashlib.sha256(pathlib.Path(value['Target']).read_bytes()).digest() != hashlib.sha256(expected_binary.read_bytes()).digest() or
+                        value['Description'] != 'Findrail managed shortcut'):
                     raise AssertionError('shortcut target/provenance mismatch')
             inspect_expected = lambda tree: inspect(tree)
         else:
