@@ -118,12 +118,14 @@ jobs:
           npm install --global --ignore-scripts '@puppeteer/browsers@2.10.6'
           npx --yes @puppeteer/browsers@2.10.6 install chrome@139.0.7258.66 --path "$RUNNER_TEMP/chrome-for-testing"
           npx --yes @puppeteer/browsers@2.10.6 install chromedriver@139.0.7258.66 --path "$RUNNER_TEMP/chrome-for-testing"
+      - name: Prepare the offline synthetic GitHub fixture writer (not the application)
+        run: go build -o "$RUNNER_TEMP/evidence-collection-fixture" ./scripts/evidence_collection_fixture.go
       - name: Run the extracted candidate journey
         env:
           FINDRAIL_CHROME: ${{ runner.temp }}/chrome-for-testing/chrome/linux-139.0.7258.66/chrome-linux64/chrome
           FINDRAIL_CHROMEDRIVER: ${{ runner.temp }}/chrome-for-testing/chromedriver/linux-139.0.7258.66/chromedriver-linux64/chromedriver
         run: |
-          python scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" --alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY" --report "$RUNNER_TEMP/packaged-journey-report.json"
+          python scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" --alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY" --evidence-fixture "$RUNNER_TEMP/evidence-collection-fixture" --report "$RUNNER_TEMP/packaged-journey-report.json"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

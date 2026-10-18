@@ -76,6 +76,11 @@ The latter requires TASK 11 Sources UI in main; a missing dependency fails the
 case and does not certify TASK 12. See [the alpha.5 acceptance inputs and
 commands](release-smoke-alpha5.md#integrated-candidate-gate).
 
+An explicit workflow preparation step builds the existing offline synthetic
+GitHub fixture writer. The orchestrator requires its path for the collection
+smoke and records its digest separately; it never runs `go run` or builds/selects
+a replacement application during acceptance.
+
 The JSON report records only executed cases and their durations, including the
 failed case. Transfer subcases are embedded in the orchestrator report. Identity
 failure stops before invoking smokes; an explicit browser skip produces an

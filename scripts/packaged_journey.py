@@ -238,6 +238,15 @@ def execute(args):
                 else:
                     def browser_case(smoke=smoke):
                         argv = [sys.executable, str(ROOT / "scripts" / smoke), str(binary)]
+                        if smoke == "evidence_collection_smoke.py":
+                            if not args.evidence_fixture:
+                                raise ValueError("packaged collection case requires an explicit prebuilt --evidence-fixture")
+                            fixture = args.evidence_fixture.resolve(strict=True)
+                            if not fixture.is_file() or not os.access(fixture, os.X_OK):
+                                raise ValueError("offline fixture writer is not executable")
+                            with fixture.open("rb") as stream:
+                                report["offline_fixture_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
+                            argv += ["--fixture-binary", str(fixture)]
                         child_report = scratch / "portable-transfer-report.json"
                         if smoke == "portable_transfer_browser_smoke.py":
                             argv += ["--candidate-sha", args.candidate_sha, "--candidate-version", args.candidate_version,
@@ -285,6 +294,8 @@ def main():
     parser.add_argument("--alpha4-binary", type=pathlib.Path, required=True,
                         help="extracted published alpha.4 binary used to verify schema-7 backup restore")
     parser.add_argument("--report", type=pathlib.Path, help="write per-case JSON report, also on failure")
+    parser.add_argument("--evidence-fixture", type=pathlib.Path,
+                        help="explicit prebuilt offline fixture writer; required for full browser acceptance")
     parser.add_argument("--skip-browser", action="store_true", help="record browser cases as skipped; not full acceptance")
     return execute(parser.parse_args())
 

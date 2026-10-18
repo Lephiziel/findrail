@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compiled Findrail + real Chromium collection journey (synthetic fixture only)."""
 import pathlib
+import argparse
 import json
 import shutil
 import socket
@@ -26,7 +27,12 @@ def port():
 
 
 def main():
-    binary = pathlib.Path(sys.argv[1]).resolve(strict=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary", type=pathlib.Path)
+    parser.add_argument("--fixture-binary", type=pathlib.Path,
+                        help="explicit prebuilt offline GitHub fixture writer (packaged gate never runs Go)")
+    args = parser.parse_args()
+    binary = args.binary.resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="findrail-evidence-") as tmp:
         base = pathlib.Path(tmp)
         notes, index = base / "notes", base / "index"
@@ -45,7 +51,8 @@ def main():
         imported = subprocess.run([str(binary), "import-source", "--data-dir", str(index), "--name", "Frozen synthetic archive",
                                    "--json", str(archive_path)], check=True, timeout=30, capture_output=True, text=True)
         archive_id = json.loads(imported.stdout)["source_id"]
-        github = subprocess.run(["go", "run", "scripts/evidence_collection_fixture.go", str(index)], cwd=pathlib.Path(__file__).resolve().parents[1],
+        fixture_command = [str(args.fixture_binary.resolve(strict=True))] if args.fixture_binary else ["go", "run", "scripts/evidence_collection_fixture.go"]
+        github = subprocess.run([*fixture_command, str(index)], cwd=pathlib.Path(__file__).resolve().parents[1],
                                 check=True, timeout=120, capture_output=True, text=True)
         github_id = github.stdout.strip()
         http_port = port()

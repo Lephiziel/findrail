@@ -65,8 +65,15 @@ are 139.0.7258.66), run:
 python3 scripts/packaged_journey.py '/owned/install space 📦/findrail' \
   --candidate-sha <full-head-sha> --candidate-version 0.1.0-alpha.5 \
   --alpha3-binary /owned/alpha3/findrail --alpha4-binary /owned/alpha4/findrail \
+  --evidence-fixture /owned/tools/evidence-collection-fixture \
   --report /owned/reports/packaged-journey.json
 ```
+
+The workflows explicitly build the existing offline synthetic GitHub fixture
+writer before the journey with `go build -o /owned/tools/evidence-collection-fixture ./scripts/evidence_collection_fixture.go`. Pass it via `--evidence-fixture`; the
+runner never invokes `go run`, compiles an application, or selects one from PATH.
+The helper only seeds a synthetic fixture; retrieval always uses the extracted
+candidate. Its digest is recorded separately from the application digest.
 
 `FINDRAIL_CHROME` and `FINDRAIL_CHROMEDRIVER` select local matched executables.
 Before running cases the orchestrator checks exact SHA/version, native target,

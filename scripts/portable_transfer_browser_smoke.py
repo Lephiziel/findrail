@@ -11,6 +11,7 @@ import copy
 import json
 import os
 import pathlib
+import platform
 import shutil
 import subprocess
 import sys
@@ -90,6 +91,10 @@ class Session:
                 history[key]=(...args)=>{window.__effects.writes.push(key);return fn(...args)}};
         """})
         self.page()
+        capabilities = self.browser.capabilities
+        return {"browser": capabilities.get("browserName"), "browser_version": capabilities.get("browserVersion"),
+                "driver_version": capabilities.get("chrome", {}).get("chromedriverVersion", "").split(" ")[0],
+                "browser_platform": capabilities.get("platformName")}
 
     def page(self):
         self.browser.get(self.url + "/")
@@ -122,8 +127,11 @@ class Session:
 
     def fill(self, name, value):
         element = self.el(name)
+        for summary in element.find_elements(By.XPATH, "ancestor::details[not(@open)]/summary"):
+            summary.click()
         element.clear()
-        element.send_keys(value)
+        if value:
+            element.send_keys(value)
 
     def api(self, path, method="GET", body=None, expected=200):
         headers = {"Origin": self.url, "Content-Type": "application/json"}
@@ -171,7 +179,7 @@ class Session:
         for name, value in (("source", source), ("format", kind), ("mode", "literal")):
             Select(self.el(name)).select_by_value(value)
         for name in ("path-prefix", "title-contains"):
-            self.el(name).clear()
+            self.fill(name, "")
         self.el("submit").click()
         self.wait(lambda: self.el("submit").is_enabled() and "matching documents" in self.el("status").text)
 
@@ -307,7 +315,8 @@ def run(binary, report):
         (notes / "manual.pdf").write_bytes(pdf_fixture(["irrelevant page one", pdf_prefix + pdf_quote]))
         write_paging_fixture(notes)
         a, b, c = (Session(binary, base, name, stack) for name in ("A", "B", "C"))
-        cases.run("A_fresh_candidate_server_browser", a.start)
+        environment = cases.run("A_fresh_candidate_server_browser", a.start)
+        report["environment"] = {"os": platform.platform(), "python": platform.python_version(), **environment}
         expected_offsets = {text_quote: len(prefix), word_quote: len(prefix), pdf_quote: len(pdf_prefix)}
         source_a = None
         def collect_a():
@@ -367,6 +376,7 @@ def run(binary, report):
             a.fill("title-contains", "late")
             a.el("preset-save").click()
             a.wait(lambda: preset_path.exists())
+            a.wait(lambda: a.el("submit").is_enabled() and "1 matching" in a.el("status").text)
             preset = json.loads(preset_path.read_text(encoding="utf-8"))
             assert preset["source"]["id_hint"] == source_a
             assert preset["filters"] == {"format": "text", "path_prefix": "late.md", "title_contains": "late"}
@@ -458,6 +468,17 @@ def run(binary, report):
         (similar / "late.md").write_text("different synthetic contents", encoding="utf-8")
         unrelated = c.add_folder(similar)
         c.settled(unrelated, 1)
+        def unrelated_collection():
+            c.pin("different", "different synthetic contents", unrelated)
+            c.el("collection-open").click()
+            c.fill("collection-title", "Unrelated collection")
+            c.browser.find_element(By.CSS_SELECTOR, ".collection-row textarea").send_keys("unrelated saved note")
+            c.el("collection-save").click()
+            c.wait(lambda: "Collection saved." in c.el("collection-status").text)
+            collection_id = c.el("collection-picker").get_attribute("value")
+            c.el("collection-close").click()
+            return collection_id
+        unrelated_collection_id = cases.run("C_unrelated_saved_collection", unrelated_collection)
         imported_c = {}
         def compatible_bundle():
             assert sum(s["name"] == "Transfer frozen" for s in c.sources()) == 2
@@ -481,12 +502,14 @@ def run(binary, report):
             assert c.browser.execute_script("return window.__commitCount") == 1
             c.el("bundle-cancel").click()
             c.fill("collection-title", "Newer local draft")
+            c.browser.find_element(By.CSS_SELECTOR, ".collection-row textarea").send_keys(" newer unsaved note")
             c.browser.execute_script("window.__loseCommitResponse();window.fetch=window.__fetchBeforeCommit")
             c.wait(lambda: "uncertain" in c.el("collection-status").text)
             assert c.browser.execute_script("return window.localEvidenceCollection.title") == "Newer local draft"
+            assert c.collection()[0]["note"] == "unrelated saved note newer unsaved note"
             collections = c.api("/api/v1/collections")["collections"]
-            assert len(collections) == 1 and collections[0]["title"] == "Transfer C"
-            imported_c["id"] = collections[0]["id"]
+            assert len(collections) == 2
+            imported_c["id"] = next(item["id"] for item in collections if item["title"] == "Transfer C")
             c.wait(lambda: any(o.get_attribute("value") == imported_c["id"] for o in Select(c.el("collection-picker")).options))
             Select(c.el("collection-picker")).select_by_value(imported_c["id"])
             c.wait(lambda: c.el("collection-title").get_attribute("value") == "Transfer C")
@@ -553,7 +576,7 @@ def run(binary, report):
             c.api("/api/v1/snapshots/import", "POST", {"claim": inspection_result["claim"], "name": "Old claim"}, expected=409)
             c.api("/api/v1/snapshots/inspections/" + inspection, expected=404)
             c.api("/api/v1/collections/import", "POST", {"bundle": bundle_b, "claim": old_bundle_claim, "title": "Old preview"}, expected=409)
-            assert len(c.api("/api/v1/collections")["collections"]) == 1
+            assert len(c.api("/api/v1/collections")["collections"]) == 2
             c.open_bundle(bundle_b_path, frozen_c)
             assert "3 matches; 0 conflicts" in c.el("bundle-status").text
             c.el("bundle-confirm").click()
@@ -570,6 +593,9 @@ def run(binary, report):
             c.wait(lambda: len(Select(c.el("source")).options) == 2)
             assert c.sources()[0]["id"] == unrelated
             assert c.api("/api/v1/collections/" + imported_c["id"])["entries"] == []
+            unrelated_saved = c.api("/api/v1/collections/" + unrelated_collection_id)
+            assert unrelated_saved["title"] == "Unrelated collection" and len(unrelated_saved["entries"]) == 1
+            assert unrelated_saved["entries"][0]["note"] == "unrelated saved note"
             c.search("different", unrelated)
             assert "1 matching" in c.el("status").text
             assert notes.is_dir() and archive.is_file() and saved_a["path"].is_file() and bundle_b_path.is_file()

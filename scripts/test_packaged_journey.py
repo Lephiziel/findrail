@@ -49,7 +49,8 @@ class ReportTests(unittest.TestCase):
         binary.chmod(0o755)
         return SimpleNamespace(binary=binary, candidate_sha="a" * 40,
                                candidate_version="0.1.0-alpha.5", alpha3_binary=binary,
-                               alpha4_binary=binary, report=root / "report.json", skip_browser=skip)
+                               alpha4_binary=binary, evidence_fixture=binary,
+                               report=root / "report.json", skip_browser=skip)
 
     def execute(self, args, operation=None):
         with patch.object(journey, "validate_candidate", return_value={"schema_version": 8, "target": "linux-amd64"}), \
@@ -145,8 +146,18 @@ class CommandTests(unittest.TestCase):
                 journey.command([sys.executable, "-c", parent], timeout=1)
             self.assertTrue(state.exists(), "child never reached the actual listener")
             host, port = json.loads(state.read_text())
-            with socket.socket() as probe:
-                self.assertNotEqual(probe.connect_ex((host, port)), 0, "orphan server still accepts connections")
+            # SIGKILL delivery is asynchronous for grandchildren. Wait on the
+            # actual listener's closure, with a deadline, rather than racing
+            # the kernel immediately after the parent has been reaped.
+            deadline = time.monotonic() + 3
+            while True:
+                with socket.socket() as probe:
+                    probe.settimeout(.1)
+                    if probe.connect_ex((host, port)) != 0:
+                        break
+                if time.monotonic() >= deadline:
+                    self.fail("orphan server still accepts connections after cleanup deadline")
+                time.sleep(.02)
 
     @unittest.skipUnless(os.name == "posix", "POSIX smoke process groups")
     def test_success_also_reaps_leftover_children(self):
