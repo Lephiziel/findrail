@@ -71,7 +71,9 @@ def main():
             destination = root / 'owned Programs'
             destination.mkdir()
             script_name, uninstall_name = 'install-user.ps1', 'uninstall-user.ps1'
-            ps = shutil.which('pwsh') or shutil.which('powershell')
+            # Windows PowerShell 5.1 runs STA by default, as required by the
+            # WScript.Shell shortcut COM server. Fall back to pwsh if absent.
+            ps = shutil.which('powershell') or shutil.which('pwsh')
             if not ps:
                 raise RuntimeError('PowerShell unavailable on Windows native runner')
             def run(tree, name):
