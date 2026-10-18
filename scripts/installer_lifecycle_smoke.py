@@ -34,7 +34,8 @@ def main():
             raise ValueError('archive target/name does not match this native runner')
         version = archive.name[len('findrail_'):-len(suffix)]
         package.verify_archive(archive, expected_target, version)
-        first = package.extract_verified(archive, root / 'первый путь % "$ \\')
+        first_name = 'первый путь % "$' if os.name == 'nt' else 'первый путь % "$ \\'
+        first = package.extract_verified(archive, root / first_name)
         second = package.extract_verified(archive, root / 'updated extraction 📦')
         info = json.loads((first / 'BUILD-INFO.json').read_text(encoding='utf-8'))
         if info.get('revision') != args.candidate_sha or info.get('dirty') is not False:
