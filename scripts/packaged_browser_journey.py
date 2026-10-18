@@ -383,6 +383,17 @@ def main():
             browser.find_element(By.ID, "collection-close").click()
             browser.execute_script("window.fetch=window.__freshFetch")
             freshness_case.update(status="passed", elapsed_seconds=round(time.monotonic()-freshness_started, 3))
+            (root / "broken.docx").unlink(missing_ok=True)
+            (root / hostile_title).unlink(missing_ok=True)
+            def recovered_inventory(_):
+                with urllib.request.urlopen(url + "/api/v1/sources", timeout=3) as response:
+                    inventory = json.load(response)["sources"]
+                with urllib.request.urlopen(url + "/api/v1/sync", timeout=3) as response:
+                    statuses = json.load(response)["sources"]
+                return (inventory and inventory[0]["documents"] == 265 and
+                        any(item.get("source_id") == source_id and item.get("state") == "idle" and not item.get("last_error")
+                            for item in statuses))
+            wait.until(recovered_inventory)
             search("page2journey", "pdf")
             open_preview("page2journey")
             wait.until(lambda d: "Page 2 / 2" in d.find_element(By.ID, "page-label").text)
