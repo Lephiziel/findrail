@@ -127,22 +127,6 @@ for the exact identity and per-case results.
 
 ## Scope and limitations
 
-## Publication sequence (owner-only)
-
-Prepare a separate release PR with the deliberate VERSION change to alpha.5,
-recording its exact head SHA and Actions run. Require every gate on that exact
-head with publication skipped. After separate owner authorization, use only the
-existing canonical-main gated publisher; never publish from a PR, fork, or
-rehearsal. Download all eight public assets and verify them using
-`python3 scripts/release_assets.py verify --directory ./release-assets --version
-0.1.0-alpha.5 --revision <resolved-tag-commit-sha>`. Record run URL, tag SHA,
-manifest, filenames, sizes and checksums. Only then update README release links
-and review source-management, portable-snapshots and evidence-bundles guides to
-reflect shipped UI behavior. Keep the 18 October source-cycle record historical.
-
-Rollback means stopping the app and restoring the entire stopped pre-upgrade
-backup before using the previous binary; do not attempt an in-place downgrade.
-
 Only product behavior exercised by the exact-SHA reports is claimed. Browser
 automation uses a controlled local environment and synthetic files. Cross-build
 is not native execution. The browser is not a manual test of every browser or
@@ -151,3 +135,38 @@ macOS/Windows release dialogs and every external viewer remain manual platform
 coverage unless an explicit controlled native test says otherwise. Candidate
 results do not change alpha.4's shipped behavior or its historical verification
 record.
+
+## Publication after acceptance
+
+Publication is a separate owner-authorized action. Prepare a release PR with the
+deliberate `build/package/VERSION` change from `0.1.0-alpha.4` to
+`0.1.0-alpha.5`, recording its exact head SHA and Actions run. Require every gate
+on that head with publication skipped. Do not merge the VERSION change before
+authorization: its merge enables the existing canonical-main gated publisher.
+Every gate must pass again on the actual main commit before publication; a PR
+run or rehearsal does not certify a later merge commit. Never create a tag or
+release from a PR, fork, or rehearsal, and never replace historical assets.
+
+After the release exists, download all eight public assets and resolve the tag
+to its commit. Verify the downloaded bytes with:
+
+```sh
+python3 scripts/release_assets.py verify \
+  --directory ./release-assets --version 0.1.0-alpha.5 \
+  --revision <resolved-tag-commit-sha>
+```
+
+Record the main run URL, resolved tag SHA, manifest, filenames, sizes and
+checksums. Confirm the five archives' BUILD-INFO matches that tag, schema 8 and
+API 1, and the separate VSIX remains 0.1.0. A subsequent source/docs commit must
+return `noop` for the unchanged published release. Only then update README
+download links, current release notes, and the source-management,
+portable-snapshots, evidence-collections and evidence-bundles guides to reflect
+shipped UI behavior. Keep the 18 October source-cycle and alpha.3/alpha.4 records
+historical.
+
+Before an upgrade, stop every process using the index and copy the entire data
+directory, including WAL/SHM files when present. Rollback restores that complete
+stopped pre-upgrade backup to a separate location and uses the matching previous
+binary; do not attempt an in-place downgrade or substitute a snapshot ZIP for a
+database backup.

@@ -4,6 +4,9 @@ import unittest
 import io
 import json
 import tempfile
+import hashlib
+import urllib.error
+import zipfile
 from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -96,12 +99,131 @@ class ReleaseGateTests(unittest.TestCase):
         release = {'tag_sha': sha, 'manifest': manifest}
         assets = [{'name': name} for name in sorted(names | {'release-manifest.json', 'SHA256SUMS.txt'})]
         self.assertEqual(release_gate.existing_release_decision('0.1.0-alpha.5', 'c' * 40, sha, release, assets), 'noop')
-        for key, value in [('schema_version', 7), ('source_revision', '3' * 40), ('app_version', '0.1.0-alpha.4')]:
+        for key, value in [('schema_version', 7), ('schema_version', 9),
+                           ('schema_version', 8.0), ('schema_version', True),
+                           ('source_revision', '3' * 40), ('app_version', '0.1.0-alpha.4'),
+                           ('client_api_version', 2), ('extension_version', '0.2.0'),
+                           ('manifest_version', 2)]:
             bad = {**release, 'manifest': {**manifest, key: value}}
-            with self.subTest(key=key), self.assertRaises(ValueError):
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 release_gate.existing_release_decision('0.1.0-alpha.5', 'c' * 40, sha, bad, assets)
-        with self.assertRaises(ValueError):
-            release_gate.existing_release_decision('0.1.0-alpha.5', 'c' * 40, sha, release, assets[:-1])
+        for changed in (assets[:-1], assets + [assets[0]], assets + [{'name': 'unexpected.zip'}]):
+            with self.subTest(assets=changed), self.assertRaises(ValueError):
+                release_gate.existing_release_decision('0.1.0-alpha.5', 'c' * 40, sha, release, changed)
+
+    def alpha5_remote_fixture(self, root):
+        sha = '2' * 40
+        source, _ = test_release_assets.ReleaseAssetTests().candidate(
+            root, revision=sha, version='0.1.0-alpha.5', schema=8)
+        output = root / 'release'
+        release_assets.assemble(source, output, '0.1.0-alpha.5', sha)
+        urls = {path.name: 'https://example.invalid/' + path.name for path in output.iterdir()}
+        base = 'https://api.github.com/repos/Lephiziel/findrail'
+        responses = {urls[path.name]: path.read_bytes() for path in output.iterdir()}
+        responses[base + '/releases/tags/v0.1.0-alpha.5'] = json.dumps({
+            'assets': [{'name': name, 'browser_download_url': url} for name, url in urls.items()]}).encode()
+        responses[base + '/git/ref/tags/v0.1.0-alpha.5'] = json.dumps({
+            'object': {'type': 'commit', 'sha': sha}}).encode()
+        return sha, urls, responses
+
+    def check_remote_alpha5(self, responses):
+        def response(request, **kwargs):
+            value = responses[request.full_url]
+            if isinstance(value, Exception):
+                raise value
+            return io.BytesIO(value)
+
+        with patch.object(release_gate.urllib.request, 'urlopen', side_effect=response), \
+                patch.object(release_assets.package, 'schema_version', return_value=9):
+            return release_gate.github_release_decision(
+                'Lephiziel/findrail', '0.1.0-alpha.5', 'c' * 40, 'test-token')
+
+    def refresh_remote_hashes(self, responses, urls):
+        # Deliberately keep the outer hashes coherent to reach embedded verification.
+        manifest_url = urls['release-manifest.json']
+        manifest = json.loads(responses[manifest_url])
+        for item in manifest['assets']:
+            data = responses[urls[item['basename']]]
+            item['size'] = len(data)
+            item['sha256'] = hashlib.sha256(data).hexdigest()
+        responses[manifest_url] = json.dumps(manifest).encode()
+        responses[urls['SHA256SUMS.txt']] = ''.join(
+            hashlib.sha256(responses[urls[name]]).hexdigest() + '  ' + name + '\n'
+            for name in sorted(urls) if name != 'SHA256SUMS.txt').encode()
+        release_gate.verify_remote_checksums(
+            [{'name': name, 'data': responses[url]} for name, url in urls.items()],
+            responses[urls['SHA256SUMS.txt']].decode())
+
+    def test_remote_alpha5_verifies_tag_and_all_bytes_after_source_advances(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sha, urls, responses = self.alpha5_remote_fixture(pathlib.Path(temp))
+            self.assertEqual(self.check_remote_alpha5(responses), 'noop')
+            base = 'https://api.github.com/repos/Lephiziel/findrail'
+            tag_object = 'd' * 40
+            responses[base + '/git/ref/tags/v0.1.0-alpha.5'] = json.dumps({
+                'object': {'type': 'tag', 'sha': tag_object}}).encode()
+            responses[base + '/git/tags/' + tag_object] = json.dumps({
+                'object': {'type': 'commit', 'sha': sha}}).encode()
+            self.assertEqual(self.check_remote_alpha5(responses), 'noop')
+            archive_url = urls['findrail_0.1.0-alpha.5_linux-amd64.tar.gz']
+            responses[archive_url] += b'corrupt transfer'
+            with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                self.check_remote_alpha5(responses)
+
+    def test_remote_alpha5_rejects_wrong_embedded_archive_despite_matching_hashes(self):
+        changes = (dict(schema=7), dict(schema=9), dict(revision='f' * 40),
+                   dict(dirty=True), dict(metadata_version='0.1.0-alpha.4'),
+                   dict(target_override='linux-arm64'))
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            sha, urls, original = self.alpha5_remote_fixture(root)
+            name = 'findrail_0.1.0-alpha.5_linux-amd64.tar.gz'
+            for i, change in enumerate(changes):
+                with self.subTest(change=change):
+                    fixture_root = root / str(i)
+                    fixture_root.mkdir()
+                    options = {'revision': sha, 'schema': 8, **change}
+                    malformed, _ = test_release_assets.ReleaseAssetTests().candidate(
+                        fixture_root, version='0.1.0-alpha.5', **options)
+                    responses = dict(original)
+                    responses[urls[name]] = (malformed / name).read_bytes()
+                    self.refresh_remote_hashes(responses, urls)
+                    with self.assertRaises(ValueError):
+                        self.check_remote_alpha5(responses)
+
+    def test_remote_alpha5_rejects_wrong_vsix_despite_matching_hashes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            _, urls, responses = self.alpha5_remote_fixture(pathlib.Path(temp))
+            url = urls[release_assets.VSIX]
+            changed = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(responses[url])) as original, \
+                    zipfile.ZipFile(changed, 'w') as replacement:
+                for item in original.infolist():
+                    data = original.read(item)
+                    if item.filename == 'extension/package.json':
+                        metadata = json.loads(data)
+                        metadata['publisher'] = 'another-publisher'
+                        data = json.dumps(metadata).encode()
+                    replacement.writestr(item, data)
+            responses[url] = changed.getvalue()
+            self.refresh_remote_hashes(responses, urls)
+            with self.assertRaisesRegex(ValueError, 'VSIX identity'):
+                self.check_remote_alpha5(responses)
+
+    def test_remote_alpha5_api_error_or_ambiguous_state_is_not_noop(self):
+        with tempfile.TemporaryDirectory() as temp:
+            _, urls, original = self.alpha5_remote_fixture(pathlib.Path(temp))
+            base = 'https://api.github.com/repos/Lephiziel/findrail'
+            release_url = base + '/releases/tags/v0.1.0-alpha.5'
+            ref_url = base + '/git/ref/tags/v0.1.0-alpha.5'
+            archive_url = urls['findrail_0.1.0-alpha.5_windows-amd64.zip']
+            for url, code in ((release_url, 500), (release_url, 404),
+                              (ref_url, 404), (archive_url, 403)):
+                with self.subTest(url=url, code=code):
+                    responses = dict(original)
+                    responses[url] = urllib.error.HTTPError(url, code, 'synthetic failure', {}, None)
+                    with self.assertRaises(ValueError):
+                        self.check_remote_alpha5(responses)
 
     def test_alpha4_rejects_wrong_schema_revision_and_incomplete_assets(self):
         sha, release, assets = self.alpha4_release()

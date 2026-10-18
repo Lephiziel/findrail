@@ -145,7 +145,7 @@ The published manifest is pinned to the historical alpha.3 tag SHA
 The alpha.4 contract is pinned to schema 7, API 1 and extension 0.1.0. The
 prepared alpha.5 contract is explicitly pinned to schema 8, API 1 and extension
 0.1.0, independent of later source migrations.
-Its manifest revision must match the actual immutable tag; all archives'
+Each manifest revision must match its actual immutable tag; all archives'
 BUILD-INFO records must match that revision, version and schema. Packaging
 derives the built schema from source and checks the contiguous migration
 inventory; a schema change requires a new version contract. Unknown
@@ -184,18 +184,18 @@ plus `SHA256SUMS.txt`, without a VSIX or manifest. The publisher has write
 permission only in the final job, rechecks that the tag does not already exist,
 and refuses to replace or move an existing tag/release.
 
-A complete alpha.4 or alpha.5 release is a no-op after main moves, including when source
-checks package an unpublished alpha.5 candidate. The gate checks
-schema 7, the exact eight-file set, all remote checksum bytes, embedded archive
+A complete alpha.4 or alpha.5 release is a no-op after main moves. The gate checks
+schema 7 for alpha.4 or schema 8 for alpha.5, the exact eight-file set, all remote
+checksum bytes, embedded archive
 provenance and the VSIX identity against the release's tag revision, rather
 than today's main revision or a later source schema. The historical alpha.3
 SHA/schema contract remains unchanged.
 
-## Intentional alpha.4 publication
+## Intentional alpha.5 publication
 
 PR and main-source checks package alpha.5 while `VERSION` remains alpha.4. The
-candidate schema is read from the checked-out source; alpha.3 and alpha.4 retain
-their historical schemas 6 and 7. These alpha.5 checks do not publish: the
+alpha.5 contract requires schema 8; alpha.3 and alpha.4 retain their historical
+schemas 6 and 7. Archives with another schema are rejected. These alpha.5 checks do not publish: the
 publisher still requires the candidate version to equal `VERSION`, and the
 PR and main-push read-only release-state gate checks alpha.4 against its
 historical tag SHA and exact existing assets, returns `noop` even though source
@@ -203,14 +203,22 @@ HEAD is newer. On a PR, preview publish is false and the publisher is skipped;
 on a main push, the candidate alpha.5 does not equal `VERSION` alpha.4 and the
 publisher is also skipped.
 Dispatch rehearsals require the exact current main SHA and `publish=false` for
-preparation. Alpha.5 is not accepted as an existing published-release contract.
-Alpha.5 has an explicit schema-8 contract and remains an unpublished preview
-until the owner authorizes publication. The migration checks pin the
+preparation. Alpha.5 remains an unpublished preview until the owner authorizes
+publication. Its complete published schema-8 contract is already supported by
+the existing-release verifier, so later main commits can validate the immutable
+release and return `noop`. The migration checks pin the
 published alpha.4 Linux amd64 archive to SHA-256
 `41f91c62b618a64dc083f7a63403f7f4fcc6f8b13ffb613acfee6704927f6a1a`; mismatch
 fails closed rather than updating the reference silently.
 
-After the new release exists, [verify the public downloads](release-smoke-alpha4.md#publication-after-acceptance)
+The owner-authorized release PR deliberately changes `build/package/VERSION` to
+`0.1.0-alpha.5`. Its PR run must pass with publication skipped. Merging that PR
+allows the canonical main-push publisher to run only after every required gate
+passes again on the actual main commit; PR-head artifacts are not reused as
+main-commit evidence. No VERSION change, tag, or publication is part of this
+preparation change.
+
+After the new release exists, [verify the public downloads](release-smoke-alpha5.md#publication-after-acceptance)
 before switching README download links and announcing it. A future source
 schema needs a new explicit candidate/version contract, not an edit to the
 immutable alpha.4 contract.
