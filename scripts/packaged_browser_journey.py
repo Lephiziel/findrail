@@ -381,7 +381,7 @@ def main():
             wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".collection-row textarea")) == 1)
             freshness_note = browser.find_element(By.CSS_SELECTOR, ".collection-row textarea")
             assert "unsaved freshness note" in freshness_note.get_attribute("value")
-            freshness_note.clear()
+            browser.execute_script("arguments[0].value='';arguments[0].dispatchEvent(new Event('input',{bubbles:true}))", freshness_note)
             browser.find_element(By.ID, "collection-close").click()
             browser.execute_script("window.fetch=window.__freshFetch")
             freshness_case.update(status="passed", elapsed_seconds=round(time.monotonic()-freshness_started, 3))
