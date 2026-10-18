@@ -211,7 +211,7 @@ func TestClosedWatcherChannelsAreReplacedWithoutWaitingForPolling(t *testing.T) 
 	if err := os.WriteFile(path, []byte("replacementwatchermarker"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	second.events <- fsnotify.Event{Name: path, Op: fsnotify.Write}
+	second.events <- fsnotify.Event{Name: filepath.Join(conn.Source().Root, "note.md"), Op: fsnotify.Write}
 	eventually(t, func() bool {
 		result, err := store.Search(ctx, search.Request{Query: "replacementwatchermarker", Limit: 10})
 		if err != nil {
