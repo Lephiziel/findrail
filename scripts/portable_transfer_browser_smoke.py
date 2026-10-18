@@ -51,7 +51,12 @@ class Session:
             args += ["--data-dir", str(self.data)]
         # Keep normal watcher behavior. A one-second full-rescan interval would
         # deliberately invalidate every pager fence while the UI is navigating.
-        args += ["--no-open"] if mode in ("start", "demo") else ["--no-sync"]
+        if mode == "start":
+            args += ["--no-open", "--enable-originals"]
+        elif mode == "demo":
+            args += ["--no-open"]
+        else:
+            args += ["--no-sync"]
         env = {**os.environ, "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}
         # Output is not piped: an unattended server cannot block on a full pipe.
         self.process = subprocess.Popen(args, cwd=self.base, env=env,
@@ -191,6 +196,7 @@ class Session:
         if page:
             assert self.el("page-label").text == f"Page {page} / 2"
         if frozen:
+            assert self.api("/api/v1/capabilities")["open_originals"] is True
             assert "Frozen imported snapshot" in self.el("preview-notice").text
             assert self.el("open-original").get_property("hidden") and self.el("open-folder").get_property("hidden")
         if self.el("whole-preview").is_selected():
@@ -435,7 +441,7 @@ def run(binary, report):
             a.el("snapshot-submit").click()
             a.wait(lambda: "Snapshot exported and verified" in a.el("snapshot-summary").text)
             assert archive.is_file() and a.collection() == pinned
-            summary = command([str(binary), "inspect-export", str(archive), "--json"])
+            summary = command([str(binary), "inspect-export", "--json", str(archive)])
             inspected = json.loads(summary.stdout)
             assert inspected["documents"] == 263 and inspected["pages"] == 2
             a.el("snapshot-close").click()
@@ -660,6 +666,9 @@ def main():
         return 0
     except Exception:
         report["status"] = "failed"
+        raise
+    except BaseException:
+        report["status"] = "interrupted"
         raise
     finally:
         report["duration_seconds"] = round(time.monotonic() - started, 3)

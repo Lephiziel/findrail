@@ -171,12 +171,12 @@ def evaluate(binary, scratch):
 
 BROWSER_SMOKES = (
     "diagnostics_browser_smoke.py",
+    "evidence_collection_smoke.py",
+    "portable_transfer_browser_smoke.py",
     "packaged_browser_journey.py",  # also runs passage windows and TASK 11's snapshot smoke
     "persistent_collection_smoke.py",
-    "evidence_collection_smoke.py",
     "search_preset_browser_smoke.py",
     "evidence_bundle_browser_smoke.py",
-    "portable_transfer_browser_smoke.py",
 )
 
 
