@@ -79,6 +79,8 @@ def main():
             ps = shutil.which('powershell') or shutil.which('pwsh')
             if not ps:
                 raise RuntimeError('PowerShell unavailable on Windows native runner')
+            inspect_script = root / 'inspect-shortcut.ps1'
+            inspect_script.write_text("param([string]$ShortcutPath)\n$s=(New-Object -ComObject WScript.Shell).CreateShortcut($ShortcutPath)\n[pscustomobject]@{Target=$s.TargetPath;Description=$s.Description}|ConvertTo-Json -Compress\n", encoding='utf-8')
             def run(tree, name):
                 script = tree / resource / name
                 command = [ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script)]
@@ -96,9 +98,7 @@ def main():
                 return result
             entry = destination / 'Findrail.lnk'
             def inspect(tree):
-                literal = str(entry).replace("'", "''")
-                script = f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{literal}'); [pscustomobject]@{{Target=$s.TargetPath;Description=$s.Description}}|ConvertTo-Json -Compress"
-                value = json.loads(subprocess.check_output([ps, '-NoProfile', '-Command', script], text=True))
+                value = json.loads(subprocess.check_output([ps, '-NoProfile', '-File', str(inspect_script), '-ShortcutPath', str(entry)], text=True))
                 if pathlib.Path(value['Target']) != tree / 'findrail-desktop.exe' or value['Description'] != 'Findrail managed shortcut':
                     raise AssertionError('shortcut target/provenance mismatch')
             inspect_expected = lambda tree: inspect(tree)
