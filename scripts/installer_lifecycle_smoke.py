@@ -106,7 +106,7 @@ def main():
                 except OSError:
                     same_target = same_hash = False
                 if not same_target or not same_hash or value['Description'] != 'Findrail managed shortcut':
-                    raise AssertionError(f"shortcut target/provenance mismatch (target_exists={pathlib.Path(value['Target']).exists()}, expected_exists={expected_binary.exists()}, target_name={pathlib.Path(value['Target']).name!r}, expected_name={expected_binary.name!r})")
+                    raise AssertionError(f"shortcut target/provenance mismatch (target_exists={pathlib.Path(value['Target']).exists()}, expected_exists={expected_binary.exists()}, target_tail={pathlib.Path(value['Target']).parts[-4:]!r}, expected_tail={expected_binary.parts[-4:]!r})")
             inspect_expected = lambda tree: inspect(tree)
         else:
             raise RuntimeError(f'unsupported native OS: {os_name}')
