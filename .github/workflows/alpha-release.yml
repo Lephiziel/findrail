@@ -360,6 +360,7 @@ jobs:
           FINDRAIL_CHROMEDRIVER: ${{ runner.temp }}/chrome-for-testing/chromedriver/linux-139.0.7258.66/chromedriver-linux64/chromedriver
         run: python3 scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" --alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY" --report "$RUNNER_TEMP/packaged-journey-report.json"
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: release-browser-journey-${{ env.CANDIDATE_SHA }}
           path: ${{ runner.temp }}/packaged-journey-report.json

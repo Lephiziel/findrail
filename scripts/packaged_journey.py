@@ -7,18 +7,56 @@ import os
 import pathlib
 import platform
 import re
-import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
+
+import package
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+def stop_process_tree(process):
+    """Drain the entire smoke group, including servers and driver children."""
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            pass
+        # The parent can exit before its Chrome/server children. Reap the group
+        # even after wait() returns; no child may outlive a smoke boundary.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    elif process.poll() is None:
+        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    process.wait(timeout=5)
+
+
 def command(args, *, ok=True, timeout=120):
-    result = subprocess.run(args, cwd=ROOT, capture_output=True, text=True,
-                            encoding="utf-8", timeout=timeout)
+    # Files cannot fill a pipe while a browser smoke is blocked. Return only a
+    # bounded tail, never accumulate complete browser/server logs in memory.
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        process = subprocess.Popen(args, cwd=ROOT, stdout=stdout, stderr=stderr,
+                                   start_new_session=os.name == "posix")
+        try:
+            process.wait(timeout=timeout)
+        finally:
+            stop_process_tree(process)
+        def tail(stream):
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 16384))
+            return stream.read().decode("utf-8", errors="replace")
+        result = subprocess.CompletedProcess(args, process.returncode, tail(stdout), tail(stderr))
     if (result.returncode == 0) != ok:
         raise AssertionError(f"command {args!r}: exit={result.returncode}\n{result.stdout}\n{result.stderr}")
     return result
@@ -51,6 +89,7 @@ def validate_candidate(binary, revision, version):
     machine = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine().lower())
     target = f"{system}-{machine}"
     if (not system or not machine or metadata.get("dirty") is not False or
+            package.build_info_schema(metadata) != package.schema_version() or
             (metadata.get("revision"), metadata.get("version"), metadata.get("target")) != (revision, version, target)):
         raise ValueError("BUILD-INFO.json must match candidate SHA/version, be clean, and target this runner")
     actual = command([str(binary), "version"]).stdout.strip()
@@ -126,6 +165,116 @@ def evaluate(binary, scratch):
             "over_100_matches_incomplete": True}
 
 
+BROWSER_SMOKES = (
+    "diagnostics_browser_smoke.py",
+    "packaged_browser_journey.py",  # also runs passage windows and TASK 11's snapshot smoke
+    "persistent_collection_smoke.py",
+    "evidence_collection_smoke.py",
+    "search_preset_browser_smoke.py",
+    "evidence_bundle_browser_smoke.py",
+    "portable_transfer_browser_smoke.py",
+)
+
+
+class CaseReport:
+    def __init__(self, report):
+        self.report = report
+
+    def run(self, name, operation):
+        case = {"case": name, "status": "running"}
+        self.report["cases"].append(case)
+        started = time.monotonic()
+        try:
+            detail = operation()
+            if isinstance(detail, dict):
+                case.update(detail)
+            case["status"] = "passed"
+            return detail
+        except BaseException as error:
+            case["status"] = "failed"
+            # The detailed subprocess tail goes to the local console. Artifacts
+            # keep a bounded diagnosis rather than complete logs or fixture text.
+            case["error"] = type(error).__name__
+            if isinstance(error, subprocess.TimeoutExpired):
+                case["timeout_seconds"] = error.timeout
+            raise
+        finally:
+            case["duration_seconds"] = round(time.monotonic() - started, 3)
+
+
+def execute(args):
+    report = {"candidate_sha": args.candidate_sha, "candidate_version": args.candidate_version,
+              "os": platform.platform(), "python": platform.python_version(),
+              "browser_skipped": args.skip_browser, "status": "running", "cases": []}
+    cases = CaseReport(report)
+    started = time.monotonic()
+    try:
+        def identity():
+            binary = args.binary.resolve(strict=True)
+            if not binary.is_file() or not os.access(binary, os.X_OK):
+                raise ValueError("candidate binary is not executable")
+            metadata = validate_candidate(binary, args.candidate_sha, args.candidate_version)
+            with binary.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            report.update(schema_version=metadata["schema_version"], target=metadata["target"],
+                          source_clean=True, binary=binary.name, binary_sha256=digest,
+                          go=metadata.get("go_version"))
+        cases.run("candidate_identity", identity)
+        binary = args.binary.resolve(strict=True)
+        with tempfile.TemporaryDirectory(prefix="Findrail packaged journey 雪 ") as directory:
+            scratch = pathlib.Path(directory)
+            cases.run("evaluate", lambda: evaluate(binary, scratch))
+            for smoke in ("search_smoke.py", "mcp_smoke.py", "portable_smoke.py", "diagnostics_smoke.py", "ignore_policy_smoke.py"):
+                cases.run(smoke, lambda smoke=smoke: command([sys.executable, str(ROOT / "scripts" / smoke), str(binary)], timeout=300))
+            cases.run("schema2_schema6_published_alpha4_schema7_upgrade_restore_rollback", lambda: command(
+                [sys.executable, str(ROOT / "scripts/upgrade_smoke.py"), str(binary),
+                 "--alpha3-binary", str(args.alpha3_binary.resolve(strict=True)),
+                 "--alpha4-binary", str(args.alpha4_binary.resolve(strict=True))], timeout=300))
+            cases.run("desktop_launch_smoke.py", lambda: command(
+                [sys.executable, str(ROOT / "scripts/desktop_launch_smoke.py"), str(binary)], timeout=90))
+            for smoke in BROWSER_SMOKES:
+                if args.skip_browser:
+                    report["cases"].append({"case": smoke, "status": "skipped", "reason": "--skip-browser", "duration_seconds": 0})
+                else:
+                    def browser_case(smoke=smoke):
+                        argv = [sys.executable, str(ROOT / "scripts" / smoke), str(binary)]
+                        child_report = scratch / "portable-transfer-report.json"
+                        if smoke == "portable_transfer_browser_smoke.py":
+                            argv += ["--candidate-sha", args.candidate_sha, "--candidate-version", args.candidate_version,
+                                     "--report", str(child_report)]
+                        try:
+                            command(argv, timeout=600)
+                        finally:
+                            if smoke == "portable_transfer_browser_smoke.py" and child_report.exists():
+                                if child_report.stat().st_size > 65536:
+                                    raise ValueError("oversized transfer report")
+                                report["portable_transfer"] = json.loads(child_report.read_text(encoding="utf-8"))
+                        if smoke == "portable_transfer_browser_smoke.py":
+                            transfer = report.get("portable_transfer", {})
+                            if (transfer.get("candidate_sha") != args.candidate_sha or
+                                    transfer.get("candidate_version") != args.candidate_version or
+                                    transfer.get("status") != "passed" or not transfer.get("cases") or
+                                    any(case.get("status") != "passed" for case in transfer["cases"])):
+                                raise ValueError("missing, incomplete, or mismatched transfer report")
+                    cases.run(smoke, browser_case)
+        report["status"] = "incomplete" if args.skip_browser else "passed"
+        return 0
+    except Exception as error:
+        report["status"] = "failed"
+        print(f"Packaged journey failed: {error}", file=sys.stderr)
+        return 1
+    except BaseException:
+        report["status"] = "interrupted"
+        raise
+    finally:
+        report["duration_seconds"] = round(time.monotonic() - started, 3)
+        encoded = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(encoded, encoding="utf-8")
+        print(encoded, end="")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=pathlib.Path, help="path to extracted findrail executable")
@@ -135,50 +284,10 @@ def main():
                         help="extracted published alpha.3 binary used to verify stopped-backup restore")
     parser.add_argument("--alpha4-binary", type=pathlib.Path, required=True,
                         help="extracted published alpha.4 binary used to verify schema-7 backup restore")
-    parser.add_argument("--report", type=pathlib.Path, help="write per-case JSON report")
-    parser.add_argument("--skip-browser", action="store_true")
-    args = parser.parse_args()
-    binary = args.binary.resolve(strict=True)
-    if not os.access(binary, os.X_OK):
-        raise SystemExit("candidate binary is not executable")
-    metadata = validate_candidate(binary, args.candidate_sha, args.candidate_version)
-    cases = []
-    with tempfile.TemporaryDirectory(prefix="findrail packaged journey ") as directory:
-        scratch = pathlib.Path(directory)
-        cases.append(evaluate(binary, scratch))
-        smokes = ["search_smoke.py", "mcp_smoke.py", "portable_smoke.py", "diagnostics_smoke.py", "ignore_policy_smoke.py"]
-        for smoke in smokes:
-            command([sys.executable, str(ROOT / "scripts" / smoke), str(binary)], timeout=300)
-            cases.append({"case": smoke, "status": "passed"})
-        command([sys.executable, str(ROOT / "scripts/upgrade_smoke.py"), str(binary),
-                 "--alpha3-binary", str(args.alpha3_binary.resolve(strict=True)),
-                 "--alpha4-binary", str(args.alpha4_binary.resolve(strict=True))], timeout=300)
-        cases.extend([
-            {"case": "alpha2_schema2_upgrade_restore", "status": "passed"},
-            {"case": "alpha3_schema6_upgrade_restore", "status": "passed"},
-            {"case": "published_alpha4_schema7_to_schema8_saved_collection_restore_and_atomic_rollback", "status": "passed"},
-        ])
-        command([sys.executable, str(ROOT / "scripts/desktop_launch_smoke.py"), str(binary)], timeout=90)
-        cases.append({"case": "desktop_launch_smoke.py", "status": "passed"})
-        if not args.skip_browser:
-            command([sys.executable, str(ROOT / "scripts/packaged_browser_journey.py"), str(binary)], timeout=300)
-            cases.append({"case": "packaged_browser_journey.py", "status": "passed"})
-            cases.append({"case": "single_browser_schema8_folder_diagnostics_passage_collection_forget_quit_lifecycle", "status": "passed"})
-            command([sys.executable, str(ROOT / "scripts/persistent_collection_smoke.py"), str(binary)], timeout=600)
-            cases.append({"case": "persistent_collection_smoke.py", "status": "passed"})
-            command([sys.executable, str(ROOT / "scripts/evidence_collection_smoke.py"), str(binary)], timeout=600)
-            cases.append({"case": "evidence_collection_smoke.py", "status": "passed"})
-    report = {"candidate_sha": args.candidate_sha, "candidate_version": args.candidate_version,
-              "schema_version": metadata.get("schema_version"), "target": metadata.get("target"),
-              "source_clean": metadata.get("dirty") is False,
-              "binary": binary.name, "os": platform.platform(), "python": platform.python_version(),
-              "go": metadata.get("go_version"), "browser_skipped": args.skip_browser, "cases": cases}
-    encoded = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
-    if args.report:
-        args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(encoded, encoding="utf-8")
-    print(encoded, end="")
+    parser.add_argument("--report", type=pathlib.Path, help="write per-case JSON report, also on failure")
+    parser.add_argument("--skip-browser", action="store_true", help="record browser cases as skipped; not full acceptance")
+    return execute(parser.parse_args())
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

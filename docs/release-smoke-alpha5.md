@@ -50,6 +50,73 @@ remain skipped and no release may be created.
   synthetic workload and two measured queries after warmup. It characterizes
   resources only, not retrieval quality. Large profiles are separate runs.
 
+## Integrated candidate gate
+
+Both the standalone packaged journey and Alpha release candidate's required
+`packaged-browser-journey` job invoke the same `scripts/packaged_journey.py`.
+It runs the existing preset and evidence-bundle Chromium smokes alongside the
+existing packaged passage, collection, diagnostics and lifecycle cases. All
+consume the same extracted executable; none builds a second application.
+
+With pinned Selenium 4.35.0 and matching local Chrome/ChromeDriver (the CI pins
+are 139.0.7258.66), run:
+
+```sh
+python3 scripts/packaged_journey.py '/owned/install space 📦/findrail' \
+  --candidate-sha <full-head-sha> --candidate-version 0.1.0-alpha.5 \
+  --alpha3-binary /owned/alpha3/findrail --alpha4-binary /owned/alpha4/findrail \
+  --report /owned/reports/packaged-journey.json
+```
+
+`FINDRAIL_CHROME` and `FINDRAIL_CHROMEDRIVER` select local matched executables.
+Before running cases the orchestrator checks exact SHA/version, native target,
+clean BUILD-INFO, executable version and the source schema; the report includes
+the executable SHA-256, tool/environment identity and actual case durations.
+Failed identity or child cases return nonzero and still write a bounded report.
+Explicit `--skip-browser` lists every browser case as skipped and reports
+`incomplete`; it cannot satisfy full browser acceptance. A missing browser is a
+failure. Child smoke groups are drained after success, failure and timeout so
+servers/drivers cannot cross case boundaries.
+
+The additional integrated transfer can also be run directly:
+
+```sh
+python3 scripts/portable_transfer_browser_smoke.py '/owned/install space 📦/findrail' \
+  --candidate-sha <full-head-sha> --candidate-version 0.1.0-alpha.5 \
+  --report /owned/reports/portable-transfer.json
+```
+
+Inputs are synthetic long Markdown/DOCX (Cyrillic, emoji and non-BMP characters),
+a two-page PDF and the shared 260-result paging corpus. Installation, fixture,
+ZIP and independent A/B/C index paths include spaces/Unicode. The test uses
+real Sources UI/jobs for host-path ZIP export, inspection and explicit import;
+ZIPs are outside the indexes and registered folders. It checks:
+
+- Exact late quote code-point offsets, PDF page 2, saved note/order, Markdown
+  and JSON export; a collection commit fences page continuation without mixing
+  results or removing pinned evidence.
+- Preset Save/Load/explicit scope/Apply, delayed real passage responses and an
+  unsaved note; Apply issues no search, keeps evidence and needs explicit Search.
+- A's export into B as a frozen source, no refresh/configure/native-opening
+  controls, independent content after originals are removed, and idempotent
+  import without renaming.
+- Compatible B archive-source evidence mapped explicitly into C despite a
+  same-name source. A deliberately lost real commit response exercises
+  reconciliation, single submission and preservation of newer local edits.
+- Path/media/hash/page/quote and live-to-frozen identity conflicts without
+  partial collections; restart retains exact evidence and Forget cascades only
+  related entries while preserving unrelated sources and separate exports.
+- No browser storage/history writes or page requests outside the local server.
+
+TASK 11 / PR #79 is a prerequisite for the snapshot UI part. Missing controls
+fail a named case; they are never treated as a successful or skipped transfer.
+Until the dependency is merged into main and the full exact-head gates pass,
+TASK 12 remains incomplete and its PR remains draft. These are executable
+acceptance criteria, not a record of a successful run; consult the PR's exact
+head reports for actual results. Existing TASK 11 and bundle smokes retain their
+malformed-file, changed-after-inspect, cancellation, late-response and read-only
+checks; their implementation is reused rather than copied here.
+
 ## Scope and limitations
 
 Only product behavior exercised by the exact-SHA reports is claimed. Browser

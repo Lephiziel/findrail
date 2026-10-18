@@ -29,6 +29,13 @@ def free_port():
         return sock.getsockname()[1]
 
 
+def write_paging_fixture(root):
+    """Shared >200-result corpus for standalone and integrated candidate cases."""
+    for index in range(260):
+        (root / f"paging-{index:03}.md").write_text(
+            f"pagingjourney shared ranking unicode雪 synthetic document {index:03}\n", encoding="utf-8")
+
+
 def main():
     binary = pathlib.Path(sys.argv[1]).resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="Findrail packaged journey – ") as temporary:
@@ -50,9 +57,7 @@ def main():
             "idempotencymarker familiar synthetic note. <script>window.fixturePwned=true</script>", encoding="utf-8")
         (root / "runbook.pdf").write_bytes(pdf_fixture(["firstpage unique alpha", "secondpage page2journey unique beta"]))
         (root / "meeting.docx").write_bytes(docx_fixture("docxjourney unique word text"))
-        for index in range(260):
-            (root / f"paging-{index:03}.md").write_text(
-                f"pagingjourney shared ranking unicode雪 synthetic document {index:03}\n", encoding="utf-8")
+        write_paging_fixture(root)
         port = free_port()
         address = f"127.0.0.1:{port}"
         url = f"http://{address}"
