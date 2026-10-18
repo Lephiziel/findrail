@@ -1,0 +1,298 @@
+{
+  "binary": {
+    "go_version": "go1.27.2-X:nodwarf5",
+    "revision": "e7c7af2e004a59d0625049de1490e4969008f217",
+    "schema": 8,
+    "sha256": "5807ade7a1a5e495661a10807a34ed7e52466245a06758c2a9c24d184d45ad10",
+    "version": "dev"
+  },
+  "comparison": {
+    "binary": {
+      "go_version": "go1.27.2-X:nodwarf5",
+      "revision": "bb5b4d80a7558b7a9dd3a7749f519eec5cefe0ca",
+      "schema": 8,
+      "sha256": "bb719e0bab52c12cb33dd5b17930c0f8fe6438999be76677fb06337f8cfeedb4",
+      "version": "dev"
+    },
+    "fixture_sha256_matches": true,
+    "metrics": {
+      "bounded_evidence_response_bytes": 790,
+      "bounded_search_response_bytes": 3185,
+      "database_bytes_after_index_before_search": 153456640,
+      "database_files_after_index_bytes": {
+        "findrail.db": 153456640,
+        "findrail.db-shm": 0,
+        "findrail.db-wal": 0
+      },
+      "evidence_bundle_boundary": {
+        "accepted_entries": 16,
+        "accepted_selected_text_bytes": 1048576,
+        "codec_boundary_entries": 32,
+        "codec_boundary_selected_text_bytes": 2097152,
+        "codec_boundary_status": "quota_conflict",
+        "one_byte_over_quota_status": 413,
+        "persistent_collections_created": 0,
+        "preview_response_bytes": 1252,
+        "preview_wall_ms": 73.281,
+        "request_bytes": 2104071,
+        "sampled_server_rss_bytes": 71516160
+      },
+      "first_query_after_server_start_ms": 128.171,
+      "index_wall_ms": 80760.358,
+      "known_result_shape": true,
+      "max_sampled_server_rss_bytes": 29003776,
+      "paging_window": {
+        "beyond_237": true,
+        "latency_ms": {
+          "p50": 157.052,
+          "p95": 174.967
+        },
+        "max_response_bytes": 64062,
+        "page_sizes": {
+          "100": {
+            "latency_ms": {
+              "p50": 157.052,
+              "p95": 174.967
+            },
+            "max_response_bytes": 64062,
+            "pages": 10,
+            "returned": 1000,
+            "sample_count": 10,
+            "warmup_requests": 0,
+            "window_complete": false
+          },
+          "20": {
+            "latency_ms": {
+              "p50": 153.815,
+              "p95": 170.293
+            },
+            "max_response_bytes": 13259,
+            "pages": 50,
+            "returned": 1000,
+            "sample_count": 50,
+            "warmup_requests": 0,
+            "window_complete": false
+          },
+          "50": {
+            "latency_ms": {
+              "p50": 161.052,
+              "p95": 171.047
+            },
+            "max_response_bytes": 32408,
+            "pages": 20,
+            "returned": 1000,
+            "sample_count": 20,
+            "warmup_requests": 0,
+            "window_complete": false
+          }
+        },
+        "pages": 10,
+        "returned": 1000,
+        "total": 50000,
+        "window_limit": 1000
+      },
+      "refresh_cycle": {
+        "canceled_refresh_exit_code": 1,
+        "canceled_refresh_samples": 1,
+        "canceled_refresh_wall_ms": 262.435,
+        "canceled_scan_preserved_previous_content": true,
+        "concurrent_read_errors": 0,
+        "concurrent_read_latency_ms": {
+          "p50": 138.804,
+          "p95": 139.756
+        },
+        "concurrent_read_samples": 2,
+        "successful_refresh_samples": 1,
+        "successful_refresh_updated_documents": 1,
+        "successful_refresh_wall_ms": 65502.029
+      },
+      "result_count_max": 50000,
+      "result_count_min": 1031,
+      "search_repeats": 10,
+      "server_rss_sample_count": 12,
+      "server_startup_ms": 7.106,
+      "synthetic_query_ids": [
+        "common",
+        "rare"
+      ],
+      "warm_http_request_latency_ms": {
+        "p50": 65.684,
+        "p95": 127.12
+      },
+      "warm_queries": {
+        "common": {
+          "latency_ms": {
+            "p50": 125.297,
+            "p95": 127.12
+          },
+          "repeats": 5
+        },
+        "rare": {
+          "latency_ms": {
+            "p50": 7.285,
+            "p95": 7.428
+          },
+          "repeats": 5
+        }
+      }
+    },
+    "same_host": true
+  },
+  "environment": {
+    "arch": "x86_64",
+    "os": "Linux",
+    "processor": "Intel(R) Core(TM) i7-10700KF CPU @ 3.80GHz",
+    "python": "3.14.8"
+  },
+  "errors": [],
+  "fixture": {
+    "corpus_sha256": "5680cc710acd926ad0114c69169eb4d31de428c657b27a5850ce2ef4aae6714a",
+    "documents_requested": 100000,
+    "generated_source_file_bytes": 71046137,
+    "generated_text_input_bytes": 48311393,
+    "seed": 42,
+    "version": 2
+  },
+  "lifecycle": {
+    "database_size": "immediately after index process exit, before doctor and server startup; separate DB+WAL+SHM file sizes",
+    "first_query": "first HTTP query after server startup; not a cold OS cache",
+    "latency": "--queries requests per query after one excluded warmup per query; one persistent loopback server",
+    "response_bytes": "bounded HTTP search and evidence JSON payloads, read with a 1 MiB cap",
+    "rss": "Linux /proc/server-pid/status VmRSS after each query; sampled maximum, not process peak or index/PDF-worker RSS",
+    "startup": "fresh loopback server process until health endpoint responds"
+  },
+  "metrics": {
+    "bounded_evidence_response_bytes": 791,
+    "bounded_search_response_bytes": 3120,
+    "database_bytes_after_index_before_search": 153350144,
+    "database_files_after_index_bytes": {
+      "findrail.db": 153350144,
+      "findrail.db-shm": 0,
+      "findrail.db-wal": 0
+    },
+    "evidence_bundle_boundary": {
+      "accepted_entries": 16,
+      "accepted_selected_text_bytes": 1048576,
+      "codec_boundary_entries": 32,
+      "codec_boundary_selected_text_bytes": 2097152,
+      "codec_boundary_status": "quota_conflict",
+      "one_byte_over_quota_status": 413,
+      "persistent_collections_created": 0,
+      "preview_response_bytes": 1252,
+      "preview_wall_ms": 77.236,
+      "request_bytes": 2104071,
+      "sampled_server_rss_bytes": 71487488
+    },
+    "first_query_after_server_start_ms": 134.088,
+    "index_wall_ms": 80511.55,
+    "known_result_shape": true,
+    "max_sampled_server_rss_bytes": 26849280,
+    "paging_window": {
+      "beyond_237": true,
+      "latency_ms": {
+        "p50": 157.14,
+        "p95": 175.426
+      },
+      "max_response_bytes": 63867,
+      "page_sizes": {
+        "100": {
+          "latency_ms": {
+            "p50": 157.14,
+            "p95": 175.426
+          },
+          "max_response_bytes": 63867,
+          "pages": 10,
+          "returned": 1000,
+          "sample_count": 10,
+          "warmup_requests": 0,
+          "window_complete": false
+        },
+        "20": {
+          "latency_ms": {
+            "p50": 153.075,
+            "p95": 168.763
+          },
+          "max_response_bytes": 13191,
+          "pages": 50,
+          "returned": 1000,
+          "sample_count": 50,
+          "warmup_requests": 0,
+          "window_complete": false
+        },
+        "50": {
+          "latency_ms": {
+            "p50": 151.884,
+            "p95": 168.962
+          },
+          "max_response_bytes": 32263,
+          "pages": 20,
+          "returned": 1000,
+          "sample_count": 20,
+          "warmup_requests": 0,
+          "window_complete": false
+        }
+      },
+      "pages": 10,
+      "returned": 1000,
+      "total": 50000,
+      "window_limit": 1000
+    },
+    "refresh_cycle": {
+      "canceled_refresh_exit_code": 1,
+      "canceled_refresh_samples": 1,
+      "canceled_refresh_wall_ms": 262.405,
+      "canceled_scan_preserved_previous_content": true,
+      "concurrent_read_errors": 0,
+      "concurrent_read_latency_ms": {
+        "p50": 149.897,
+        "p95": 151.627
+      },
+      "concurrent_read_samples": 2,
+      "successful_refresh_samples": 1,
+      "successful_refresh_updated_documents": 1,
+      "successful_refresh_wall_ms": 61520.62
+    },
+    "result_count_max": 50000,
+    "result_count_min": 1031,
+    "search_repeats": 10,
+    "server_rss_sample_count": 12,
+    "server_startup_ms": 7.31,
+    "synthetic_query_ids": [
+      "common",
+      "rare"
+    ],
+    "warm_http_request_latency_ms": {
+      "p50": 65.468,
+      "p95": 127.146
+    },
+    "warm_queries": {
+      "common": {
+        "latency_ms": {
+          "p50": 124.663,
+          "p95": 127.146
+        },
+        "repeats": 5
+      },
+      "rare": {
+        "latency_ms": {
+          "p50": 7.474,
+          "p95": 7.55
+        },
+        "repeats": 5
+      }
+    }
+  },
+  "schema": 1,
+  "status": "success",
+  "unavailable": [
+    "index_peak_rss: not measured"
+  ],
+  "workload": {
+    "extracted_text_bytes": 48136393,
+    "indexed_documents": 100000,
+    "skipped_documents": 0,
+    "synthetic_pdf_pages": 25000,
+    "unchanged_documents": 0,
+    "updated_documents": 100000
+  }
+}

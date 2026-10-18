@@ -8,13 +8,20 @@ import os
 import pathlib
 import platform
 import shutil
-import subprocess
+import signal
 import sys
 import tempfile
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import package
+from candidate_record import CaseRecorder
+from packaged_journey import command
+
+
+def directory_fingerprint(root):
+    return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(root.rglob('*')) if path.is_file()}
 
 
 def main():
@@ -51,7 +58,7 @@ def main():
             destination = root / 'owned applications'
             destination.mkdir()
             script_name, uninstall_name = 'install-user.sh', 'uninstall-user.sh'
-            run = lambda tree, name: subprocess.run(['sh', str(tree / resource / name), '--destination', str(destination)], check=True, capture_output=True, text=True)
+            run = lambda tree, name: command(['sh', str(tree / resource / name), '--destination', str(destination)], timeout=45)
             entry = destination / 'findrail.desktop'
             def inspect(tree):
                 text = entry.read_text()
@@ -64,7 +71,7 @@ def main():
             destination = root / 'owned Applications'
             destination.mkdir()
             script_name, uninstall_name = 'install-user.sh', 'uninstall-user.sh'
-            run = lambda tree, name: subprocess.run(['sh', str(tree / resource / name), '--destination', str(destination)], check=True, capture_output=True, text=True)
+            run = lambda tree, name: command(['sh', str(tree / resource / name), '--destination', str(destination)], timeout=45)
             entry = destination / 'Findrail.app'
             def inspect(tree):
                 for relative in ('Contents/MacOS/Findrail', 'Contents/Info.plist'):
@@ -85,22 +92,22 @@ def main():
             inspect_script.write_text("param([string]$ShortcutPath)\n$s=(New-Object -ComObject WScript.Shell).CreateShortcut($ShortcutPath)\n$j=[pscustomobject]@{Target=$s.TargetPath;Description=$s.Description}|ConvertTo-Json -Compress\n[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j))\n", encoding='utf-8')
             def run(tree, name):
                 script = tree / resource / name
-                command = [ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script)]
+                argv = [ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script)]
                 if name == script_name:
-                    command += ['-Binary', str(tree / 'findrail-desktop.exe'), '-DestinationDirectory', str(destination)]
+                    argv += ['-Binary', str(tree / 'findrail-desktop.exe'), '-DestinationDirectory', str(destination)]
                 else:
-                    command += [str(destination)]
-                result = subprocess.run(command, capture_output=True, text=True)
-                if result.returncode:
-                    detail = (result.stderr or result.stdout or 'no PowerShell diagnostic').strip()
+                    argv += [str(destination)]
+                try:
+                    return command(argv, timeout=45)
+                except AssertionError as error:
+                    detail = str(error)
                     for private_path in (str(root), os.environ.get('USERPROFILE', ''), os.environ.get('RUNNER_TEMP', '')):
                         if private_path:
                             detail = detail.replace(private_path, '<runner-path>')
-                    raise RuntimeError(f'PowerShell installer failed ({result.returncode}): {detail}')
-                return result
+                    raise RuntimeError('PowerShell installer failed: ' + detail[-2000:]) from None
             entry = destination / 'Findrail.lnk'
             def inspect(tree):
-                encoded = subprocess.check_output([ps, '-NoProfile', '-File', str(inspect_script), '-ShortcutPath', str(entry)], text=True).strip()
+                encoded = command([ps, '-NoProfile', '-File', str(inspect_script), '-ShortcutPath', str(entry)], timeout=30).stdout.strip()
                 value = json.loads(base64.b64decode(encoded).decode('utf-8'))
                 expected_binary = tree / 'findrail-desktop.exe'
                 try:
@@ -121,71 +128,79 @@ def main():
                       'candidate_version': info['version'], 'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
                       'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'scope': 'disposable owned destination; synthetic documents/data only',
                       'status': status, 'cases': records}
-            if args.report:
-                args.report.parent.mkdir(parents=True, exist_ok=True)
-                args.report.write_text(json.dumps(report, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+            CaseRecorder(report, args.report).save()
+            return report
         def case(case_id, callback):
             start = time.monotonic()
+            current = {'id': case_id, 'status': 'running'}
+            records.append(current)
+            save_report()
             try:
                 callback()
             except BaseException:
-                records.append({'id': case_id, 'status': 'failed', 'duration_ms': round((time.monotonic()-start)*1000)})
+                current.update(status='failed', duration_ms=round((time.monotonic()-start)*1000))
                 save_report('failed')
                 raise
-            records.append({'id': case_id, 'status': 'passed', 'duration_ms': round((time.monotonic()-start)*1000)})
+            current.update(status='passed', duration_ms=round((time.monotonic()-start)*1000))
             save_report()
         data = root / 'existing data'
         originals = root / 'original documents'; originals.mkdir(); (originals / 'note.md').write_text('synthetic original')
         cli = first / ('findrail.exe' if os.name == 'nt' else 'findrail')
-        subprocess.run([str(cli), 'index', '--data-dir', str(data), str(originals)], check=True, capture_output=True, text=True, timeout=30)
+        save_report()
+        try:
+            command([str(cli), 'index', '--data-dir', str(data), str(originals)], timeout=30)
+        except BaseException:
+            save_report('failed')
+            raise
         (data / 'synthetic collections-notes-report').write_text('synthetic preserved data')
+        before_data, before_originals = directory_fingerprint(data), directory_fingerprint(originals)
         case('install', lambda: (run(first, script_name), inspect_expected(first)))
         case('repeat-install', lambda: (run(first, script_name), inspect_expected(first)))
         case('update-new-extraction', lambda: (run(second, script_name), inspect_expected(second)))
-        case('uninstall', lambda: run(second, uninstall_name))
-        case('repeat-uninstall', lambda: run(second, uninstall_name))
-        if entry.exists() or entry.is_symlink():
-            raise AssertionError('uninstall left installed resource')
-        case('data-and-originals-preserved', lambda: (None if (data / 'synthetic collections-notes-report').read_text() == 'synthetic preserved data' and (originals / 'note.md').read_text() == 'synthetic original' else (_ for _ in ()).throw(AssertionError('user data changed'))))
+        def uninstall():
+            run(second, uninstall_name)
+            if entry.exists() or entry.is_symlink():
+                raise AssertionError('uninstall left installed resource')
+        case('uninstall', uninstall)
+        case('repeat-uninstall', uninstall)
+        def preserve_data():
+            if directory_fingerprint(data) != before_data or directory_fingerprint(originals) != before_originals:
+                raise AssertionError('stopped data directory or original bytes changed')
+        case('data-and-originals-preserved', preserve_data)
         def reopen_existing_data():
             run(second, script_name); inspect_expected(second)
-            listing = subprocess.run([str(cli), 'sources', '--data-dir', str(data), '--json'], check=True, capture_output=True, text=True, timeout=30)
+            listing = command([str(cli), 'sources', '--data-dir', str(data), '--json'], timeout=30)
             if len(json.loads(listing.stdout)['sources']) != 1:
                 raise AssertionError('existing data directory did not reopen after reinstall')
         case('reinstall-existing-data-reopen', reopen_existing_data)
         run(second, uninstall_name)
-        # Run the rejection case without subprocess check=True.
         def reject_collision():
             if os_name == 'Darwin':
                 entry.mkdir(); sentinel = entry / 'foreign.txt'; sentinel.write_text('leave me')
             else:
                 entry.write_text('foreign resource'); sentinel = entry
             if os_name == 'Linux':
-                result = subprocess.run(['sh', str(second / resource / script_name), '--destination', str(destination)], capture_output=True)
+                result = command(['sh', str(second / resource / script_name), '--destination', str(destination)], ok=False, timeout=45)
             elif os_name == 'Darwin':
-                result = subprocess.run(['sh', str(second / resource / script_name), '--destination', str(destination)], capture_output=True)
+                result = command(['sh', str(second / resource / script_name), '--destination', str(destination)], ok=False, timeout=45)
             else:
-                result = subprocess.run([ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(second / resource / script_name), '-Binary', str(second / 'findrail-desktop.exe'), '-DestinationDirectory', str(destination)], capture_output=True)
+                result = command([ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(second / resource / script_name), '-Binary', str(second / 'findrail-desktop.exe'), '-DestinationDirectory', str(destination)], ok=False, timeout=45)
             if result.returncode == 0: raise AssertionError('installer accepted a foreign resource')
             expected = 'leave me' if os_name == 'Darwin' else 'foreign resource'
             if sentinel.read_text() != expected: raise AssertionError('foreign resource was changed')
-            uninstall_result = subprocess.run(['sh', str(second / resource / uninstall_name), '--destination', str(destination)] if os_name != 'Windows' else [ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(second / resource / uninstall_name), str(destination)], capture_output=True)
+            uninstall_result = command(['sh', str(second / resource / uninstall_name), '--destination', str(destination)] if os_name != 'Windows' else [ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(second / resource / uninstall_name), str(destination)], ok=False, timeout=45)
             if uninstall_result.returncode == 0 or sentinel.read_text() != expected:
                 raise AssertionError('uninstaller did not preserve foreign resource')
             if os_name == 'Darwin': shutil.rmtree(entry)
             else: entry.unlink()
         case('foreign-collision-and-uninstall-refused', reject_collision)
-        save_report('passed')
-        report = {'os': os_name, 'architecture': platform.machine(), 'candidate_sha': args.candidate_sha,
-                  'candidate_version': info['version'], 'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
-                  'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'scope': 'disposable owned destination; synthetic documents/data only',
-                  'status': 'passed', 'cases': records}
+        report = save_report('passed')
         encoded = json.dumps(report, sort_keys=True, indent=2) + '\n'
-        if args.report:
-            args.report.parent.mkdir(parents=True, exist_ok=True)
-            args.report.write_text(encoded, encoding='utf-8')
         print(encoded, end='')
 
 
 if __name__ == '__main__':
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt('installer verification interrupted')
+    signal.signal(signal.SIGTERM, interrupted)
     main()

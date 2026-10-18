@@ -12,6 +12,7 @@ import socket
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import time
 import sys
 import urllib.parse
@@ -122,6 +123,10 @@ def database_sizes(data_dir):
             for name in ("findrail.db", "findrail.db-wal", "findrail.db-shm")}
 
 
+def directory_file_bytes(root):
+    return sum(path.stat().st_size for path in root.iterdir() if path.is_file())
+
+
 def server_rss_bytes(pid):
     # Observe only the actual server child; never report Python's RSS as its own.
     if platform.system() == "Linux":
@@ -135,6 +140,20 @@ def server_rss_bytes(pid):
     return None
 
 
+def host_processor():
+    value = platform.processor().strip()
+    if not value and platform.system() == "Linux":
+        try:
+            with Path("/proc/cpuinfo").open(encoding="ascii", errors="replace") as cpuinfo:
+                for line in cpuinfo:
+                    if line.lower().startswith(("model name", "hardware")) and ":" in line:
+                        value = line.split(":", 1)[1].strip()
+                        break
+        except OSError:
+            pass
+    return value[:100] if value else "unavailable"
+
+
 def remaining_timeout(deadline, maximum):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -143,28 +162,157 @@ def remaining_timeout(deadline, maximum):
 
 
 def paging_profile(base_url, expected, deadline):
-    """Measure the existing seeded workload through the bounded cursor API."""
-    ids, sizes, latencies = [], [], []
-    cursor = None
-    for _ in range(10):
-        params = {"q": QUERIES["common"], "limit": 100}
-        if cursor: params["cursor"] = cursor
-        started = time.perf_counter()
-        with urllib.request.urlopen(base_url + "/api/v1/search/pages?" + urllib.parse.urlencode(params),
-                                    timeout=remaining_timeout(deadline, 10)) as response:
-            raw = response.read((512 << 10) + 1)
-        latencies.append((time.perf_counter() - started) * 1000); sizes.append(len(raw))
-        if len(raw) > 512 << 10: raise RuntimeError("page exceeded encoded response cap")
-        page = json.loads(raw)
-        if page["total"] != expected or page["offset"] != len(ids): raise RuntimeError("paging fixture shape changed")
-        ids.extend(item["id"] for item in page["results"])
-        cursor = page["next_cursor"]
-        if cursor is None:
-            if page["end_reason"] != "complete": raise RuntimeError("paging window incomplete")
-            break
-    if cursor or len(ids) != expected or len(set(ids)) != expected: raise RuntimeError("paging lost or duplicated results")
-    return {"pages": len(sizes), "returned": len(ids), "beyond_237": len(ids) > 237,
-            "max_response_bytes": max(sizes), "latency_ms": latency_summary(latencies)}
+    """Exercise real page sizes and traverse only the API's 1,000-result window."""
+    profiles = {}
+    reference_order = None
+    for page_size in (20, 50, 100):
+        ids, sizes, latencies, previous = [], [], [], None
+        cursor = None
+        while len(ids) < min(expected, 1000):
+            params = {"q": QUERIES["common"], "limit": page_size}
+            if cursor: params["cursor"] = cursor
+            started = time.perf_counter()
+            with urllib.request.urlopen(base_url + "/api/v1/search/pages?" + urllib.parse.urlencode(params),
+                                        timeout=remaining_timeout(deadline, 10)) as response:
+                raw = response.read((512 << 10) + 1)
+            latencies.append((time.perf_counter() - started) * 1000); sizes.append(len(raw))
+            if len(raw) > 512 << 10: raise RuntimeError("page exceeded encoded response cap")
+            page = json.loads(raw)
+            if page["total"] != expected or page["offset"] != len(ids): raise RuntimeError("paging fixture shape changed")
+            batch = [item["id"] for item in page["results"]]
+            if not batch or batch[0] == previous: raise RuntimeError("paging order contains duplicate boundary")
+            ids.extend(batch); previous = batch[-1]; cursor = page["next_cursor"]
+            if cursor is None:
+                expected_end = "window_limit" if expected > 1000 else "complete"
+                if page.get("end_reason") != expected_end:
+                    raise RuntimeError("paging returned an unexpected window end reason")
+                break
+        target = min(expected, 1000)
+        if len(ids) != target or len(set(ids)) != target: raise RuntimeError("paging lost or duplicated results")
+        if expected > 1000 and cursor is not None: raise RuntimeError("paging exceeded the result window")
+        if expected <= 1000 and cursor is not None: raise RuntimeError("paging window did not complete")
+        if reference_order is not None and ids != reference_order:
+            raise RuntimeError("paging order changed with page size")
+        reference_order = ids
+        profiles[str(page_size)] = {"pages": len(sizes), "returned": len(ids),
+                                    "window_complete": expected <= 1000,
+                                    "sample_count": len(latencies), "warmup_requests": 0,
+                                    "max_response_bytes": max(sizes), "latency_ms": latency_summary(latencies)}
+    legacy = profiles["100"]
+    target = min(expected, 1000)
+    return {"window_limit": 1000, "total": expected, "pages": legacy["pages"],
+            "returned": target, "beyond_237": target > 237,
+            "max_response_bytes": legacy["max_response_bytes"],
+            "latency_ms": legacy["latency_ms"], "page_sizes": profiles}
+
+
+def refresh_profile(binary, data_dir, source, base_url, expected, deadline):
+    """Measure one committed refresh and one canceled full scan under HTTP reads."""
+    if os.name != "posix":
+        raise RuntimeError("refresh cancellation workload requires POSIX SIGTERM")
+    index_args = [str(binary), "index", "--json", "--data-dir", str(data_dir),
+                  "--max-bytes", str(1 << 20), "--max-pdf-bytes", str(1 << 20), str(source)]
+    first = source / "doc-000000.md"
+    first.write_bytes(first.read_bytes() + b"\nrefreshpassageone\n")
+    started = time.perf_counter()
+    refreshed = run(index_args, remaining_timeout(deadline, MAX_SECONDS))
+    refresh_ms = (time.perf_counter() - started) * 1000
+    refresh_result = json.loads(refreshed.stdout)
+    if int(refresh_result.get("updated", 0)) != 1:
+        raise RuntimeError("successful refresh did not update exactly one synthetic document")
+
+    # Change a second document, then exercise read availability during the scan
+    # that will be canceled. The saved source/index are owned by this harness.
+    second = source / "doc-000001.go"
+    original = second.read_bytes()
+    second.write_bytes(original + b"\n// refreshpassagetwo\n")
+    stop_reads = threading.Event()
+    read_ready = threading.Event()
+    read_samples = []
+    read_errors = []
+
+    def read_loop():
+        while not stop_reads.is_set():
+            try:
+                started_read = time.perf_counter()
+                with urllib.request.urlopen(base_url + "/api/v1/search?" +
+                                            urllib.parse.urlencode({"q": QUERIES["common"], "limit": 1}),
+                                            timeout=remaining_timeout(deadline, 15)) as response:
+                    obj = json.loads(response.read(1 << 20))
+                actual_total = int(obj.get("total", -1))
+                if actual_total != expected:
+                    read_errors.append("count_mismatch_expected_" + str(expected) +
+                                       "_actual_" + str(actual_total))
+                    return
+                read_samples.append((time.perf_counter() - started_read) * 1000)
+                read_ready.set()
+            except urllib.error.HTTPError as exc:
+                read_errors.append("http_" + str(exc.code))
+                return
+            except urllib.error.URLError as exc:
+                read_errors.append("connection_error")
+                return
+            except json.JSONDecodeError:
+                read_errors.append("invalid_json")
+                return
+            except BaseException as exc:
+                read_errors.append(type(exc).__name__)
+                return
+
+    reader = threading.Thread(target=read_loop, name="resource-refresh-read", daemon=True)
+    child = subprocess.Popen(index_args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, shell=False)
+    reader_started = False
+    try:
+        reader.start()
+        reader_started = True
+        canceled_started = time.perf_counter()
+        # Keep the refresh alive until both the minimum overlap and a real read
+        # completion have been observed; never wait beyond the shared deadline.
+        overlap_deadline = time.monotonic() + min(5, remaining_timeout(deadline, 5))
+        while time.monotonic() - canceled_started < .25 or not read_ready.is_set():
+            if read_errors:
+                raise RuntimeError("concurrent read failed during refresh: " + read_errors[0])
+            if time.monotonic() >= overlap_deadline:
+                raise TimeoutError("no concurrent read completed during refresh")
+            remaining_timeout(deadline, 1)
+            time.sleep(.02)
+        if child.poll() is not None:
+            raise RuntimeError("refresh completed before cancellation could be measured")
+        child.terminate()
+        child.communicate(timeout=remaining_timeout(deadline, 10))
+        canceled_ms = (time.perf_counter() - canceled_started) * 1000
+        if child.returncode == 0:
+            raise RuntimeError("canceled refresh unexpectedly committed successfully")
+    finally:
+        stop_reads.set()
+        # Cleanup has its own bounded allowance even when the work deadline
+        # expired. A join/start failure must not bypass child termination.
+        try:
+            if reader_started:
+                reader.join(timeout=20)
+        finally:
+            stop_process(child)
+    if reader.is_alive():
+        raise RuntimeError("concurrent read sampler did not stop")
+    if not read_samples:
+        raise RuntimeError("no read search completed during refresh: " + (read_errors[0] if read_errors else "unknown"))
+    if read_errors:
+        raise RuntimeError("concurrent read failed during refresh: " + read_errors[0])
+    with sqlite3.connect((data_dir / "findrail.db").as_uri() + "?mode=ro", uri=True) as db:
+        stored = db.execute("SELECT content FROM documents WHERE path='doc-000001.go'").fetchone()
+    if stored is None or "refreshpassagetwo" in stored[0]:
+        raise RuntimeError("canceled refresh did not preserve the prior committed document")
+    return {"successful_refresh_wall_ms": round(refresh_ms, 3),
+            "successful_refresh_samples": 1,
+            "successful_refresh_updated_documents": int(refresh_result.get("updated", 0)),
+            "canceled_refresh_wall_ms": round(canceled_ms, 3),
+            "canceled_refresh_samples": 1,
+            "canceled_refresh_exit_code": child.returncode,
+            "concurrent_read_samples": len(read_samples),
+            "concurrent_read_latency_ms": latency_summary(read_samples),
+            "concurrent_read_errors": 0,
+            "canceled_scan_preserved_previous_content": True}
 
 
 def bundle_boundary_profile(binary, data_dir, source_id, deadline):
@@ -251,13 +399,15 @@ def main():
     binary = a.binary.resolve(strict=True)
     deadline = time.monotonic() + min(MAX_SECONDS, 300 if a.documents <= 1000 else MAX_SECONDS)
     report = {"schema": 1, "fixture": {"version": FIXTURE_VERSION, "seed": a.seed, "documents_requested": a.documents},
-              "binary": {"sha256": digest_file(binary)}, "environment": {"os": platform.system(), "arch": platform.machine(), "python": platform.python_version()},
+              "binary": {"sha256": digest_file(binary)}, "environment": {"os": platform.system(), "arch": platform.machine(), "processor": host_processor(), "python": platform.python_version()},
               "metrics": {}, "errors": [], "unavailable": ["index_peak_rss: not measured"]}
     try:
         with tempfile.TemporaryDirectory(prefix="findrail-resource-") as temp:
             base = Path(temp); source = base / "source"; data_dir = base / "data"; source.mkdir(); data_dir.mkdir()
             extracted_bytes = generate(source, a.documents, a.seed, deadline)
-            report["fixture"].update(generated_text_input_bytes=extracted_bytes, corpus_sha256=digest_file_manifest(source))
+            report["fixture"].update(generated_text_input_bytes=extracted_bytes,
+                                     generated_source_file_bytes=directory_file_bytes(source),
+                                     corpus_sha256=digest_file_manifest(source))
             t = time.perf_counter()
             indexed = run([str(binary), "index", "--json", "--data-dir", str(data_dir), "--max-bytes", str(1<<20), "--max-pdf-bytes", str(1<<20), str(source)], remaining_timeout(deadline, MAX_SECONDS))
             index_json = json.loads(indexed.stdout)
@@ -334,6 +484,12 @@ def main():
                     per_query[qid] = {"repeats": len(query_latencies), "latency_ms": latency_summary(query_latencies)}
                 if a.source_cycle_boundaries:
                     report["metrics"]["paging_window"] = paging_profile(base_url, expected_counts["common"], deadline)
+                    if a.documents >= 10000:
+                        report["metrics"]["refresh_cycle"] = refresh_profile(
+                            binary, data_dir, source, base_url, expected_counts["common"], deadline)
+                    else:
+                        report["metrics"]["refresh_cycle"] = {
+                            "status": "not_measured", "reason": "long-session refresh requires 10000+ documents"}
             finally:
                 stop_process(server)
             if a.source_cycle_boundaries:
@@ -349,7 +505,7 @@ def main():
             other = a.compare.resolve(strict=True)
             with tempfile.TemporaryDirectory(prefix="findrail-resource-compare-") as temp:
                 other_report = Path(temp) / "report.json"
-                run([os.sys.executable, str(Path(__file__).resolve()), "--binary", str(other), "--documents", str(a.documents), "--seed", str(a.seed), "--queries", str(a.queries), "--report", str(other_report)] + (["--allow-large"] if a.documents == 100000 else []), remaining_timeout(deadline, MAX_SECONDS))
+                run([os.sys.executable, str(Path(__file__).resolve()), "--binary", str(other), "--documents", str(a.documents), "--seed", str(a.seed), "--queries", str(a.queries), "--report", str(other_report)] + (["--allow-large"] if a.documents == 100000 else []) + (["--source-cycle-boundaries"] if a.source_cycle_boundaries else []), remaining_timeout(deadline, MAX_SECONDS))
                 measured = json.loads(other_report.read_text(encoding="utf-8"))
             if measured.get("status") != "success" or measured.get("fixture", {}).get("corpus_sha256") != report["fixture"]["corpus_sha256"]:
                 raise RuntimeError("comparison workload differs or second run was incomplete")

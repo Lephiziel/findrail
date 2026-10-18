@@ -142,6 +142,60 @@ class PackageSafetyTests(unittest.TestCase):
         self.assertIn('Neither the name of Google LLC', package.GO_LICENSE_FALLBACK)
         self.assertIn('specific prior written permission', package.GO_LICENSE_FALLBACK)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX app installer')
+    def test_macos_update_preserves_foreign_predictable_backup_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            resources = root/'package/launcher/macos'
+            resources.mkdir(parents=True)
+            installer = resources/'install-user.sh'
+            shutil.copyfile(package.ROOT/'packaging/desktop/macos/install-user.sh', installer)
+            new = root/'package/Findrail.app/Contents/MacOS'
+            new.mkdir(parents=True)
+            (new/'Findrail').write_text('new executable')
+            destination = root/'owned applications'
+            old = destination/'Findrail.app/Contents'
+            old.mkdir(parents=True)
+            (old/'.findrail-managed').write_text('org.findrail.desktop')
+            wrapper = ('foreign="$1/.Findrail.app.previous.$$"; mkdir "$foreign"; '
+                       'printf "foreign data" > "$foreign/keep"; '
+                       'exec sh "$2" --destination "$1"')
+            subprocess.run(['sh','-c',wrapper,'sh',str(destination),str(installer)],
+                           check=True, capture_output=True, timeout=5)
+            kept = list(destination.glob('.Findrail.app.previous.*/keep'))
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(kept[0].read_text(), 'foreign data')
+            self.assertEqual((destination/'Findrail.app/Contents/MacOS/Findrail').read_text(), 'new executable')
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX app installer')
+    def test_macos_failed_publication_restores_previous_app(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            resources = root/'package/launcher/macos'
+            resources.mkdir(parents=True)
+            installer = resources/'install-user.sh'
+            shutil.copyfile(package.ROOT/'packaging/desktop/macos/install-user.sh', installer)
+            new = root/'package/Findrail.app/Contents/MacOS'
+            new.mkdir(parents=True)
+            (new/'Findrail').write_text('new executable')
+            destination = root/'owned applications'
+            old = destination/'Findrail.app/Contents'
+            (old/'MacOS').mkdir(parents=True)
+            (old/'MacOS/Findrail').write_text('previous executable')
+            (old/'.findrail-managed').write_text('org.findrail.desktop')
+            adapters = root/'adapters'; adapters.mkdir()
+            real_mv = shutil.which('mv')
+            (adapters/'mv').write_text('#!/bin/sh\ncase "$1" in */new-app) exit 1;; esac\n'
+                                      'exec "$FINDRAIL_REAL_MV" "$@"\n')
+            (adapters/'mv').chmod(0o755)
+            env = {**os.environ, 'PATH':str(adapters)+os.pathsep+os.environ['PATH'],
+                   'FINDRAIL_REAL_MV':real_mv}
+            result = subprocess.run(['sh',str(installer),'--destination',str(destination)],
+                                    env=env, capture_output=True, timeout=5)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual((old/'MacOS/Findrail').read_text(), 'previous executable')
+            self.assertEqual(list(destination.glob('.Findrail.app.stage.*')), [])
+
     def test_manifest_rejects_paths_duplicates_and_mismatch(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)

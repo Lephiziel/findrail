@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,17 @@ func TestAutomaticLifecycle(t *testing.T) {
 			eventually(t, func() bool { return has("nested", 1) })
 			put(t, other, "nested changed")
 			eventually(t, func() bool { return has("changed", 1) && has("fresh", 0) })
+			if !pollOnly {
+				tmp := filepath.Join(nested, "atomic-save.tmp")
+				put(t, tmp, "atomic replacement marker")
+				if err := os.Rename(tmp, other); err != nil {
+					t.Fatal(err)
+				}
+				eventually(t, func() bool {
+					r, e := s.Search(ctx, search.Request{Query: "atomic", Limit: 20})
+					return e == nil && r.Total == 1 && has("changed", 0)
+				})
+			}
 			if err := os.Rename(path, filepath.Join(root, "renamed.md")); err != nil {
 				t.Fatal(err)
 			}
@@ -143,11 +155,12 @@ func TestMissingRootPreservesSnapshotAndRecovers(t *testing.T) {
 	locks := sourcecoord.New()
 	m := syncer.New(s, syncer.Config{Coordinator: locks, Factory: func(source connector.Source) (*filesystem.Connector, error) {
 		return filesystem.NewWithOptions(source.Root, filesystem.Options{MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken, RegistrationRevision: source.RegistrationRevision})
-	}, Interval: 50 * time.Millisecond, PollOnly: true})
+	}, Interval: 50 * time.Millisecond, PollOnly: false})
 	done := make(chan struct{})
 	go func() { defer close(done); m.Run(ctx) }()
 	defer func() { cancel(); <-done }()
 	eventually(t, func() bool { return len(m.Status()) == 1 && m.Status()[0].State == "idle" })
+	lastSuccessAt := m.Status()[0].LastSuccessAt
 	// Exclude successful polls between the baseline report and moving the root.
 	unlock, err := locks.Acquire(ctx, conn.Source().ID)
 	if err != nil {
@@ -165,6 +178,13 @@ func TestMissingRootPreservesSnapshotAndRecovers(t *testing.T) {
 	}
 	unlock()
 	eventually(t, func() bool { return m.Status()[0].State == "error" })
+	failedStatus := m.Status()[0]
+	if failedStatus.LastErrorCode != "scan_failed" || strings.Contains(failedStatus.LastError, root) || strings.Contains(failedStatus.LastError, moved) {
+		t.Fatalf("refresh error leaked a private path or lacked a stable code: %+v", failedStatus)
+	}
+	if failedStatus.LastSuccessAt != lastSuccessAt {
+		t.Fatalf("failed refresh replaced last successful commit time: before=%s after=%s", lastSuccessAt, failedStatus.LastSuccessAt)
+	}
 	failed := m.Status()[0].Progress
 	if failed.Committed || !failed.Partial || failed.FailureCode != "scan_failed" || failed.Phase != "done" {
 		t.Fatalf("failed watcher attempt progress: %+v", failed)
@@ -188,6 +208,7 @@ func TestMissingRootPreservesSnapshotAndRecovers(t *testing.T) {
 		r, e := s.Search(ctx, search.Request{Query: "recovered", Limit: 20})
 		return e == nil && r.Total == 1
 	})
+	eventually(t, func() bool { return m.Status()[0].Mode == "events" && m.Status()[0].WatchWarningCode == "" })
 	after, err := s.SourceReport(ctx, conn.Source().ID, false)
 	if err != nil {
 		t.Fatal(err)
@@ -305,5 +326,139 @@ func TestRootIgnorePolicyWatcherAtomicRecoveryAndPrunedDiscovery(t *testing.T) {
 	eventually(t, func() bool { return len(m.Status()) == 0 })
 	if has("forgotten", 1) {
 		t.Fatal("forget allowed refresh re-registration")
+	}
+}
+
+func TestForgetReaddWhileOldWorkerWaitsForSourceLock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	root, data := t.TempDir(), t.TempDir()
+	path := filepath.Join(root, "note.md")
+	put(t, path, "new registration survives old refresh")
+	store, err := sqlite.Open(ctx, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	newConnector := func() *filesystem.Connector {
+		t.Helper()
+		c, e := filesystem.New(root, 1<<20, data)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return c
+	}
+	if _, err := ingest.Run(ctx, store, newConnector()); err != nil {
+		t.Fatal(err)
+	}
+	id := newConnector().Source().ID
+	locks := sourcecoord.New()
+	unlock, err := locks.Acquire(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := syncer.New(store, syncer.Config{
+		Factory: func(source connector.Source) (*filesystem.Connector, error) {
+			return filesystem.NewWithOptions(source.Root, filesystem.Options{
+				MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes,
+				MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken,
+				RegistrationRevision: source.RegistrationRevision,
+			}, data)
+		},
+		Coordinator: locks, Interval: time.Hour, DiscoveryInterval: 10 * time.Millisecond,
+		PollOnly: true,
+	})
+	done := make(chan struct{})
+	go func() { defer close(done); m.Run(ctx) }()
+	defer func() { cancel(); unlock(); <-done }()
+	eventually(t, func() bool { return len(m.Status()) == 1 && m.Status()[0].State == "indexing" })
+	oldAttempt := m.Status()[0].Progress.AttemptID
+	registered, err := store.Sources(ctx)
+	if err != nil || len(registered) != 1 {
+		t.Fatalf("read configured source: %+v %v", registered, err)
+	}
+	configured, err := filesystem.NewWithOptions(root, filesystem.Options{
+		MaxTextBytes: registered[0].MaxTextBytes, MaxPDFBytes: registered[0].MaxPDFBytes,
+		MaxDOCXBytes: 1 << 20, RegistrationToken: registered[0].RegistrationToken,
+		RegistrationRevision: registered[0].RegistrationRevision,
+	}, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ingest.Configure(ctx, store, configured, registered[0].RegistrationToken, registered[0].RegistrationRevision, registered[0].MaxDOCXBytes); err != nil {
+		t.Fatalf("configure source while previous worker waits: %v", err)
+	}
+	eventually(t, func() bool {
+		status := m.Status()
+		return len(status) == 1 && status[0].State == "indexing" && status[0].Progress.AttemptID != oldAttempt
+	})
+
+	if err := store.ForgetSource(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool { return len(m.Status()) == 0 })
+	if _, err := ingest.Run(ctx, store, newConnector()); err != nil {
+		t.Fatalf("re-register same source ID: %v", err)
+	}
+	eventually(t, func() bool { return len(m.Status()) == 1 && m.Status()[0].State == "indexing" })
+	newAttempt := m.Status()[0].Progress.AttemptID
+	if newAttempt == "" {
+		t.Fatal("new registration did not start its own refresh attempt")
+	}
+	unlock()
+	eventually(t, func() bool {
+		status := m.Status()
+		return len(status) == 1 && status[0].State == "idle" && status[0].Progress.AttemptID == newAttempt && status[0].Progress.Committed
+	})
+	results, err := store.Search(ctx, search.Request{Query: "survives", Limit: 10})
+	if err != nil || results.Total != 1 {
+		t.Fatalf("re-added source did not retain committed searchable snapshot: %+v %v", results, err)
+	}
+}
+
+func TestShutdownCancelsWorkerWaitingForSourceLock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	root, data := t.TempDir(), t.TempDir()
+	put(t, filepath.Join(root, "note.md"), "committed before shutdown")
+	store, err := sqlite.Open(ctx, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	conn, err := filesystem.New(root, 1<<20, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ingest.Run(ctx, store, conn); err != nil {
+		t.Fatal(err)
+	}
+	locks := sourcecoord.New()
+	unlock, err := locks.Acquire(ctx, conn.Source().ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := syncer.New(store, syncer.Config{
+		Factory: func(source connector.Source) (*filesystem.Connector, error) {
+			return filesystem.NewWithOptions(source.Root, filesystem.Options{
+				MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes,
+				MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken,
+				RegistrationRevision: source.RegistrationRevision,
+			}, data)
+		},
+		Coordinator: locks, PollOnly: true, DiscoveryInterval: 10 * time.Millisecond,
+	})
+	done := make(chan struct{})
+	go func() { defer close(done); m.Run(ctx) }()
+	eventually(t, func() bool { return len(m.Status()) == 1 && m.Status()[0].State == "indexing" })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("manager shutdown leaked a worker waiting on the source lock")
+	}
+	unlock()
+	results, err := store.Search(context.Background(), search.Request{Query: "committed", Limit: 10})
+	if err != nil || results.Total != 1 {
+		t.Fatalf("shutdown disturbed the committed snapshot: %+v %v", results, err)
 	}
 }

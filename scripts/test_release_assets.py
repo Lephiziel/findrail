@@ -131,6 +131,30 @@ class ReleaseAssetTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     candidate_record.summarize(records, assets, browser, revision, '0.1.0-alpha.5')
             path.write_text(json.dumps(original))
+    def test_installer_summary_rejects_missing_or_forged_binary_binding(self):
+        with tempfile.TemporaryDirectory() as temp:
+            records, assets, browser, revision, _ = self.summary_fixture(pathlib.Path(temp))
+            path = records/'linux-amd64/verification.json'
+            original = json.loads(path.read_text())
+            for change in ('missing', 'empty', 'malformed', 'coherent_forgery', 'wrong_cli'):
+                bad = copy.deepcopy(original)
+                if change == 'missing':
+                    bad.pop('desktop_binary_sha256')
+                    bad['installer_lifecycle'].pop('binary_sha256')
+                elif change in ('empty', 'malformed'):
+                    value = '' if change == 'empty' else 'not-a-sha256'
+                    bad['desktop_binary_sha256'] = value
+                    bad['installer_lifecycle']['binary_sha256'] = value
+                elif change == 'coherent_forgery':
+                    bad['desktop_binary_sha256'] = '0'*64
+                    bad['installer_lifecycle']['binary_sha256'] = '0'*64
+                else:
+                    bad['binary_sha256'] = '0'*64
+                path.write_text(json.dumps(bad))
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    candidate_record.summarize(records, assets, browser, revision, '0.1.0-alpha.5')
+            path.write_text(json.dumps(original))
+
     def test_native_failure_does_not_relabel_clean_source_as_dirty(self):
         with tempfile.TemporaryDirectory() as temp:
             source, revision = self.candidate(pathlib.Path(temp), version='0.1.0-alpha.5', schema=8)

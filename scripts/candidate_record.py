@@ -189,6 +189,10 @@ def require_installer_lifecycle(record):
     report = record.get("installer_lifecycle")
     if not isinstance(report, dict):
         raise ValueError("native installer lifecycle report is missing")
+    for value in (record.get("desktop_binary_sha256"), report.get("binary_sha256"),
+                  report.get("archive_sha256")):
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError("native installer lifecycle digest is missing or invalid")
     if (not expected_os or not machines or report.get("candidate_sha") != record.get("candidate_sha") or
             report.get("candidate_version") != record.get("candidate_version") or report.get("os") != expected_os or
             report.get("status") != "passed" or
@@ -296,6 +300,16 @@ def summarize(native_directory, assets, browser_report, revision, version):
         if archive["sha256"] != digest(actual) or archive["size"] != actual.stat().st_size:
             raise ValueError("native record archive differs from the aggregated asset")
         require_installer_lifecycle(record)
+        with tempfile.TemporaryDirectory(prefix="findrail-installer-identity-") as temporary:
+            extracted = package.extract_verified(actual, pathlib.Path(temporary) / "extract")
+            target = record["target"]
+            desktop = extracted / ("findrail-desktop.exe" if target.startswith("windows-") else
+                                   "Findrail.app/Contents/MacOS/Findrail" if target.startswith("darwin-") else
+                                   "findrail-desktop")
+            cli = extracted / ("findrail.exe" if target.startswith("windows-") else "findrail")
+            if (record.get("desktop_binary_sha256") != digest(desktop) or
+                    record.get("binary_sha256") != digest(cli)):
+                raise ValueError("native executable digests differ from the aggregated archive")
     browser = read_record(browser_report)
     linux = next(record for record in records if record["target"] == "linux-amd64")
     require_resources(linux, revision)

@@ -25,6 +25,7 @@ import (
 	"github.com/Lephiziel/findrail/internal/snapshot"
 	"github.com/Lephiziel/findrail/internal/sourceapp"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
+	syncer "github.com/Lephiziel/findrail/internal/sync"
 	transport "github.com/Lephiziel/findrail/internal/transport/http"
 	"github.com/Lephiziel/findrail/pkg/connector"
 )
@@ -111,6 +112,41 @@ func TestLocalSearchAPIAndBrowserBoundary(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestSyncStatusExposesOptionalSafeWarningCode(t *testing.T) {
+	store, err := sqlite.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	handler := transport.Handler(store, transport.WithSyncStatus(true, func() []syncer.Status {
+		return []syncer.Status{{
+			SourceID: "source", State: "idle", Mode: "polling",
+			WatchWarning:     "File change notifications are unavailable; periodic refresh remains active.",
+			WatchWarningCode: "watch_unavailable",
+		}}
+	}))
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7766/api/v1/sync", nil)
+	req.Host = "127.0.0.1:7766"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("sync status returned %d: %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Enabled bool            `json:"enabled"`
+		Sources []syncer.Status `json:"sources"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Enabled || len(payload.Sources) != 1 || payload.Sources[0].WatchWarningCode != "watch_unavailable" {
+		t.Fatalf("optional warning code missing from API response: %+v", payload)
+	}
+	if strings.Contains(response.Body.String(), "/private/") || strings.Contains(response.Body.String(), "permission denied") {
+		t.Fatalf("sync response leaked raw watcher diagnostics: %s", response.Body.String())
 	}
 }
 
