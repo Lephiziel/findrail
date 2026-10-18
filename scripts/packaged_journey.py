@@ -13,6 +13,10 @@ import subprocess
 import sys
 import tempfile
 
+import package
+from candidate_record import CaseRecorder, digest, run_identity
+from upgrade_smoke import directory_digest
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -53,10 +57,74 @@ def validate_candidate(binary, revision, version):
     if (not system or not machine or metadata.get("dirty") is not False or
             (metadata.get("revision"), metadata.get("version"), metadata.get("target")) != (revision, version, target)):
         raise ValueError("BUILD-INFO.json must match candidate SHA/version, be clean, and target this runner")
+    if package.build_info_schema(metadata) != package.schema_version():
+        raise ValueError("candidate schema must match the checked-out source")
     actual = command([str(binary), "version"]).stdout.strip()
     if actual != f"findrail {version}":
         raise ValueError(f"candidate executable version mismatch: {actual!r}")
     return metadata
+
+
+def doctor_integrity(binary, scratch):
+    source, data = scratch / "integrity-fixture", scratch / "integrity-index"
+    source.mkdir()
+    (source / "note.md").write_text("Synthetic integrity fixture. 雪 😀", encoding="utf-8")
+    command([str(binary), "index", "--data-dir", str(data), str(source)])
+    before, db_before = directory_digest(data), digest(data / "findrail.db")
+    ordinary = json.loads(command([str(binary), "doctor", "--data-dir", str(data), "--json"]).stdout)
+    assert not any(check["id"].startswith("integrity") for check in ordinary["checks"])
+    result = json.loads(command([str(binary), "doctor", "--data-dir", str(data), "--integrity", "--json"]).stdout)
+    metadata = json.loads((binary.parent / "BUILD-INFO.json").read_text(encoding="utf-8"))
+    assert result["version"] == metadata["version"] and result.get("revision") == metadata["revision"]
+    assert result["provenance"] == "clean" and result["go_version"] in metadata["go_version"]
+    checks = {check["id"]: check for check in result["checks"]}
+    assert result["index_schema"] == result["current_write_schema"] == 8
+    for phase in ("quick_check", "foreign_key_check"):
+        check = checks["integrity_" + phase]
+        assert check["status"] == "ok" and check["code"] == phase + "_completed", check
+    after = directory_digest(data)
+    assert digest(data / "findrail.db") == db_before, "doctor changed database bytes"
+    # SQLite mode=ro can create empty WAL and bookkeeping SHM sidecars. Record
+    # the actual full-directory fingerprints, rather than claiming byte-for-byte
+    # directory identity or disabling WAL locking with unsafe immutable reads.
+    assert all(p.name in ("findrail.db", "findrail.db-wal", "findrail.db-shm") for p in data.iterdir())
+    wal = data / "findrail.db-wal"
+    assert not wal.exists() or wal.stat().st_size == 0, "doctor produced WAL content"
+
+    broken = scratch / "integrity-fk-conflict"
+    shutil.copytree(data, broken)
+    connection = sqlite3.connect(broken / "findrail.db")
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("UPDATE documents SET source_id='synthetic-missing-source'")
+        connection.commit()
+    finally:
+        connection.close()
+    broken_before = digest(broken / "findrail.db")
+    failed = command([str(binary), "doctor", "--data-dir", str(broken), "--integrity", "--json"], ok=False)
+    fk = next(check for check in json.loads(failed.stdout)["checks"] if check["id"] == "integrity_foreign_key_check")
+    assert failed.returncode == 2 and fk["status"] == "error" and fk["code"] == "foreign_key_check_issue", fk
+    assert digest(broken / "findrail.db") == broken_before
+
+    incomplete = scratch / "integrity-incomplete"
+    shutil.copytree(data, incomplete)
+    connection = sqlite3.connect(incomplete / "findrail.db")
+    try:
+        connection.execute("PRAGMA writable_schema=ON")
+        connection.execute("UPDATE sqlite_master SET sql='not valid SQL' WHERE name='documents'")
+        connection.commit()
+    finally:
+        connection.close()
+    incomplete_before = digest(incomplete / "findrail.db")
+    failed = command([str(binary), "doctor", "--data-dir", str(incomplete), "--integrity", "--json"], ok=False)
+    phases = [check for check in json.loads(failed.stdout)["checks"] if check["id"].startswith("integrity_")]
+    assert failed.returncode == 2 and phases and all(check["status"] == "error" for check in phases), phases
+    assert any(check["code"].endswith("_incomplete") for check in phases), phases
+    assert digest(incomplete / "findrail.db") == incomplete_before
+    return {"schema": 8, "stopped_directory_before_sha256": before, "stopped_directory_after_sha256": after,
+            "database_bytes_unchanged": True, "full_directory_unchanged": before == after,
+            "sqlite_readonly_sidecars_may_be_created": True, "structural_and_fk_completed": True,
+            "fk_conflict_rejected": True, "incomplete_is_not_healthy": True, "ordinary_doctor_remains_lightweight": True}
 
 
 def evaluate(binary, scratch):
@@ -138,46 +206,55 @@ def main():
     parser.add_argument("--report", type=pathlib.Path, help="write per-case JSON report")
     parser.add_argument("--skip-browser", action="store_true")
     args = parser.parse_args()
-    binary = args.binary.resolve(strict=True)
-    if not os.access(binary, os.X_OK):
-        raise SystemExit("candidate binary is not executable")
-    metadata = validate_candidate(binary, args.candidate_sha, args.candidate_version)
-    cases = []
-    with tempfile.TemporaryDirectory(prefix="findrail packaged journey ") as directory:
-        scratch = pathlib.Path(directory)
-        cases.append(evaluate(binary, scratch))
-        smokes = ["search_smoke.py", "mcp_smoke.py", "portable_smoke.py", "diagnostics_smoke.py", "ignore_policy_smoke.py"]
-        for smoke in smokes:
-            command([sys.executable, str(ROOT / "scripts" / smoke), str(binary)], timeout=300)
-            cases.append({"case": smoke, "status": "passed"})
-        command([sys.executable, str(ROOT / "scripts/upgrade_smoke.py"), str(binary),
-                 "--alpha3-binary", str(args.alpha3_binary.resolve(strict=True)),
-                 "--alpha4-binary", str(args.alpha4_binary.resolve(strict=True))], timeout=300)
-        cases.extend([
-            {"case": "alpha2_schema2_upgrade_restore", "status": "passed"},
-            {"case": "alpha3_schema6_upgrade_restore", "status": "passed"},
-            {"case": "published_alpha4_schema7_to_schema8_saved_collection_restore_and_atomic_rollback", "status": "passed"},
-        ])
-        command([sys.executable, str(ROOT / "scripts/desktop_launch_smoke.py"), str(binary)], timeout=90)
-        cases.append({"case": "desktop_launch_smoke.py", "status": "passed"})
-        if not args.skip_browser:
-            command([sys.executable, str(ROOT / "scripts/packaged_browser_journey.py"), str(binary)], timeout=300)
-            cases.append({"case": "packaged_browser_journey.py", "status": "passed"})
-            cases.append({"case": "single_browser_schema8_folder_diagnostics_passage_collection_forget_quit_lifecycle", "status": "passed"})
-            command([sys.executable, str(ROOT / "scripts/persistent_collection_smoke.py"), str(binary)], timeout=600)
-            cases.append({"case": "persistent_collection_smoke.py", "status": "passed"})
-            command([sys.executable, str(ROOT / "scripts/evidence_collection_smoke.py"), str(binary)], timeout=600)
-            cases.append({"case": "evidence_collection_smoke.py", "status": "passed"})
+    binary = args.binary.resolve()
     report = {"candidate_sha": args.candidate_sha, "candidate_version": args.candidate_version,
-              "schema_version": metadata.get("schema_version"), "target": metadata.get("target"),
-              "source_clean": metadata.get("dirty") is False,
-              "binary": binary.name, "os": platform.platform(), "python": platform.python_version(),
-              "go": metadata.get("go_version"), "browser_skipped": args.skip_browser, "cases": cases}
-    encoded = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
-    if args.report:
-        args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(encoded, encoding="utf-8")
-    print(encoded, end="")
+              "status": "running", **run_identity(), "browser_skipped": args.skip_browser, "cases": []}
+    recorder = CaseRecorder(report, args.report)
+    try:
+        metadata = recorder.run("exact_native_candidate_identity",
+                                lambda: validate_candidate(binary, args.candidate_sha, args.candidate_version))
+        report.update(schema_version=metadata["schema_version"], target=metadata["target"],
+                      source_clean=metadata["dirty"] is False, binary=binary.name,
+                      binary_sha256=digest(binary), go=metadata.get("go_version"))
+        with tempfile.TemporaryDirectory(prefix="findrail packaged journey ") as directory:
+            scratch = pathlib.Path(directory)
+            recorder.run("protected_evaluate_corpus_and_legacy_limit", lambda: evaluate(binary, scratch))
+            recorder.run("doctor_integrity_stopped_directory", lambda: doctor_integrity(binary, scratch))
+            for script in ["search_smoke.py", "mcp_smoke.py", "portable_smoke.py", "diagnostics_smoke.py", "ignore_policy_smoke.py"]:
+                recorder.run(script, lambda script=script: run_script(script, binary, timeout=300))
+            recorder.run("synthetic_schema2_published_alpha3_and_alpha4_upgrade_restore_rollback",
+                         lambda: run_script("upgrade_smoke.py", binary, "--alpha3-binary",
+                                            args.alpha3_binary.resolve(strict=True), "--alpha4-binary",
+                                            args.alpha4_binary.resolve(strict=True), timeout=300))
+            recorder.run("desktop_launch_smoke.py", lambda: run_script("desktop_launch_smoke.py", binary, timeout=90))
+            browser_scripts = ["packaged_browser_journey.py", "persistent_collection_smoke.py",
+                               "evidence_collection_smoke.py", "evidence_bundle_browser_smoke.py",
+                               "search_preset_browser_smoke.py"]
+            if args.skip_browser:
+                report["cases"].extend({"case": script, "status": "skipped"} for script in browser_scripts)
+            else:
+                for script in browser_scripts:
+                    def browser_operation(script=script):
+                        if script != "packaged_browser_journey.py":
+                            return run_script(script, binary, timeout=600)
+                        details_path = scratch / "common-browser-cases.json"
+                        try:
+                            run_script(script, binary, "--report", details_path, timeout=600)
+                        finally:
+                            if details_path.is_file():
+                                report["cases"][-1]["details"] = json.loads(details_path.read_text(encoding="utf-8"))
+                    recorder.run(script, browser_operation)
+        report["status"] = "incomplete" if args.skip_browser else "passed"
+    except BaseException:
+        report["status"] = "failed"
+        raise
+    finally:
+        recorder.save()
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+
+
+def run_script(script, binary, *arguments, timeout):
+    command([sys.executable, str(ROOT / "scripts" / script), str(binary), *map(str, arguments)], timeout=timeout)
 
 
 if __name__ == "__main__":

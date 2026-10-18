@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fresh-index, UI-added-folder, restart browser journey on an extracted binary."""
+import argparse
 import json
 import os
 import pathlib
@@ -21,6 +22,8 @@ from selenium.webdriver.support.ui import Select
 
 sys.dont_write_bytecode = True
 from smoke import docx_fixture, pdf_fixture
+from candidate_record import CaseRecorder
+from source_cycle_browser import run as source_cycle
 
 
 def free_port():
@@ -30,7 +33,16 @@ def free_port():
 
 
 def main():
-    binary = pathlib.Path(sys.argv[1]).resolve(strict=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary", type=pathlib.Path)
+    parser.add_argument("--report", type=pathlib.Path)
+    args = parser.parse_args()
+    binary = args.binary.resolve(strict=True)
+    report = {"status": "running", "cases": []}
+    recorder = CaseRecorder(report, args.report)
+    basic_case = {"case": "empty_start_folder_paging_quotes_originals_reload_restart", "status": "running"}
+    report["cases"].append(basic_case)
+    recorder.save()
     with tempfile.TemporaryDirectory(prefix="Findrail packaged journey – ") as temporary:
         base = pathlib.Path(temporary)
         root, data = base / "fixture notes – 雪", base / "new private index"
@@ -50,6 +62,8 @@ def main():
             "idempotencymarker familiar synthetic note. <script>window.fixturePwned=true</script>", encoding="utf-8")
         (root / "runbook.pdf").write_bytes(pdf_fixture(["firstpage unique alpha", "secondpage page2journey unique beta"]))
         (root / "meeting.docx").write_bytes(docx_fixture("docxjourney unique word text"))
+        (root / "late.md").write_text("padding " * 10000 + "needletextlate exact text quote 😀e\u0301", encoding="utf-8")
+        (root / "late.docx").write_bytes(docx_fixture("padding " * 10000 + "needledocxlate exact Word quote 😀e\u0301"))
         for index in range(260):
             (root / f"paging-{index:03}.md").write_text(
                 f"pagingjourney shared ranking unicode雪 synthetic document {index:03}\n", encoding="utf-8")
@@ -90,6 +104,9 @@ def main():
             options.add_experimental_option("prefs", {"download.default_directory": str(base), "download.prompt_for_download": False})
             driver = os.environ.get("FINDRAIL_CHROMEDRIVER")
             browser = webdriver.Chrome(service=Service(executable_path=driver) if driver else Service(), options=options)
+            report["chrome"] = browser.capabilities["browserVersion"]
+            report["chromedriver"] = browser.capabilities["chrome"]["chromedriverVersion"].split()[0]
+            assert report["chrome"] == report["chromedriver"] == "139.0.7258.66", "browser/driver differ from the controlled pin"
             browser.set_page_load_timeout(15)
             wait = WebDriverWait(browser, 20)
             browser.get(url + "/")
@@ -114,7 +131,7 @@ def main():
                 with urllib.request.urlopen(url + "/api/v1/sources", timeout=3) as response:
                     inventory = json.load(response)["sources"]
                 fingerprint = tuple((item["documents"], item.get("last_indexed_at")) for item in inventory)
-                if inventory and inventory[0]["documents"] == 263 and fingerprint == stable_inventory:
+                if inventory and inventory[0]["documents"] == 265 and fingerprint == stable_inventory:
                     if time.monotonic() - stable_since >= 2:
                         break
                 else:
@@ -293,8 +310,24 @@ def main():
             assert browser.find_element(By.ID, "collection-count").text == "0"
             search("idempotencymarker")
             assert "1 matching" in browser.find_element(By.ID, "status").text
-            print("Packaged browser journey passed: bounded cursor navigation beyond 237 results, First/Previous and backend ID agreement; empty start, UI Add folder, committed source/DOCX policy, search, preview, controlled original/folder adapters, exact selected quote, duplicate, PDF page 2, Markdown bytes, reload and restart.")
+            basic_case["status"] = "passed"
+
+            def restart(destination):
+                nonlocal data, server
+                server.terminate(); server.communicate(timeout=8)
+                data = destination
+                server = launch(); ready(server)
+                browser.get(url + "/")
+
+            source_cycle(browser, base, root, url, restart, recorder, run_paging_journey)
+            report["status"] = "passed"
+            print("Common packaged browser journey passed: Unicode folder/paging/late citations/notes/bundle transfer/preset remap/snapshot jobs/frozen search/restart/Forget.")
+        except BaseException as exc:
+            report["status"] = "failed"
+            if basic_case["status"] == "running": basic_case.update(status="failed", error_type=type(exc).__name__)
+            raise
         finally:
+            recorder.save()
             if browser:
                 browser.quit()
             if server.poll() is None:
