@@ -238,6 +238,19 @@ func runCrashCase(t *testing.T, operation string) {
 	if err := os.MkdirAll(evidenceDir, 0700); err != nil {
 		t.Fatal(err)
 	}
+	reportPath := filepath.Join(evidenceDir, "findrail-recovery-"+operation+".json")
+	report := caseReport{Case: operation, Status: "failed", Phase: "starting"}
+	started := time.Now()
+	defer func() {
+		report.DurationMillis = time.Since(started).Milliseconds()
+		if err := writeReport(reportPath, report); err != nil {
+			t.Errorf("write recovery report: %v", err)
+		}
+	}()
+
+	if err := writeReport(reportPath, report); err != nil {
+		t.Fatal(err)
+	}
 	dataDir := filepath.Join(root, "data")
 	store, err := sqlite.Open(ctx, dataDir)
 	if err != nil {
@@ -323,13 +336,6 @@ func runCrashCase(t *testing.T, operation string) {
 		t.Fatal(err)
 	}
 	barrier := filepath.Join(root, "barrier")
-	reportPath := filepath.Join(evidenceDir, "findrail-recovery-"+operation+".json")
-	report := caseReport{Case: operation, Status: "failed", Phase: "starting"}
-	started := time.Now()
-	defer func() {
-		report.DurationMillis = time.Since(started).Milliseconds()
-		writeReport(reportPath, report)
-	}()
 
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCrashHelper$")
 	cmd.Env = append(os.Environ(), "FINDRAIL_RECOVERY_HELPER=1", "FINDRAIL_RECOVERY_DATA="+dataDir, "FINDRAIL_RECOVERY_BARRIER="+barrier, "FINDRAIL_RECOVERY_OPERATION="+operation)
@@ -601,7 +607,7 @@ type caseReport struct {
 	Platform       string `json:"platform"`
 }
 
-func writeReport(path string, report caseReport) {
+func writeReport(path string, report caseReport) error {
 	if exe, err := os.Executable(); err == nil {
 		if file, err := os.Open(exe); err == nil {
 			h := sha256.New()
@@ -621,9 +627,26 @@ func writeReport(path string, report caseReport) {
 	}
 	report.Schema = sqlite.CurrentWriteSchema()
 	report.Platform = runtime.GOOS + "/" + runtime.GOARCH
-	b, _ := json.Marshal(report)
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0600) == nil {
-		_ = os.Rename(tmp, path)
+	b, err := json.Marshal(report)
+	if err != nil {
+		return err
 	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".findrail-recovery-*.json")
+	if err != nil {
+		return err
+	}
+	tmp := file.Name()
+	defer os.Remove(tmp)
+	if _, err = file.Write(b); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err = file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

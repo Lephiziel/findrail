@@ -8,6 +8,7 @@ the exact --binary argument against isolated synthetic source/data directories.
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -16,17 +17,22 @@ import sys
 import tempfile
 import time
 
+from packaged_journey import command
+
 
 def atomic_report(path: Path, report: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(report, stream, separators=(",", ":"), sort_keys=True)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(report, stream, separators=(",", ":"), sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def sha256_file(path: Path) -> str:
@@ -38,8 +44,18 @@ def sha256_file(path: Path) -> str:
 
 
 def invoke(binary: Path, args: list[str], timeout: float) -> subprocess.CompletedProcess:
-    return subprocess.run([str(binary), *args], stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, timeout=timeout, check=False)
+    # Reuse the existing bounded-output, process-tree runner for every command,
+    # including seeding and read-only verification after the controlled kill.
+    return command([str(binary), *args], timeout=timeout)
+
+
+def kill_group(process: subprocess.Popen) -> None:
+    # The leader can exit before its descendants. Always drain the group.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait(timeout=5)
 
 
 def search_total(binary: Path, data: Path, query: str, timeout: float) -> int:
@@ -68,7 +84,7 @@ def has_open_database(pid: int, db: Path) -> bool:
     return False
 
 
-def run(args: argparse.Namespace) -> dict:
+def run(args: argparse.Namespace, report: dict) -> dict:
     if not sys.platform.startswith("linux"):
         raise RuntimeError("candidate SIGKILL journey is Linux-specific")
     binary = args.binary.resolve(strict=True)
@@ -83,20 +99,28 @@ def run(args: argparse.Namespace) -> dict:
     data = work / "data"
     source = work / "synthetic-source"
     source.mkdir(mode=0o700)
-    report = {"case": "candidate_refresh_sigkill", "status": "failed",
-              "duration_ms": 0, "phase": "preparing", "binary_sha256": digest,
-              "revision": args.revision, "schema": args.schema, "platform": "linux"}
-    started = time.monotonic()
+    report.update(phase="preparing", binary_sha256=digest)
+    deadline = time.monotonic() + args.deadline
+
+    def remaining() -> float:
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            raise TimeoutError("candidate journey deadline exceeded")
+        return budget
+
     proc = None
     try:
         note = source / "note.txt"
         note.write_text("candidateoldtoken\n" + "safe synthetic filler " * 500_000,
                         encoding="utf-8")
+        removed = source / "removed.txt"
+        removed.write_text("candidateprunedtoken", encoding="utf-8")
         seed = invoke(binary, ["index", "--data-dir", str(data), "--max-bytes",
-                              "33554432", str(source)], args.deadline)
+                              "33554432", str(source)], remaining())
         if seed.returncode:
             raise RuntimeError("candidate could not seed the synthetic index")
-        if search_total(binary, data, "candidateoldtoken", args.deadline) != 1:
+        if (search_total(binary, data, "candidateoldtoken", remaining()) != 1 or
+                search_total(binary, data, "candidateprunedtoken", remaining()) != 1):
             raise RuntimeError("candidate seed state did not verify")
 
         # Change indexed text and add/remove inventory entries before starting
@@ -105,15 +129,15 @@ def run(args: argparse.Namespace) -> dict:
         note.write_text("candidatenewtoken\n" + "different synthetic filler " * 500_000,
                         encoding="utf-8")
         (source / "added.txt").write_text("candidateaddedtoken", encoding="utf-8")
+        removed.unlink()
         before = set(source.iterdir())
         report["phase"] = "candidate_index_started"
         proc = subprocess.Popen([str(binary), "index", "--data-dir", str(data),
                                  "--max-bytes", "33554432", str(source)],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 start_new_session=True)
-        deadline = time.monotonic() + args.deadline
         observed = False
-        while time.monotonic() < deadline:
+        while remaining() > 0:
             if proc.poll() is not None:
                 raise RuntimeError("candidate completed before controlled termination")
             try:
@@ -124,18 +148,14 @@ def run(args: argparse.Namespace) -> dict:
             if active and cpu > 0 and set(source.iterdir()) == before:
                 observed = True
                 break
+            time.sleep(min(.01, remaining()))
         if not observed:
             raise RuntimeError("candidate did not reach the bounded active-process observation")
         report["phase"] = "terminated_commit_unknown"
-        os.killpg(proc.pid, signal.SIGKILL)
-        try:
-            proc.wait(timeout=args.deadline)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            raise RuntimeError("candidate process group did not terminate before deadline")
+        kill_group(proc)
 
         report["phase"] = "reopened"
-        doctor = invoke(binary, ["doctor", "--data-dir", str(data), "--integrity", "--json"], args.deadline)
+        doctor = invoke(binary, ["doctor", "--data-dir", str(data), "--integrity", "--json"], remaining())
         if doctor.returncode:
             raise RuntimeError("candidate doctor could not inspect the reopened index")
         doctor_report = json.loads(doctor.stdout)
@@ -150,24 +170,17 @@ def run(args: argparse.Namespace) -> dict:
             raise RuntimeError("read-only doctor integrity or foreign-key check did not pass")
         # The two possible complete snapshots are accepted. Mixed states are
         # rejected by checking the changed and added documents together.
-        old = search_total(binary, data, "candidateoldtoken", args.deadline)
-        new = search_total(binary, data, "candidatenewtoken", args.deadline)
-        added = search_total(binary, data, "candidateaddedtoken", args.deadline)
-        if (old, new, added) not in ((1, 0, 0), (0, 1, 1)):
+        old = search_total(binary, data, "candidateoldtoken", remaining())
+        new = search_total(binary, data, "candidatenewtoken", remaining())
+        added = search_total(binary, data, "candidateaddedtoken", remaining())
+        pruned = search_total(binary, data, "candidateprunedtoken", remaining())
+        if (old, new, added, pruned) not in ((1, 0, 0, 1), (0, 1, 1, 0)):
             raise RuntimeError("reopened candidate index is neither the old nor new complete snapshot")
         report["status"] = "passed"
         report["phase"] = "verified_old_or_new_commit_unknown"
     finally:
-        if proc is not None and proc.poll() is None:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            try:
-                proc.wait(timeout=args.deadline)
-            except subprocess.TimeoutExpired:
-                pass
-        report["duration_ms"] = int((time.monotonic() - started) * 1000)
+        if proc is not None:
+            kill_group(proc)
         # Deliberately leave synthetic data in place for diagnosis; caller
         # chooses work_dir and can remove only this uniquely created directory.
     return report
@@ -190,17 +203,30 @@ def main() -> int:
               "duration_ms": 0, "phase": "unexecuted", "revision": args.revision,
               "schema": args.schema, "platform": "linux"}
     started = time.monotonic()
+    atomic_report(args.report, report)
+    previous_term = signal.getsignal(signal.SIGTERM)
+
+    def interrupted(_signum, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupted)
     try:
+        if not math.isfinite(args.deadline) or not 0 < args.deadline <= 120:
+            raise ValueError("deadline must be finite and at most 120 seconds")
         report["binary_sha256"] = sha256_file(args.binary.resolve(strict=True))
-        report = run(args)
+        run(args, report)
+    except KeyboardInterrupt:
+        report["status"] = "interrupted"
+        report["failure_code"] = "interrupted"
     except Exception as exc:
         # Only a stable classification enters evidence, never command output,
         # paths, exception text, or indexed content.
         report["status"] = "failed"
-        report["phase"] = "journey_failed"
         report["failure_code"] = type(exc).__name__
+    finally:
         report["duration_ms"] = int((time.monotonic() - started) * 1000)
-    atomic_report(args.report, report)
+        signal.signal(signal.SIGTERM, previous_term)
+        atomic_report(args.report, report)
     return 0 if report["status"] == "passed" else 1
 
 

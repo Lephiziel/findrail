@@ -63,6 +63,25 @@ func TestWindowsProcessTerminationRecovery(t *testing.T) {
 	defer cancel()
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
+	report := windowsReport{Case: "windows_refresh_before_publish", Status: "failed", Phase: "starting"}
+	started := time.Now()
+	evidenceDir := os.Getenv("FINDRAIL_RECOVERY_REPORT_DIR")
+	if evidenceDir == "" {
+		evidenceDir = os.TempDir()
+	}
+	if err := os.MkdirAll(evidenceDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(evidenceDir, "findrail-recovery-windows.json")
+	defer func() {
+		report.DurationMillis = time.Since(started).Milliseconds()
+		if err := writeWindowsReport(reportPath, report); err != nil {
+			t.Errorf("write recovery report: %v", err)
+		}
+	}()
+	if err := writeWindowsReport(reportPath, report); err != nil {
+		t.Fatal(err)
+	}
 	store, err := sqlite.Open(ctx, dataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -76,13 +95,6 @@ func TestWindowsProcessTerminationRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	barrier := filepath.Join(root, "barrier")
-	report := windowsReport{Case: "windows_refresh_before_publish", Status: "failed", Phase: "starting"}
-	started := time.Now()
-	reportPath := filepath.Join(os.TempDir(), "findrail-recovery-windows.json")
-	defer func() {
-		report.DurationMillis = time.Since(started).Milliseconds()
-		writeWindowsReport(reportPath, report)
-	}()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWindowsCrashHelper$")
 	cmd.Env = append(os.Environ(), "FINDRAIL_WINDOWS_RECOVERY_HELPER=1", "FINDRAIL_WINDOWS_RECOVERY_DATA="+dataDir, "FINDRAIL_WINDOWS_RECOVERY_BARRIER="+barrier)
 	if err = cmd.Start(); err != nil {
@@ -156,7 +168,7 @@ type windowsReport struct {
 	Platform       string `json:"platform"`
 }
 
-func writeWindowsReport(path string, report windowsReport) {
+func writeWindowsReport(path string, report windowsReport) error {
 	if exe, err := os.Executable(); err == nil {
 		if f, err := os.Open(exe); err == nil {
 			h := sha256.New()
@@ -175,9 +187,26 @@ func writeWindowsReport(path string, report windowsReport) {
 		}
 	}
 	report.Schema, report.Platform = sqlite.CurrentWriteSchema(), runtime.GOOS+"/"+runtime.GOARCH
-	b, _ := json.Marshal(report)
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0600) == nil {
-		_ = os.Rename(tmp, path)
+	b, err := json.Marshal(report)
+	if err != nil {
+		return err
 	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".findrail-recovery-*.json")
+	if err != nil {
+		return err
+	}
+	tmp := file.Name()
+	defer os.Remove(tmp)
+	if _, err = file.Write(b); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err = file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

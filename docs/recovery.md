@@ -72,6 +72,13 @@ binary SHA-256, caller-supplied revision/schema and platform; command output,
 paths and indexed content are excluded. The synthetic work directory is left
 for diagnosis and is never deleted by the harness.
 
+The deadline bounds the whole candidate journey (at most 120 seconds), with a
+separate bounded process-group cleanup. Seed, doctor, and search commands reuse
+the existing bounded-output runner and clean up descendants even when their
+leader has already exited. SIGINT/SIGTERM writes an `interrupted` record with
+the last phase; failed runs replace any earlier passed record. The old-or-new
+check includes an updated document, an added document, and a pruned document.
+
 This candidate journey covers the ordinary filesystem refresh path only. The
 configure, collection-import, and Forget lifecycle guarantees are checked by
 the deterministic production helper-process suite, not by claims about a
