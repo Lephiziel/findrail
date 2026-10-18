@@ -103,6 +103,8 @@ jobs:
             test "$("$DESKTOP" version)" = "findrail $CANDIDATE_VERSION"
           fi
           "$PYTHON" scripts/desktop_launch_smoke.py "$BINARY"
+          ARCHIVE=$(find "$RUNNER_TEMP/findrail-candidate" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print -quit)
+          "$PYTHON" scripts/installer_lifecycle_smoke.py "$ARCHIVE" --candidate-sha '${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}' --report "$RUNNER_TEMP/install-lifecycle.json"
       - name: Download and verify immutable published alpha.3 reference archive
         if: matrix.target == 'linux-amd64'
         shell: bash
@@ -150,6 +152,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         run: |
           mkdir -p "$RUNNER_TEMP/release-evidence"
+          if [[ -f "$RUNNER_TEMP/install-lifecycle.json" ]]; then cp "$RUNNER_TEMP/install-lifecycle.json" "$RUNNER_TEMP/release-evidence/"; fi
           if [[ -d "$RUNNER_TEMP/findrail-candidate" ]]; then cp "$RUNNER_TEMP/findrail-candidate"/* "$RUNNER_TEMP/release-evidence/" 2>/dev/null || true; fi
           PYTHON=python3; if [[ '${{ runner.os }}' == Windows ]]; then PYTHON=python; fi
           "$PYTHON" - <<'PY'

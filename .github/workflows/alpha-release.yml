@@ -139,6 +139,8 @@ jobs:
             test "$("$DESKTOP" version)" = "findrail $VERSION"
           fi
           "$PY" scripts/desktop_launch_smoke.py "$BINARY"
+          ARCHIVE=$(find "$RUNNER_TEMP/candidate" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print -quit)
+          "$PY" scripts/installer_lifecycle_smoke.py "$ARCHIVE" --candidate-sha '${{ needs.validate-source.outputs.candidate_sha }}' --report "$RUNNER_TEMP/install-lifecycle.json"
           if [[ '${{ matrix.target }}' == linux-amd64 ]]; then
             FINDRAIL_MCP_TEST_BINARY="$BINARY" go test -count=1 -v ./internal/cli -run '^TestGeneratedMCPConfigSDKJourney$'
             REFERENCE="$RUNNER_TEMP/alpha3-reference"
@@ -214,6 +216,7 @@ jobs:
           for report in "$RUNNER_TEMP"/*resource*.json; do
             if [[ -f "$report" ]]; then cp "$report" "$RUNNER_TEMP/release-evidence/"; fi
           done
+          if [[ -f "$RUNNER_TEMP/install-lifecycle.json" ]]; then cp "$RUNNER_TEMP/install-lifecycle.json" "$RUNNER_TEMP/release-evidence/install-lifecycle-${TARGET}.json"; fi
           PY=python3; [[ '${{ runner.os }}' != Windows ]] || PY=python
           "$PY" scripts/candidate_record.py native --native-directory "$RUNNER_TEMP/release-evidence" \
             --candidate-sha "$CANDIDATE_SHA" --candidate-version "$VERSION" --target "$TARGET" \

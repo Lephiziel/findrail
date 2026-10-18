@@ -3,6 +3,13 @@
 These are reports of specific alpha releases and installation paths, not a
 stable-release or platform-wide certification. Release archives include
 `INSTALL.txt`; start there and use only fictional documents for a first test.
+Native packaged CI also exercises the archive's per-user install, repeat install,
+update from a second extraction path, uninstall, repeated uninstall, data
+preservation and reinstall cases in an owned disposable destination. This does
+not certify Finder/SmartScreen prompts, signing, notarization, assistive
+technology, or system menu-cache timing. Installer scripts refuse unrecognized
+resources rather than replacing or deleting them; see the archive instructions
+for alpha.4 ownership compatibility and manual resolution of ambiguous entries.
 The current public download is alpha.4 (schema 7). Alpha.5/schema 8 is a
 source-only candidate until a separate owner release decision; it is not a
 public installer or a claim of manual Gatekeeper/SmartScreen approval.

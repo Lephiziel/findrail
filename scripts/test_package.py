@@ -77,6 +77,39 @@ class PackageSafetyTests(unittest.TestCase):
                 finally:
                     gio.g_object_unref(app)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX desktop installer')
+    def test_linux_install_update_uninstall_owns_only_its_resource(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            destination = root / 'owned menu'; destination.mkdir()
+            home = root / 'unmodified-home'; home.mkdir()
+            def archive_tree(label):
+                package_root = root / label; resources = package_root / 'launcher/linux'; resources.mkdir(parents=True)
+                for name in ('findrail.desktop', 'install-user.sh', 'uninstall-user.sh'):
+                    shutil.copyfile(package.ROOT / 'packaging/desktop/linux' / name, resources / name)
+                launcher = package_root / 'findrail-desktop'; launcher.write_text('#!/bin/sh\n'); launcher.chmod(0o755)
+                return resources
+            first, second = archive_tree('первый 📦'), archive_tree('second $ % " \\')
+            install = lambda scripts: subprocess.run(['sh', str(scripts / 'install-user.sh'), '--destination', str(destination)], capture_output=True, text=True)
+            uninstall = lambda scripts: subprocess.run(['sh', str(scripts / 'uninstall-user.sh'), '--destination', str(destination)], capture_output=True, text=True)
+            resource = destination / 'findrail.desktop'
+            self.assertEqual(install(first).returncode, 0)
+            self.assertEqual(install(second).returncode, 0)
+            expected_tryexec = str(second.parent.parent / 'findrail-desktop').replace('\\', '\\\\')
+            self.assertIn('TryExec=' + expected_tryexec, resource.read_text())
+            data = root / 'data'; data.mkdir(); (data / 'collections-notes-report').write_text('preserve')
+            original = root / 'original.md'; original.write_text('preserve')
+            self.assertEqual(uninstall(second).returncode, 0)
+            self.assertEqual(uninstall(second).returncode, 0)
+            self.assertEqual((data / 'collections-notes-report').read_text(), 'preserve')
+            self.assertEqual(original.read_text(), 'preserve')
+            foreign = destination / 'findrail.desktop'; foreign.write_text('not Findrail')
+            self.assertNotEqual(install(first).returncode, 0)
+            self.assertEqual(foreign.read_text(), 'not Findrail')
+            foreign.unlink(); foreign.symlink_to(original)
+            self.assertNotEqual(uninstall(first).returncode, 0)
+            self.assertTrue(foreign.is_symlink())
+
     @unittest.skipIf(os.name == 'nt', 'POSIX app installer')
     def test_macos_reinstall_updates_one_app_and_rejects_symlink_destination(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -66,6 +66,17 @@ Install for the current user from the extracted archive:
 These scripts do not delete indexed data. On Linux and Windows, the desktop
 launcher can also be run directly. On macOS, launch Findrail.app. Uninstalling
 the app is separate from deleting the data directory.
+Install/update replaces only a Findrail resource recognized as Findrail-owned;
+an unrelated file, symlink, or app/shortcut is left untouched and causes a
+refusal. Linux and macOS installers stage the new resource before publishing it.
+Existing alpha.4 Linux menu entries and macOS bundles are recognized by their
+Findrail identity. An older unmarked Windows shortcut is recognized only when
+its target and working directory match the packaged Findrail launcher layout.
+If ownership cannot be established, inspect the resource and remove or rename it
+yourself before retrying. Uninstall is safe to repeat and removes only a
+recognized Findrail launcher resource; it never removes indexed data or source
+documents. Platform menu caches may update asynchronously; installation is not
+a transaction with the OS shell.
 
 For Linux/macOS, an extracted path with spaces works as, for example:
   "/home/alex/Apps/Findrail alpha"/findrail start --no-open
