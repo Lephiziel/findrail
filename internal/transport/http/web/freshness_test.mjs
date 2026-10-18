@@ -31,3 +31,23 @@ test('canceled attempt keeps the prior success timestamp and a committed recover
   assert.match(recovered,/Last successful update.*Latest refresh committed/);
   assert.doesNotMatch(recovered,/failed|canceled/i);
 });
+
+test('failed manual GitHub refresh warns without requiring a folder worker', () => {
+  const source={id:'gh',kind:'github',github:{sha:'abc123',last_error:'download failed'}};
+  const health=sourceHealth([source],{enabled:true,sources:[]});
+  assert.equal(health.state,'warning');
+  assert.match(health.text,/GitHub refresh attempt.*failed.*snapshots remain/);
+  assert.doesNotMatch(health.text,/folder status unavailable/);
+  assert.equal(sourceHealth([{...source,github:{sha:'abc123'}}],{enabled:true,sources:[]}).state,'known');
+});
+
+test('missing or unknown folder mode and enabled state cannot imply known health', () => {
+  const source={id:'fs',kind:'filesystem',documents:1,last_indexed_at:'2026-10-18T09:00:00Z'};
+  for(const mode of [undefined,'future-mode']){
+    const watcher={source_id:'fs',state:'idle',mode};
+    assert.match(sourceFreshness(source,watcher),/Current folder status unavailable/);
+    assert.equal(sourceHealth([source],{enabled:true,sources:[watcher]}).state,'warning');
+  }
+  assert.equal(sourceHealth([source],{sources:[{source_id:'fs',state:'idle',mode:'events'}]}).state,'warning');
+  assert.match(sourceFreshness(source,{state:'idle',mode:'events',last_success_at:'2026-10-16T09:00:00Z'}),new RegExp(new Date(source.last_indexed_at).toLocaleString().replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+});

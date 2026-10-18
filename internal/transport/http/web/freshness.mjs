@@ -18,36 +18,40 @@ export function sourceFreshness(source, watcher) {
     return `Manual GitHub snapshot · ${docs}${sha ? ` · Snapshot ${sha}` : ' · Snapshot SHA unavailable'}${indexed ? ` · Last committed ${indexed}` : ' · Successful update time unavailable'}${source.github?.last_error ? ` · Latest refresh failed: ${source.github.last_error}` : ''}`;
   }
   if (source.kind !== 'filesystem') return `Index status unavailable for this source type · ${docs}`;
-  const indexed = time(watcher?.last_success_at || source.last_indexed_at);
+  const indexed = time(source.last_indexed_at) || time(watcher?.last_success_at);
   const progress = watcher?.progress;
   const attempt = watcher?.state === 'starting' ? 'Refresh is starting.' :
     watcher?.state === 'indexing' ? `Refresh in progress${progress?.attempt_id ? ` · ${progress.phase || 'working'} · ${progress.processed_documents || 0} processed · ${progress.skipped_entries || 0} skipped` : ''}; the last committed snapshot remains searchable.` :
     watcher?.state === 'error' ? `Latest refresh failed${watcher.last_error ? `: ${watcher.last_error}` : '.'} The last committed snapshot remains searchable.` :
     watcher?.progress?.failure_code ? `Latest attempt did not commit (${watcher.progress.failure_code}); the last committed snapshot remains searchable.` :
     watcher?.progress?.attempt_id && watcher.progress.committed ? 'Latest refresh committed.' : '';
-  const watch = watcher?.watch_warning ? `Automatic watcher degraded; using ${watcher.mode || 'fallback'} refresh.` : watcher?.mode === 'polling' ? 'Automatic polling refresh.' : '';
-  return `${docs} · ${indexed ? `Last successful update ${indexed}` : 'No successful update time available'}${attempt ? ` · ${attempt}` : ''}${watch ? ` · ${watch}` : ''}${watcher?.last_error && watcher.state !== 'error' ? ` · ${watcher.last_error}` : ''}`;
+  const watch = watcher?.watch_warning || watcher?.watch_warning_code ? `Automatic watcher degraded; using ${watcher.mode || 'fallback'} refresh.` : watcher?.mode === 'polling' ? 'Automatic polling refresh.' : '';
+  const unknown = !['starting', 'idle', 'indexing', 'error'].includes(watcher?.state) || !['events', 'polling'].includes(watcher?.mode);
+  return `${docs} · ${indexed ? `Last successful update ${indexed}` : 'No successful update time available'}${attempt ? ` · ${attempt}` : ''}${watch ? ` · ${watch}` : ''}${unknown ? ' · Current folder status unavailable; retry to check.' : ''}${watcher?.last_error && watcher.state !== 'error' ? ` · ${watcher.last_error}` : ''}`;
 }
 
 export function sourceHealth(sources, sync) {
   if (!Array.isArray(sources) || !sync || !Array.isArray(sync.sources)) return { state: 'unknown', text: 'Source health unavailable. Search uses the last loaded index; retry to check.' };
   const fs = sources.filter(source => source.kind === 'filesystem');
+  const githubFailed = sources.filter(source => source.kind === 'github' && source.github?.last_error);
   const states = new Map(sync.sources.map(item => [item.source_id, item]));
   const failed = fs.filter(source => {
     const watcher = states.get(source.id);
     return watcher?.state === 'error' || watcher?.progress?.failure_code || watcher?.last_error_code;
   });
   const running = fs.filter(source => states.get(source.id)?.state === 'indexing');
-  const degraded = fs.filter(source => states.get(source.id)?.watch_warning || states.get(source.id)?.mode === 'polling');
-  const unknown = fs.filter(source => !['idle', 'indexing', 'error'].includes(states.get(source.id)?.state));
+  const degraded = fs.filter(source => states.get(source.id)?.watch_warning || states.get(source.id)?.watch_warning_code || states.get(source.id)?.mode === 'polling');
+  const unknown = fs.filter(source => !['idle', 'indexing', 'error'].includes(states.get(source.id)?.state) || !['events', 'polling'].includes(states.get(source.id)?.mode));
   const text = [
     sync.enabled === false ? 'Automatic folder refresh is off; this does not verify current files.' : 'Folder freshness is based on the last committed index; idle does not verify current files.',
     running.length ? `${running.length} folder refresh in progress; committed results remain available.` : '',
     failed.length ? `${failed.length} latest folder refresh attempt(s) did not commit; committed results remain available.` : '',
     degraded.length ? `${degraded.length} folder watcher(s) degraded or using polling.` : '',
     unknown.length ? `${unknown.length} folder status unavailable.` : '',
+    fs.length && typeof sync.enabled !== 'boolean' ? 'Automatic folder refresh availability is unknown.' : '',
+    githubFailed.length ? `${githubFailed.length} latest GitHub refresh attempt(s) failed; committed snapshots remain available.` : '',
     sources.filter(source => source.kind === 'github').length ? 'GitHub sources are manually refreshed snapshots.' : '',
     sources.filter(source => source.kind === 'archive').length ? 'Archive sources are frozen snapshots.' : '',
   ].filter(Boolean).join('\n');
-  return { state: failed.length || degraded.length || unknown.length || (sync.enabled === false && fs.length > 0) ? 'warning' : running.length ? 'busy' : 'known', text };
+  return { state: failed.length || githubFailed.length || degraded.length || unknown.length || (sync.enabled !== true && fs.length > 0) ? 'warning' : running.length ? 'busy' : 'known', text };
 }

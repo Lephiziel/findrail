@@ -450,6 +450,42 @@ test('inventory-only refresh preserves result identity and does not steal focus 
   assert.equal(find(first.id),old);assert.equal(h.searchURLs.length,1);
 });
 
+test('a pending status response cannot restore an inventory from before Forget and re-add',async()=>{
+  const original={id:'a',kind:'filesystem',name:'Original',root:'/synthetic',documents:1,last_indexed_at:'2026-10-15T00:00:00Z'};
+  const h=harness([original]);await flush();
+  const fetch=h.context.fetch;let resolveInventory;
+  h.context.fetch=url=>url==='/api/v1/sources'&&!resolveInventory?new Promise(resolve=>{resolveInventory=resolve}):fetch(url);
+  h.notify('sources-changed');await flush();
+  h.notify('source-removed','a');
+  const current={...original,name:'New registration',last_indexed_at:'2026-10-18T00:00:00Z'};
+  h.setSources([current]);
+  resolveInventory({ok:true,json:async()=>({sources:[{...original,name:'Stale inventory'}]})});await flush();
+  assert.equal(h.context.window.findrailFreshnessSources.get('a').name,'Original');
+  const pending=[...h.timers.values()].find(timer=>timer.delay===0);
+  assert.ok(pending,'new registration must get a fresh status request');
+  await pending.fn();await flush();
+  assert.equal(h.context.window.findrailFreshnessSources.get('a').name,'New registration');
+  assert.equal(h.searchURLs.length,0);
+});
+
+test('updating current source status labels does not relabel or replace the displayed snapshot',async()=>{
+  const {h,first,refresh}=await focusedResultHarness();
+  const card=h.element('results').querySelectorAll('.result').find(item=>item.dataset.documentId===first.id);
+  const snippet=card.querySelector('.snippet').textContent;
+  await refresh();
+  assert.match(card.querySelector('.metadata').textContent,/Indexed result snapshot.*Current source status \(displayed result is unchanged\)/);
+  assert.equal(card.querySelector('.snippet').textContent,snippet);
+  assert.equal(h.searchURLs.length,1);
+});
+
+test('a committed Configure notification requires explicit Search to replace results',async()=>{
+  const {h,first}=await focusedResultHarness();
+  h.notify('source-reconfigured',first.source_id);await flush();
+  assert.equal(h.searchURLs.length,1);
+  assert.match(h.element('status').textContent,/configuration changed.*press Search/);
+  assert.ok(h.element('results').querySelectorAll('.result').some(card=>card.dataset.documentId===first.id));
+});
+
 test('inventory removal retains displayed result snapshot until explicit Search',async()=>{
   const {h,first,second,refresh}=await focusedResultHarness();await refresh();
   assert.equal(h.searchURLs.length,1);

@@ -85,3 +85,10 @@ and collection notes remain in place after a failed status request or refresh.
 A successful corpus commit continues to use the existing pagination cursor fence;
 a rejected stale continuation requires the user to select **First** or explicitly
 run Search again.
+
+Current source-status labels on retained results and Preview explicitly describe
+the source now; they do not relabel the displayed text as a newer commit. A
+successful Configure notification also leaves results in place until explicit
+Search. Late status requests are discarded after inventory notifications such
+as Forget/re-add. A failed manual GitHub refresh warns in aggregate health even
+though GitHub sources do not have a folder sync worker.
