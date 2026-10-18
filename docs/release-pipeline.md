@@ -28,8 +28,9 @@ Unicode. All five native targets exercise first/second desktop launch and PDF
 child extraction through the packaged launcher using a
 controlled native executable adapter on each target OS; these are lifecycle
 checks, not manual viewer demonstrations. macOS uses the packaged app entrypoint;
-Windows uses the GUI executable. Linux additionally migrates synthetic schema-2
-alpha.2 and schema-6 alpha.3 indexes. The restored schema-2 fixture is checked
+Windows uses the GUI executable. Linux additionally migrates a synthetic schema-2
+fixture and a schema-6 index created by the actual published alpha.3 binary.
+The restored schema-2 fixture is checked
 through SQLite; the restored schema-6 backup is opened by the published alpha.3
 binary. It also creates a schema-7 index using the
 published alpha.4 binary, including a committed indexing report and an actual

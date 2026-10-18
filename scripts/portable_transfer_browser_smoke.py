@@ -30,6 +30,7 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 
 from packaged_browser_journey import free_port, write_paging_fixture
 from packaged_journey import CaseReport, command, validate_candidate
+from candidate_record import digest
 from smoke import docx_fixture, pdf_fixture
 
 
@@ -661,6 +662,7 @@ def main():
     try:
         binary = args.binary.resolve(strict=True)
         CaseReport(report).run("candidate_identity", lambda: validate_candidate(binary, args.candidate_sha, args.candidate_version))
+        report["binary_sha256"] = digest(binary)
         run(binary, report)
         report["status"] = "passed"
         return 0

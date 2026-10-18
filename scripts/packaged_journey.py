@@ -8,6 +8,7 @@ import pathlib
 import platform
 import re
 import signal
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -16,6 +17,8 @@ import time
 
 import package
 import release_assets
+from candidate_record import CaseRecorder, digest, run_identity, require_transfer, require_common
+from upgrade_smoke import directory_digest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -102,6 +105,68 @@ def validate_candidate(binary, revision, version):
     return metadata
 
 
+def doctor_integrity(binary, scratch):
+    source, data = scratch / "integrity-fixture", scratch / "integrity-index"
+    source.mkdir()
+    (source / "note.md").write_text("Synthetic integrity fixture. 雪 😀", encoding="utf-8")
+    command([str(binary), "index", "--data-dir", str(data), str(source)])
+    before, db_before = directory_digest(data), digest(data / "findrail.db")
+    ordinary = json.loads(command([str(binary), "doctor", "--data-dir", str(data), "--json"]).stdout)
+    assert not any(check["id"].startswith("integrity") for check in ordinary["checks"])
+    result = json.loads(command([str(binary), "doctor", "--data-dir", str(data), "--integrity", "--json"]).stdout)
+    metadata = json.loads((binary.parent / "BUILD-INFO.json").read_text(encoding="utf-8"))
+    assert result["version"] == metadata["version"] and result.get("revision") == metadata["revision"]
+    assert result["provenance"] == "clean" and result["go_version"] in metadata["go_version"]
+    checks = {check["id"]: check for check in result["checks"]}
+    assert result["index_schema"] == result["current_write_schema"] == 8
+    for phase in ("quick_check", "foreign_key_check"):
+        check = checks["integrity_" + phase]
+        assert check["status"] == "ok" and check["code"] == phase + "_completed", check
+    after = directory_digest(data)
+    assert digest(data / "findrail.db") == db_before, "doctor changed database bytes"
+    # SQLite mode=ro can create empty WAL and bookkeeping SHM sidecars. Record
+    # the actual full-directory fingerprints, rather than claiming byte-for-byte
+    # directory identity or disabling WAL locking with unsafe immutable reads.
+    assert all(p.name in ("findrail.db", "findrail.db-wal", "findrail.db-shm") for p in data.iterdir())
+    wal = data / "findrail.db-wal"
+    assert not wal.exists() or wal.stat().st_size == 0, "doctor produced WAL content"
+
+    broken = scratch / "integrity-fk-conflict"
+    shutil.copytree(data, broken)
+    connection = sqlite3.connect(broken / "findrail.db")
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("UPDATE documents SET source_id='synthetic-missing-source'")
+        connection.commit()
+    finally:
+        connection.close()
+    broken_before = digest(broken / "findrail.db")
+    failed = command([str(binary), "doctor", "--data-dir", str(broken), "--integrity", "--json"], ok=False)
+    fk = next(check for check in json.loads(failed.stdout)["checks"] if check["id"] == "integrity_foreign_key_check")
+    assert failed.returncode == 2 and fk["status"] == "error" and fk["code"] == "foreign_key_check_issue", fk
+    assert digest(broken / "findrail.db") == broken_before
+
+    incomplete = scratch / "integrity-incomplete"
+    shutil.copytree(data, incomplete)
+    connection = sqlite3.connect(incomplete / "findrail.db")
+    try:
+        connection.execute("PRAGMA writable_schema=ON")
+        connection.execute("UPDATE sqlite_master SET sql='not valid SQL' WHERE name='documents'")
+        connection.commit()
+    finally:
+        connection.close()
+    incomplete_before = digest(incomplete / "findrail.db")
+    failed = command([str(binary), "doctor", "--data-dir", str(incomplete), "--integrity", "--json"], ok=False)
+    phases = [check for check in json.loads(failed.stdout)["checks"] if check["id"].startswith("integrity_")]
+    assert failed.returncode == 2 and phases and all(check["status"] == "error" for check in phases), phases
+    assert any(check["code"].endswith("_incomplete") for check in phases), phases
+    assert digest(incomplete / "findrail.db") == incomplete_before
+    return {"schema": 8, "stopped_directory_before_sha256": before, "stopped_directory_after_sha256": after,
+            "database_bytes_unchanged": True, "full_directory_unchanged": before == after,
+            "sqlite_readonly_sidecars_may_be_created": True, "structural_and_fk_completed": True,
+            "fk_conflict_rejected": True, "incomplete_is_not_healthy": True, "ordinary_doctor_remains_lightweight": True}
+
+
 def evaluate(binary, scratch):
     documents = ROOT / "examples/evaluation/documents"
     queries_file = ROOT / "examples/evaluation/queries.json"
@@ -173,7 +238,9 @@ BROWSER_SMOKES = (
     "diagnostics_browser_smoke.py",
     "evidence_collection_smoke.py",
     "portable_transfer_browser_smoke.py",
-    "packaged_browser_journey.py",  # also runs passage windows and TASK 11's snapshot smoke
+    "packaged_browser_journey.py",  # one common source-cycle browser session
+    "passage_window_browser_smoke.py",
+    "snapshot_browser_smoke.py",
     "persistent_collection_smoke.py",
     "search_preset_browser_smoke.py",
     "evidence_bundle_browser_smoke.py",
@@ -181,12 +248,14 @@ BROWSER_SMOKES = (
 
 
 class CaseReport:
-    def __init__(self, report):
+    def __init__(self, report, destination=None):
         self.report = report
+        self.checkpoint = CaseRecorder(report, destination)
 
     def run(self, name, operation):
         case = {"case": name, "status": "running"}
         self.report["cases"].append(case)
+        self.checkpoint.save()
         started = time.monotonic()
         try:
             detail = operation()
@@ -196,6 +265,7 @@ class CaseReport:
             return detail
         except BaseException as error:
             case["status"] = "failed"
+            self.report["status"] = "failed"
             # The detailed subprocess tail goes to the local console. Artifacts
             # keep a bounded diagnosis rather than complete logs or fixture text.
             case["error"] = type(error).__name__
@@ -204,13 +274,14 @@ class CaseReport:
             raise
         finally:
             case["duration_seconds"] = round(time.monotonic() - started, 3)
+            self.checkpoint.save()
 
 
 def execute(args):
     report = {"candidate_sha": args.candidate_sha, "candidate_version": args.candidate_version,
               "os": platform.platform(), "python": platform.python_version(),
-              "browser_skipped": args.skip_browser, "status": "running", "cases": []}
-    cases = CaseReport(report)
+              "browser_skipped": args.skip_browser, "status": "running", "cases": [], **run_identity()}
+    cases = CaseReport(report, args.report)
     started = time.monotonic()
     try:
         def identity():
@@ -228,6 +299,7 @@ def execute(args):
         with tempfile.TemporaryDirectory(prefix="Findrail packaged journey 雪 ") as directory:
             scratch = pathlib.Path(directory)
             cases.run("evaluate", lambda: evaluate(binary, scratch))
+            cases.run("doctor_integrity_stopped_directory", lambda: doctor_integrity(binary, scratch))
             for smoke in ("search_smoke.py", "mcp_smoke.py", "portable_smoke.py", "diagnostics_smoke.py", "ignore_policy_smoke.py"):
                 cases.run(smoke, lambda smoke=smoke: command([sys.executable, str(ROOT / "scripts" / smoke), str(binary)], timeout=300))
             cases.run("schema2_schema6_published_alpha4_schema7_upgrade_restore_rollback", lambda: command(
@@ -252,23 +324,28 @@ def execute(args):
                                 report["offline_fixture_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
                             argv += ["--fixture-binary", str(fixture)]
                         child_report = scratch / "portable-transfer-report.json"
+                        common_report = scratch / "common-browser-cases.json"
+                        if smoke == "packaged_browser_journey.py":
+                            argv += ["--report", str(common_report)]
                         if smoke == "portable_transfer_browser_smoke.py":
                             argv += ["--candidate-sha", args.candidate_sha, "--candidate-version", args.candidate_version,
                                      "--report", str(child_report)]
                         try:
                             command(argv, timeout=600)
                         finally:
+                            if smoke == "packaged_browser_journey.py" and common_report.exists():
+                                if common_report.stat().st_size > 65536:
+                                    raise ValueError("oversized common browser report")
+                                report["cases"][-1]["details"] = json.loads(common_report.read_text(encoding="utf-8"))
                             if smoke == "portable_transfer_browser_smoke.py" and child_report.exists():
                                 if child_report.stat().st_size > 65536:
                                     raise ValueError("oversized transfer report")
                                 report["portable_transfer"] = json.loads(child_report.read_text(encoding="utf-8"))
                         if smoke == "portable_transfer_browser_smoke.py":
-                            transfer = report.get("portable_transfer", {})
-                            if (transfer.get("candidate_sha") != args.candidate_sha or
-                                    transfer.get("candidate_version") != args.candidate_version or
-                                    transfer.get("status") != "passed" or not transfer.get("cases") or
-                                    any(case.get("status") != "passed" for case in transfer["cases"])):
-                                raise ValueError("missing, incomplete, or mismatched transfer report")
+                            require_transfer(report.get("portable_transfer", {}), args.candidate_sha, args.candidate_version, report["binary_sha256"])
+                        if smoke == "packaged_browser_journey.py":
+                            require_common(report["cases"][-1].get("details", {}), args.candidate_sha, report["binary_sha256"])
+
                     cases.run(smoke, browser_case)
         report["status"] = "incomplete" if args.skip_browser else "passed"
         return 0
@@ -281,11 +358,8 @@ def execute(args):
         raise
     finally:
         report["duration_seconds"] = round(time.monotonic() - started, 3)
-        encoded = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
-        if args.report:
-            args.report.parent.mkdir(parents=True, exist_ok=True)
-            args.report.write_text(encoded, encoding="utf-8")
-        print(encoded, end="")
+        cases.checkpoint.save()
+        print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
 def main():

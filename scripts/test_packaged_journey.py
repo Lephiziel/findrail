@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -62,6 +63,7 @@ class ReportTests(unittest.TestCase):
     def execute(self, args, operation=None):
         with patch.object(journey, "validate_candidate", return_value={"schema_version": 8, "target": "linux-amd64"}), \
              patch.object(journey, "evaluate", return_value={"comparisons": 10}), \
+             patch.object(journey, "doctor_integrity", return_value={"schema": 8}), \
              patch.object(journey, "command", side_effect=operation), \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             status = journey.execute(args)
@@ -139,6 +141,39 @@ class ReportTests(unittest.TestCase):
                 self.assertEqual(report["portable_transfer"]["candidate_sha"], sha)
 
 
+    def test_zero_exit_without_complete_child_record_fails_standalone_gate(self):
+        from candidate_record import TRANSFER_CASES
+        for missing in ('portable_transfer_browser_smoke.py','packaged_browser_journey.py'):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as temp:
+                args=self.args(pathlib.Path(temp))
+                def child(argv, **kwargs):
+                    if any(str(arg).endswith('portable_transfer_browser_smoke.py') for arg in argv):
+                        cases=TRANSFER_CASES if missing!='portable_transfer_browser_smoke.py' else TRANSFER_CASES[:-1]
+                        payload={'candidate_sha':args.candidate_sha,'candidate_version':args.candidate_version,'status':'passed',
+                                 'binary_sha256':hashlib.sha256(args.binary.read_bytes()).hexdigest(),
+                                 'cases':[{'case':name,'status':'passed','duration_seconds':0.1} for name in cases]}
+                        pathlib.Path(argv[argv.index('--report')+1]).write_text(json.dumps(payload))
+                status,report=self.execute(args,child)
+                self.assertEqual(status,1)
+                self.assertEqual(report['status'],'failed')
+                self.assertEqual(report['cases'][-1]['case'],missing)
+                self.assertEqual(report['cases'][-1]['status'],'failed')
+
+    def test_case_checkpoint_is_present_during_a_running_operation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=pathlib.Path(temp)/'report.json';report={'status':'running','cases':[]}
+            recorder=journey.CaseReport(report,path)
+            def running():
+                saved=json.loads(path.read_text())
+                self.assertEqual(saved['cases'][-1],{'case':'active','status':'running'})
+                raise RuntimeError('synthetic interrupted operation')
+            with self.assertRaises(RuntimeError):recorder.run('active',running)
+            saved=json.loads(path.read_text())
+            self.assertEqual(saved['cases'][-1]['status'],'failed')
+            self.assertEqual(saved['status'],'failed')
+            self.assertNotIn('synthetic interrupted operation',path.read_text())
+
+
 class CommandTests(unittest.TestCase):
     def test_nonzero_exit_propagates_and_output_tail_is_bounded(self):
         with self.assertRaises(AssertionError):
@@ -187,6 +222,34 @@ class CommandTests(unittest.TestCase):
             journey.command([sys.executable, "-c", parent], timeout=10)
             time.sleep(1.1)
             self.assertFalse(marker.exists())
+
+
+class CaseRecordTests(unittest.TestCase):
+    def test_failed_case_keeps_prior_results_and_omits_exception_payload(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = pathlib.Path(temp) / "report.json"
+            report = {"status": "running", "cases": []}
+            recorder = journey.CaseRecorder(report, path)
+            recorder.run("first", lambda: {"count": 3})
+            def failure():
+                self.assertEqual(json.loads(path.read_text())["cases"][-1]["status"], "running")
+                raise RuntimeError("private index /secret/path and indexed text")
+            with self.assertRaises(RuntimeError): recorder.run("second", failure)
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved["status"], "failed")
+            self.assertEqual([case["status"] for case in saved["cases"]], ["passed", "failed"])
+            self.assertEqual(saved["cases"][0]["details"], {"count": 3})
+            self.assertEqual(saved["cases"][1]["error_type"], "RuntimeError")
+            self.assertNotIn("secret", path.read_text())
+            self.assertFalse(path.with_suffix(".json.tmp").exists())
+
+    def test_interruption_is_recorded_and_propagated(self):
+        report = {"status": "running", "cases": []}
+        recorder = journey.CaseRecorder(report, None)
+        def interrupted(): raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt): recorder.run("cancel", interrupted)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["cases"][0]["error_type"], "KeyboardInterrupt")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fresh-index, UI-added-folder, restart browser journey on an extracted binary."""
+import argparse
 import json
 import os
 import pathlib
@@ -21,6 +22,8 @@ from selenium.webdriver.support.ui import Select
 
 sys.dont_write_bytecode = True
 from smoke import docx_fixture, pdf_fixture
+from candidate_record import CaseRecorder, digest
+from source_cycle_browser import run as source_cycle
 
 
 def free_port():
@@ -37,7 +40,19 @@ def write_paging_fixture(root):
 
 
 def main():
-    binary = pathlib.Path(sys.argv[1]).resolve(strict=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary", type=pathlib.Path)
+    parser.add_argument("--report", type=pathlib.Path)
+    args = parser.parse_args()
+    binary = args.binary.resolve(strict=True)
+    metadata = json.loads((binary.parent / "BUILD-INFO.json").read_text(encoding="utf-8"))
+    report = {"status": "running", "cases": [], "candidate_sha": metadata["revision"],
+              "binary_sha256": digest(binary)}
+    recorder = CaseRecorder(report, args.report)
+    basic_case = {"case": "empty_start_folder_paging_late_response_corpus_fence_quotes_reload_restart", "status": "running"}
+    report["cases"].append(basic_case)
+    basic_started = time.monotonic()
+    recorder.save()
     with tempfile.TemporaryDirectory(prefix="Findrail packaged journey – ") as temporary:
         base = pathlib.Path(temporary)
         root, data = base / "fixture notes – 雪", base / "new private index"
@@ -57,6 +72,8 @@ def main():
             "idempotencymarker familiar synthetic note. <script>window.fixturePwned=true</script>", encoding="utf-8")
         (root / "runbook.pdf").write_bytes(pdf_fixture(["firstpage unique alpha", "secondpage page2journey unique beta"]))
         (root / "meeting.docx").write_bytes(docx_fixture("docxjourney unique word text"))
+        (root / "late.md").write_text("padding " * 10000 + "needletextlate exact text quote 😀e\u0301", encoding="utf-8")
+        (root / "late.docx").write_bytes(docx_fixture("padding " * 10000 + "needledocxlate exact Word quote 😀e\u0301"))
         write_paging_fixture(root)
         port = free_port()
         address = f"127.0.0.1:{port}"
@@ -65,7 +82,7 @@ def main():
 
         def launch():
             return subprocess.Popen([str(binary), "start", "--data-dir", str(data), "--enable-originals", "--no-open", "--addr", address],
-                                    cwd=base, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                                    cwd=base, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
 
         server = launch()
 
@@ -73,7 +90,7 @@ def main():
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
                 if proc.poll() is not None:
-                    raise AssertionError("candidate start exited: " + proc.stderr.read())
+                    raise AssertionError("candidate start exited with status " + str(proc.returncode))
                 try:
                     with urllib.request.urlopen(url + "/healthz", timeout=1) as response:
                         if response.status == 200:
@@ -84,6 +101,10 @@ def main():
 
         try:
             ready(server)
+            with urllib.request.urlopen(url + "/api/v1/capabilities", timeout=3) as response:
+                capabilities = json.load(response)
+            assert capabilities["client_api_version"] == 1
+            assert all(capabilities.get(name) is True for name in ("management", "passage_preview", "search_pagination", "evidence_bundle", "portable_snapshots"))
             options = webdriver.ChromeOptions()
             options.binary_location = os.environ.get("FINDRAIL_CHROME") or shutil.which("chromium") or shutil.which("google-chrome") or ""
             if not options.binary_location:
@@ -95,6 +116,9 @@ def main():
             options.add_experimental_option("prefs", {"download.default_directory": str(base), "download.prompt_for_download": False})
             driver = os.environ.get("FINDRAIL_CHROMEDRIVER")
             browser = webdriver.Chrome(service=Service(executable_path=driver) if driver else Service(), options=options)
+            report["chrome"] = browser.capabilities["browserVersion"]
+            report["chromedriver"] = browser.capabilities["chrome"]["chromedriverVersion"].split()[0]
+            assert report["chrome"] == report["chromedriver"] == "139.0.7258.66", "browser/driver differ from the controlled pin"
             browser.set_page_load_timeout(15)
             wait = WebDriverWait(browser, 20)
             browser.get(url + "/")
@@ -119,7 +143,7 @@ def main():
                 with urllib.request.urlopen(url + "/api/v1/sources", timeout=3) as response:
                     inventory = json.load(response)["sources"]
                 fingerprint = tuple((item["documents"], item.get("last_indexed_at")) for item in inventory)
-                if inventory and inventory[0]["documents"] == 263 and fingerprint == stable_inventory:
+                if inventory and inventory[0]["documents"] == 265 and fingerprint == stable_inventory:
                     if time.monotonic() - stable_since >= 2:
                         break
                 else:
@@ -192,22 +216,74 @@ def main():
                 Select(browser.find_element(By.ID, "page-size")).select_by_value("20")
                 wait.until(lambda d: d.find_element(By.ID, "page-range").text.startswith("1–20"))
 
-                # A metadata-only commit invalidates the SQLite cursor without
-                # altering the source inventory or any selected local evidence.
-                token = browser.execute_async_script("const done=arguments[0];window.findrailBootstrap.then(boot=>done(boot.token));")
-                headers = {"Origin": url, "X-Findrail-Token": token, "Content-Type": "application/json"}
-                request = urllib.request.Request(url + "/api/v1/collections", data=json.dumps({"title": "Synthetic cursor fence"}).encode(), headers=headers, method="POST")
-                with urllib.request.urlopen(request, timeout=5) as response:
-                    temporary_collection = json.load(response)
-                request = urllib.request.Request(url + "/api/v1/collections/" + temporary_collection["id"] + "?revision=1", data=b"", headers=headers, method="DELETE")
-                with urllib.request.urlopen(request, timeout=5) as response:
-                    assert response.status == 204
-                browser.find_element(By.ID, "page-next").click()
-                wait.until(lambda d: "Data changed; restart" in d.find_element(By.ID, "status").text)
-                assert browser.switch_to.active_element.get_attribute("id") == "page-first"
-                assert not browser.find_elements(By.CSS_SELECTOR, "#results .result"), "stale pages were mixed into a new snapshot"
-                assert browser.find_element(By.ID, "query").get_attribute("value") == "pagingjourney"
-                browser.find_element(By.ID, "page-first").click()
+                # Delay a real continuation response across a new explicit
+                # search. Releasing it must not restore the previous page.
+                browser.execute_script("""
+                    window.__pagingFetch=window.fetch.bind(window);window.__holdNextPage=true;
+                    window.fetch=async(input,options)=>{const response=await window.__pagingFetch(input,options);
+                        const u=new URL(String(input),location.href);
+                        if(window.__holdNextPage&&u.pathname==='/api/v1/search/pages'&&u.searchParams.has('cursor')){
+                            window.__holdNextPage=false;return new Promise(resolve=>{window.__releaseLatePage=()=>resolve(response)})}
+                        return response};
+                """)
+                try:
+                    browser.find_element(By.ID, "page-next").click()
+                    wait.until(lambda d: d.execute_script("return typeof window.__releaseLatePage==='function'"))
+                    search("docxjourney")
+                    browser.execute_async_script("const done=arguments[0];window.__releaseLatePage();setTimeout(done,100)")
+                    assert len(browser.find_elements(By.CSS_SELECTOR, "#results .result")) == 1
+                    assert "docxjourney" in browser.find_element(By.CSS_SELECTOR, "#results .snippet").text
+                finally:
+                    browser.execute_script("window.fetch=window.__pagingFetch;delete window.__releaseLatePage")
+                browser.find_element(By.ID, "query").clear()
+                browser.find_element(By.ID, "query").send_keys("pagingjourney")
+                browser.find_element(By.ID, "search-form").submit()
+                wait.until(lambda d: d.find_element(By.ID, "page-range").text.startswith("1–20"))
+
+                # Keep inventory polling one response behind while a real
+                # source commit lands. The continuation itself still uses the
+                # production API, which must reject its now-stale cursor.
+                browser.execute_async_script("""
+                    const done=arguments[0];window.__inventoryFetch=window.fetch.bind(window);
+                    window.__inventoryFetch('/api/v1/sources').then(r=>r.text()).then(text=>{
+                        window.fetch=(input,options)=>new URL(String(input),location.href).pathname==='/api/v1/sources'
+                            ?Promise.resolve(new Response(text,{status:200,headers:{'Content-Type':'application/json'}}))
+                            :window.__inventoryFetch(input,options);done()});
+                """)
+                marker = root / "cursor-corpus.md"
+                def commit_corpus():
+                    result = subprocess.run([str(binary), "index", "--data-dir", str(data), "--max-docx-bytes", str(8 << 20), "--json", str(root)],
+                                            cwd=base, capture_output=True, text=True, encoding="utf-8", timeout=30, check=True)
+                    return json.loads(result.stdout)
+                try:
+                    marker.write_text("Unrelated synthetic corpus change for cursor fencing.\n", encoding="utf-8")
+                    assert commit_corpus()["seen"] == 266
+                    browser.find_element(By.ID, "page-next").click()
+                    wait.until(lambda d: "Data changed; restart" in d.find_element(By.ID, "status").text)
+                    assert browser.switch_to.active_element.get_attribute("id") == "page-first"
+                    assert not browser.find_elements(By.CSS_SELECTOR, "#results .result"), "stale pages were mixed into a new snapshot"
+                    assert browser.find_element(By.ID, "query").get_attribute("value") == "pagingjourney"
+                finally:
+                    marker.unlink(missing_ok=True)
+                    try:
+                        assert commit_corpus()["seen"] == 265
+                    finally:
+                        browser.execute_script("window.fetch=window.__inventoryFetch")
+                # A watcher can publish one final scan following the external
+                # index command; let it settle before requesting a new cursor.
+                last, since = None, time.monotonic()
+                def settled(_):
+                    nonlocal last, since
+                    with urllib.request.urlopen(url + "/api/v1/sources", timeout=3) as response:
+                        rows = json.load(response)["sources"]
+                    current = [(s["documents"], s.get("last_indexed_at")) for s in rows]
+                    if current != last: last, since = current, time.monotonic()
+                    return rows and rows[0]["documents"] == 265 and time.monotonic() - since >= 2
+                wait.until(settled)
+                if browser.find_element(By.ID, "page-first").is_enabled():
+                    browser.find_element(By.ID, "page-first").click()
+                else:
+                    browser.find_element(By.ID, "search-form").submit()
                 wait.until(lambda d: d.find_element(By.ID, "page-range").text.startswith("1–20"))
 
             run_paging_journey()
@@ -298,8 +374,24 @@ def main():
             assert browser.find_element(By.ID, "collection-count").text == "0"
             search("idempotencymarker")
             assert "1 matching" in browser.find_element(By.ID, "status").text
-            print("Packaged browser journey passed: bounded cursor navigation beyond 237 results, First/Previous and backend ID agreement; empty start, UI Add folder, committed source/DOCX policy, search, preview, controlled original/folder adapters, exact selected quote, duplicate, PDF page 2, Markdown bytes, reload and restart.")
+            basic_case.update(status="passed", elapsed_seconds=round(time.monotonic()-basic_started, 3))
+
+            def restart(destination):
+                nonlocal data, server
+                server.terminate(); server.communicate(timeout=8)
+                data = destination
+                server = launch(); ready(server)
+                browser.get(url + "/")
+
+            source_cycle(browser, base, root, url, restart, recorder, run_paging_journey)
+            report["status"] = "passed"
+            print("Common packaged browser journey passed: Unicode folder/paging/late citations/notes/bundle transfer/preset remap/snapshot jobs/frozen search/restart/Forget.")
+        except BaseException as exc:
+            report["status"] = "failed"
+            if basic_case["status"] == "running": basic_case.update(status="failed", error_type=type(exc).__name__, elapsed_seconds=round(time.monotonic()-basic_started, 3))
+            raise
         finally:
+            recorder.save()
             if browser:
                 browser.quit()
             if server.poll() is None:
@@ -312,7 +404,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    from passage_window_browser_smoke import main as passage_windows
-    passage_windows()
-    from snapshot_browser_smoke import main as snapshots
-    snapshots()

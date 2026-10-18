@@ -1,4 +1,5 @@
 import io
+import copy
 import json
 import pathlib
 import sys
@@ -10,9 +11,118 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import release_assets as release
+import candidate_record
 
 
 class ReleaseAssetTests(unittest.TestCase):
+    def summary_fixture(self, root):
+        source, revision = self.candidate(root, version='0.1.0-alpha.5', schema=8)
+        assets = root / 'assets'
+        release.assemble(source, assets, '0.1.0-alpha.5', revision)
+        records = root / 'native'
+        for target in release.TARGETS:
+            system, machine = target.split('-')
+            with patch.object(candidate_record.platform, 'system', return_value={'linux':'Linux','darwin':'Darwin','windows':'Windows'}[system]), \
+                 patch.object(candidate_record.platform, 'machine', return_value=machine):
+                record = candidate_record.native(source, revision, '0.1.0-alpha.5', target, 'success')
+            self.assertEqual(record['status'], 'passed')
+            if target == 'linux-amd64':
+                measurement = {'status':'success','binary':{'sha256':record['binary_sha256'],'revision':revision},
+                               'comparison':{'same_host':True,'fixture_sha256_matches':True,'binary':{'revision':'1d47f9d54ff81ab566fcf3f8c0c6bf9af86a33f7'}}}
+                baseline = copy.deepcopy(measurement)
+                baseline['comparison']['binary']['revision'] = '6b157fe3a6fe2f3f3808732ce72a8e74a118f763'
+                boundaries = copy.deepcopy(measurement)
+                boundaries['metrics'] = {'paging_window':{'returned':500,'beyond_237':True},
+                    'evidence_bundle_boundary':{'codec_boundary_selected_text_bytes':2<<20,'accepted_selected_text_bytes':1<<20,
+                                               'one_byte_over_quota_status':413,'persistent_collections_created':0}}
+                record['resources'] = dict(zip(candidate_record.LINUX_RESOURCE_REPORTS,
+                    [measurement,baseline,boundaries,{'binary_sha256':record['binary_sha256'],'document_text_bytes':8<<20,'archive_bytes':4096,'elapsed_seconds':0.1}]))
+                binary_sha = record['binary_sha256']
+            path = records / target / 'verification.json'; path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(record))
+        passed = lambda names:[{'case':name,'status':'passed','duration_seconds':0.1} for name in names]
+        journey = {'candidate_sha':revision,'candidate_version':'0.1.0-alpha.5','status':'passed','browser_skipped':False,
+                   'source_clean':True,'target':'linux-amd64','schema_version':8,'binary_sha256':binary_sha,
+                   'offline_fixture_sha256':'f'*64,'cases':passed(candidate_record.JOURNEY_CASES),
+                   'portable_transfer':{'candidate_sha':revision,'candidate_version':'0.1.0-alpha.5','status':'passed',
+                                        'binary_sha256':binary_sha,'cases':passed(candidate_record.TRANSFER_CASES)}}
+        common = next(case for case in journey['cases'] if case['case']=='packaged_browser_journey.py')
+        common['details'] = {'status':'passed','candidate_sha':revision,'binary_sha256':binary_sha,
+                             'chrome':'139.0.7258.66','chromedriver':'139.0.7258.66','cases':passed(candidate_record.COMMON_BROWSER_CASES)}
+        browser = root / 'browser.json'; browser.write_text(json.dumps(journey))
+        return records, assets, browser, revision, journey
+
+    def test_machine_summary_binds_each_native_archive_and_browser_binary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            records, assets, browser, revision, journey = self.summary_fixture(pathlib.Path(temp))
+            result = candidate_record.summarize(records, assets, browser, revision, '0.1.0-alpha.5')
+            self.assertEqual(len(result['native']),5); self.assertEqual(len(result['assets']),8)
+            for changes in ({'candidate_sha':'b'*40},{'status':'incomplete'},{'browser_skipped':True},{'binary_sha256':'0'*64},
+                            {'cases':[{'case':'synthetic','status':'skipped'}]}):
+                with self.subTest(changes=changes):
+                    browser.write_text(json.dumps(journey | changes))
+                    with self.assertRaises(ValueError):candidate_record.summarize(records,assets,browser,revision,'0.1.0-alpha.5')
+            browser.write_text(json.dumps(journey))
+            path=records/'linux-amd64'/'verification.json'
+            changed=json.loads(path.read_text());changed['archive']['sha256']='0'*64;path.write_text(json.dumps(changed))
+            with self.assertRaises(ValueError):candidate_record.summarize(records,assets,browser,revision,'0.1.0-alpha.5')
+
+    def test_summary_rejects_missing_duplicate_or_unmeasured_acceptance_cases(self):
+        with tempfile.TemporaryDirectory() as temp:
+            records,assets,browser,revision,journey=self.summary_fixture(pathlib.Path(temp))
+            variants=[dict(journey,cases=[{'case':'synthetic','status':'passed','duration_seconds':0}])]
+            for missing in ['mcp_smoke.py','doctor_integrity_stopped_directory','portable_transfer_browser_smoke.py']:
+                variants.append(dict(journey,cases=[case for case in journey['cases'] if case['case']!=missing]))
+            variants.append(dict(journey,cases=journey['cases']+[journey['cases'][0]]))
+            invalid_time=copy.deepcopy(journey);invalid_time['cases'][0].pop('duration_seconds');variants.append(invalid_time)
+            for bad in variants:
+                with self.subTest(cases=[c['case'] for c in bad['cases']]):
+                    browser.write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError):candidate_record.summarize(records,assets,browser,revision,'0.1.0-alpha.5')
+
+    def test_summary_requires_both_complete_child_journeys_on_the_same_binary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            records,assets,browser,revision,journey=self.summary_fixture(pathlib.Path(temp))
+            for child in ['portable_transfer','common']:
+                for change in ['missing_case','wrong_binary','failed']:
+                    bad=copy.deepcopy(journey)
+                    details=bad['portable_transfer'] if child=='portable_transfer' else next(c for c in bad['cases'] if c['case']=='packaged_browser_journey.py')['details']
+                    if change=='missing_case':details['cases'].pop()
+                    elif change=='wrong_binary':details['binary_sha256']='0'*64
+                    else:details['status']='failed'
+                    with self.subTest(child=child,change=change):
+                        browser.write_text(json.dumps(bad))
+                        with self.assertRaises(ValueError):candidate_record.summarize(records,assets,browser,revision,'0.1.0-alpha.5')
+
+    def test_summary_requires_every_linux_resource_report_and_matching_provenance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            records,assets,browser,revision,journey=self.summary_fixture(pathlib.Path(temp))
+            path=records/'linux-amd64'/'verification.json';original=json.loads(path.read_text())
+            for missing in candidate_record.LINUX_RESOURCE_REPORTS:
+                bad=copy.deepcopy(original);bad['resources'].pop(missing)
+                with self.subTest(missing=missing):
+                    path.write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError):candidate_record.summarize(records,assets,browser,revision,'0.1.0-alpha.5')
+            for change in ['failed','wrong_binary','wrong_baseline','wrong_boundary']:
+                bad=copy.deepcopy(original)
+                if change=='failed':bad['resources']['alpha5-resource-comparison.json']['status']='failed'
+                elif change=='wrong_binary':bad['resources']['alpha5-resource-comparison.json']['binary']['sha256']='0'*64
+                elif change=='wrong_baseline':bad['resources']['source-baseline-resource-comparison.json']['comparison']['binary']['revision']='0'*40
+                else:bad['resources']['snapshot-resource-boundary.json']['document_text_bytes']=1
+                with self.subTest(change=change):
+                    path.write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError):candidate_record.summarize(records,assets,browser,revision,'0.1.0-alpha.5')
+
+    def test_native_failure_does_not_relabel_clean_source_as_dirty(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, revision = self.candidate(pathlib.Path(temp), version='0.1.0-alpha.5', schema=8)
+            with patch.object(candidate_record.platform, 'system', return_value='Linux'), \
+                 patch.object(candidate_record.platform, 'machine', return_value='x86_64'):
+                record = candidate_record.native(source, revision, '0.1.0-alpha.5', 'linux-amd64', 'failure')
+                self.assertEqual(record['status'], 'failed'); self.assertTrue(record['source_clean'])
+                wrong = candidate_record.native(source, revision, '0.1.0-alpha.5', 'linux-arm64', 'success')
+                self.assertEqual(wrong['status'], 'failed')
+
     def candidate(self, root, revision='a' * 40, dirty=False, version='0.1.0-alpha.4', schema=None,
                   include_schema=True, metadata_version=None, target_override=None):
         source = root / 'input'
