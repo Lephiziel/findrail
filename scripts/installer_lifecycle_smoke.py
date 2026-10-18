@@ -96,8 +96,9 @@ def main():
                 return result
             entry = destination / 'Findrail.lnk'
             def inspect(tree):
-                script = "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($args[0]); [pscustomobject]@{Target=$s.TargetPath;Description=$s.Description}|ConvertTo-Json -Compress"
-                value = json.loads(subprocess.check_output([ps, '-NoProfile', '-Command', script, str(entry)], text=True))
+                literal = str(entry).replace("'", "''")
+                script = f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{literal}'); [pscustomobject]@{{Target=$s.TargetPath;Description=$s.Description}}|ConvertTo-Json -Compress"
+                value = json.loads(subprocess.check_output([ps, '-NoProfile', '-Command', script], text=True))
                 if pathlib.Path(value['Target']) != tree / 'findrail-desktop.exe' or value['Description'] != 'Findrail managed shortcut':
                     raise AssertionError('shortcut target/provenance mismatch')
             inspect_expected = lambda tree: inspect(tree)
