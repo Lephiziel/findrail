@@ -1197,8 +1197,16 @@ components:
           format: date-time
         last_error:
           type: string
+          description: Bounded safe text; omitted when there is no current refresh error.
+        last_error_code:
+          type: string
+          description: Optional stable refresh error code; unknown values must be treated as unknown.
         watch_warning:
           type: string
+          description: Bounded safe text; a warning does not imply that a refresh has committed.
+        watch_warning_code:
+          type: string
+          description: Optional stable watcher warning code; unknown values must be treated as unknown.
         skipped:
           type: integer
           minimum: 0

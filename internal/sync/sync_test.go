@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,17 @@ func TestAutomaticLifecycle(t *testing.T) {
 			eventually(t, func() bool { return has("nested", 1) })
 			put(t, other, "nested changed")
 			eventually(t, func() bool { return has("changed", 1) && has("fresh", 0) })
+			if !pollOnly {
+				tmp := filepath.Join(nested, "atomic-save.tmp")
+				put(t, tmp, "atomic replacement marker")
+				if err := os.Rename(tmp, other); err != nil {
+					t.Fatal(err)
+				}
+				eventually(t, func() bool {
+					r, e := s.Search(ctx, search.Request{Query: "atomic", Limit: 20})
+					return e == nil && r.Total == 1 && has("changed", 0)
+				})
+			}
 			if err := os.Rename(path, filepath.Join(root, "renamed.md")); err != nil {
 				t.Fatal(err)
 			}
@@ -143,7 +155,7 @@ func TestMissingRootPreservesSnapshotAndRecovers(t *testing.T) {
 	locks := sourcecoord.New()
 	m := syncer.New(s, syncer.Config{Coordinator: locks, Factory: func(source connector.Source) (*filesystem.Connector, error) {
 		return filesystem.NewWithOptions(source.Root, filesystem.Options{MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken, RegistrationRevision: source.RegistrationRevision})
-	}, Interval: 50 * time.Millisecond, PollOnly: true})
+	}, Interval: 50 * time.Millisecond, PollOnly: false})
 	done := make(chan struct{})
 	go func() { defer close(done); m.Run(ctx) }()
 	defer func() { cancel(); <-done }()
@@ -165,6 +177,10 @@ func TestMissingRootPreservesSnapshotAndRecovers(t *testing.T) {
 	}
 	unlock()
 	eventually(t, func() bool { return m.Status()[0].State == "error" })
+	failedStatus := m.Status()[0]
+	if failedStatus.LastErrorCode != "scan_failed" || strings.Contains(failedStatus.LastError, root) || strings.Contains(failedStatus.LastError, moved) {
+		t.Fatalf("refresh error leaked a private path or lacked a stable code: %+v", failedStatus)
+	}
 	failed := m.Status()[0].Progress
 	if failed.Committed || !failed.Partial || failed.FailureCode != "scan_failed" || failed.Phase != "done" {
 		t.Fatalf("failed watcher attempt progress: %+v", failed)
@@ -188,6 +204,7 @@ func TestMissingRootPreservesSnapshotAndRecovers(t *testing.T) {
 		r, e := s.Search(ctx, search.Request{Query: "recovered", Limit: 20})
 		return e == nil && r.Total == 1
 	})
+	eventually(t, func() bool { return m.Status()[0].Mode == "events" && m.Status()[0].WatchWarningCode == "" })
 	after, err := s.SourceReport(ctx, conn.Source().ID, false)
 	if err != nil {
 		t.Fatal(err)

@@ -20,17 +20,19 @@ import (
 )
 
 type Status struct {
-	SourceID      string   `json:"source_id"`
-	State         string   `json:"state"`
-	Mode          string   `json:"mode"`
-	LastStartedAt string   `json:"last_started_at,omitempty"`
-	LastSuccessAt string   `json:"last_success_at,omitempty"`
-	LastError     string   `json:"last_error,omitempty"`
-	WatchWarning  string   `json:"watch_warning,omitempty"`
-	Skipped       int      `json:"skipped"`
-	SkippedPDF    int      `json:"skipped_pdf,omitempty"`
-	SkippedDOCX   int      `json:"skipped_docx,omitempty"`
-	Progress      Progress `json:"progress"`
+	SourceID         string   `json:"source_id"`
+	State            string   `json:"state"`
+	Mode             string   `json:"mode"`
+	LastStartedAt    string   `json:"last_started_at,omitempty"`
+	LastSuccessAt    string   `json:"last_success_at,omitempty"`
+	LastError        string   `json:"last_error,omitempty"`
+	WatchWarning     string   `json:"watch_warning,omitempty"`
+	WatchWarningCode string   `json:"watch_warning_code,omitempty"`
+	LastErrorCode    string   `json:"last_error_code,omitempty"`
+	Skipped          int      `json:"skipped"`
+	SkippedPDF       int      `json:"skipped_pdf,omitempty"`
+	SkippedDOCX      int      `json:"skipped_docx,omitempty"`
+	Progress         Progress `json:"progress"`
 }
 type Progress struct {
 	AttemptID          string `json:"attempt_id"`
@@ -54,10 +56,12 @@ type Config struct {
 	Coordinator       *sourcecoord.Locks
 }
 type Manager struct {
-	store  *sqlite.Store
-	config Config
-	mu     sync.RWMutex
-	status map[string]Status
+	store          *sqlite.Store
+	config         Config
+	mu             sync.RWMutex
+	status         map[string]Status
+	generations    map[string]uint64
+	nextGeneration uint64
 }
 
 func New(store *sqlite.Store, config Config) *Manager {
@@ -73,7 +77,7 @@ func New(store *sqlite.Store, config Config) *Manager {
 	if config.Debounce <= 0 {
 		config.Debounce = 350 * time.Millisecond
 	}
-	return &Manager{store: store, config: config, status: make(map[string]Status)}
+	return &Manager{store: store, config: config, status: make(map[string]Status), generations: make(map[string]uint64)}
 }
 func (m *Manager) Status() []Status {
 	m.mu.RLock()
@@ -85,10 +89,10 @@ func (m *Manager) Status() []Status {
 	sort.Slice(result, func(i, j int) bool { return result[i].SourceID < result[j].SourceID })
 	return result
 }
-func (m *Manager) update(ctx context.Context, id string, change func(*Status)) {
+func (m *Manager) update(ctx context.Context, id string, generation uint64, change func(*Status)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || m.generations[id] != generation {
 		return
 	}
 	s := m.status[id]
@@ -97,10 +101,10 @@ func (m *Manager) update(ctx context.Context, id string, change func(*Status)) {
 	m.status[id] = s
 }
 
-func (m *Manager) progress(ctx context.Context, id, attempt string, start time.Time, processed, skipped int, flush bool, phase string, committed bool, reportID, failureCode string) {
+func (m *Manager) progress(ctx context.Context, id string, generation uint64, attempt string, start time.Time, processed, skipped int, flush bool, phase string, committed bool, reportID, failureCode string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || m.generations[id] != generation {
 		return
 	}
 	s, ok := m.status[id]
@@ -131,8 +135,9 @@ func (m *Manager) progress(ctx context.Context, id, attempt string, start time.T
 }
 
 type worker struct {
-	source connector.Source
-	cancel context.CancelFunc
+	source     connector.Source
+	cancel     context.CancelFunc
+	generation uint64
 }
 
 // Run blocks until cancellation and waits for every writer to roll back or finish.
@@ -163,17 +168,28 @@ func (m *Manager) Run(ctx context.Context) {
 			if ok {
 				old.cancel()
 			}
+			m.mu.Lock()
+			m.nextGeneration++
+			generation := m.nextGeneration
+			m.generations[s.ID] = generation
+			m.mu.Unlock()
 			child, cancel := context.WithCancel(ctx)
-			active[s.ID] = worker{s.Source, cancel}
+			active[s.ID] = worker{source: s.Source, cancel: cancel, generation: generation}
 			wg.Add(1)
-			go func(source connector.Source) { defer wg.Done(); m.runSource(child, source) }(s.Source)
+			go func(source connector.Source, generation uint64) {
+				defer wg.Done()
+				m.runSource(child, source, generation)
+			}(s.Source, generation)
 		}
 		for id, w := range active {
 			if !wanted[id] {
 				w.cancel()
 				delete(active, id)
 				m.mu.Lock()
-				delete(m.status, id)
+				if m.generations[id] == w.generation {
+					delete(m.status, id)
+					delete(m.generations, id)
+				}
 				m.mu.Unlock()
 			}
 		}
@@ -191,7 +207,7 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-func (m *Manager) runSource(ctx context.Context, source connector.Source) {
+func (m *Manager) runSource(ctx context.Context, source connector.Source, generation uint64) {
 	eventConnector, _ := m.config.Factory(source)
 	events := make(chan struct{}, 1)
 	signal := func() {
@@ -201,44 +217,62 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 		}
 	}
 	var watcher *fsnotify.Watcher
-	if !m.config.PollOnly {
-		var err error
-		watcher, err = fsnotify.NewWatcher()
-		if err != nil {
-			m.update(ctx, source.ID, func(s *Status) { s.WatchWarning = err.Error() })
-		}
-	}
-	mode := "polling"
-	if watcher != nil {
-		mode = "events"
-	}
-	m.update(ctx, source.ID, func(s *Status) { s.State = "starting"; s.Mode = mode })
-	if watcher != nil {
-		done := make(chan struct{})
+	var watcherDone chan struct{}
+	startWatching := func(w *fsnotify.Watcher) {
+		watcherDone = make(chan struct{})
+		done := watcherDone
 		go func() {
 			defer close(done)
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case event, ok := <-watcher.Events:
+				case event, ok := <-w.Events:
 					if !ok {
 						return
 					}
 					if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove|fsnotify.Rename) != 0 && (eventConnector == nil || eventConnector.RelevantPath(event.Name)) {
 						signal()
 					}
-				case err, ok := <-watcher.Errors:
+				case _, ok := <-w.Errors:
 					if !ok {
 						return
 					}
-					m.update(ctx, source.ID, func(s *Status) { s.WatchWarning = err.Error() })
+					m.update(ctx, source.ID, generation, func(s *Status) {
+						s.Mode = "polling"
+						s.WatchWarning = "File change notifications are degraded; periodic refresh remains active."
+						s.WatchWarningCode = "watch_degraded"
+					})
 					signal()
 				}
 			}
 		}()
-		defer func() { watcher.Close(); <-done }()
 	}
+	if !m.config.PollOnly {
+		var err error
+		watcher, err = fsnotify.NewWatcher()
+		if err != nil {
+			m.update(ctx, source.ID, generation, func(s *Status) {
+				s.WatchWarning = "File change notifications are unavailable; periodic refresh remains active."
+				s.WatchWarningCode = "watch_unavailable"
+			})
+		} else {
+			startWatching(watcher)
+		}
+	}
+	mode := "polling"
+	if watcher != nil {
+		mode = "events"
+	}
+	m.update(ctx, source.ID, generation, func(s *Status) { s.State = "starting"; s.Mode = mode })
+	defer func() {
+		if watcher != nil {
+			_ = watcher.Close()
+		}
+		if watcherDone != nil {
+			<-watcherDone
+		}
+	}()
 	// The timer handles debounce and retries; polling never depends on notifications.
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -280,18 +314,35 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 			}
 			var attemptBytes [16]byte
 			if _, err := rand.Read(attemptBytes[:]); err != nil {
-				m.update(ctx, source.ID, func(s *Status) { s.State = "error"; s.LastError = "Could not start the refresh attempt." })
+				m.update(ctx, source.ID, generation, func(s *Status) {
+					s.State = "error"
+					s.LastError = "Refresh attempt could not be initialized."
+					s.LastErrorCode = "attempt_initialization_failed"
+				})
 				schedule(retry)
 				continue
 			}
 			attempt := hex.EncodeToString(attemptBytes[:])
 			started := time.Now().UTC()
-			m.update(ctx, source.ID, func(s *Status) {
+			m.update(ctx, source.ID, generation, func(s *Status) {
 				s.State = "indexing"
 				s.LastStartedAt = started.Format(time.RFC3339Nano)
 				s.Progress = Progress{AttemptID: attempt, Phase: "enumerating_extracting", Partial: true}
 			})
-			m.progress(ctx, source.ID, attempt, started, 0, 0, true, "enumerating_extracting", false, "", "")
+			m.progress(ctx, source.ID, generation, attempt, started, 0, 0, true, "enumerating_extracting", false, "", "")
+			if !m.config.PollOnly && watcher == nil {
+				var watchErr error
+				watcher, watchErr = fsnotify.NewWatcher()
+				if watchErr != nil {
+					m.update(ctx, source.ID, generation, func(s *Status) {
+						s.Mode = "polling"
+						s.WatchWarning = "File change notifications are unavailable; periodic refresh remains active."
+						s.WatchWarningCode = "watch_unavailable"
+					})
+				} else {
+					startWatching(watcher)
+				}
+			}
 			conn, err := m.config.Factory(source)
 			if err == nil && conn.Source() != source {
 				err = errors.New("source identity or extraction settings changed")
@@ -319,13 +370,15 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 						}
 					}
 				}
-				m.update(ctx, source.ID, func(s *Status) {
+				m.update(ctx, source.ID, generation, func(s *Status) {
 					if watchErr != nil {
 						s.Mode = "polling"
-						s.WatchWarning = watchErr.Error()
+						s.WatchWarning = "File change notifications are degraded; periodic refresh remains active."
+						s.WatchWarningCode = "watch_degraded"
 					} else {
 						s.Mode = "events"
 						s.WatchWarning = ""
+						s.WatchWarningCode = ""
 					}
 				})
 			}
@@ -339,7 +392,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 						if complete {
 							phase = "publishing"
 						}
-						m.progress(ctx, source.ID, attempt, started, processed, skipped, flush, phase, false, "", "")
+						m.progress(ctx, source.ID, generation, attempt, started, processed, skipped, flush, phase, false, "", "")
 					})
 					unlock()
 				}
@@ -359,10 +412,11 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 				} else if errors.Is(err, ingest.ErrSourceGone) {
 					failureCode = "stale_source"
 				}
-				m.progress(ctx, source.ID, attempt, started, 0, 0, true, "done", false, "", failureCode)
-				m.update(ctx, source.ID, func(s *Status) {
+				m.progress(ctx, source.ID, generation, attempt, started, 0, 0, true, "done", false, "", failureCode)
+				m.update(ctx, source.ID, generation, func(s *Status) {
 					s.State = "error"
 					s.LastError = "Refresh failed; the previous committed snapshot and report remain available."
+					s.LastErrorCode = failureCode
 				})
 				schedule(retry)
 				retry *= 2
@@ -374,11 +428,12 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 				if result.Report != nil {
 					reportID = result.Report.ID
 				}
-				m.progress(ctx, source.ID, attempt, started, result.Updated+result.Unchanged, result.Skipped, true, "done", true, reportID, "")
+				m.progress(ctx, source.ID, generation, attempt, started, result.Updated+result.Unchanged, result.Skipped, true, "done", true, reportID, "")
 				retry = time.Second
-				m.update(ctx, source.ID, func(s *Status) {
+				m.update(ctx, source.ID, generation, func(s *Status) {
 					s.State = "idle"
 					s.LastError = ""
+					s.LastErrorCode = ""
 					s.LastSuccessAt = time.Now().UTC().Format(time.RFC3339Nano)
 					s.Skipped = result.Skipped
 					s.SkippedPDF = result.SkippedPDF
