@@ -204,6 +204,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.nextGeneration++
 			generation := m.nextGeneration
 			m.generations[s.ID] = generation
+			m.status[s.ID] = Status{SourceID: s.ID, State: "starting", Mode: "polling"}
 			m.mu.Unlock()
 			child, cancel := context.WithCancel(ctx)
 			active[s.ID] = worker{source: s.Source, cancel: cancel, generation: generation}
@@ -254,7 +255,17 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source, genera
 		watcherDone = make(chan struct{})
 		done := watcherDone
 		go func() {
-			defer close(done)
+			defer func() {
+				if ctx.Err() == nil {
+					m.update(ctx, source.ID, generation, func(s *Status) {
+						s.Mode = "polling"
+						s.WatchWarning = "File change notifications are unavailable; periodic refresh remains active."
+						s.WatchWarningCode = "watch_unavailable"
+					})
+					signal()
+				}
+				close(done)
+			}()
 			for {
 				select {
 				case <-ctx.Done():
@@ -325,6 +336,11 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source, genera
 		select {
 		case <-ctx.Done():
 			return
+		case <-watcherDone:
+			_ = watcher.Close()
+			watcher = nil
+			watcherDone = nil
+			schedule(0)
 		case <-events:
 			if firstEvent.IsZero() {
 				firstEvent = time.Now()
@@ -403,6 +419,14 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source, genera
 					}
 				}
 				m.update(ctx, source.ID, generation, func(s *Status) {
+					select {
+					case <-watcherDone:
+						s.Mode = "polling"
+						s.WatchWarning = "File change notifications are unavailable; periodic refresh remains active."
+						s.WatchWarningCode = "watch_unavailable"
+						return
+					default:
+					}
 					if watchErr != nil {
 						s.Mode = "polling"
 						s.WatchWarning = "File change notifications are degraded; periodic refresh remains active."

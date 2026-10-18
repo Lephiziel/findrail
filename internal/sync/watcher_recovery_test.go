@@ -13,6 +13,7 @@ import (
 
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
+	"github.com/Lephiziel/findrail/internal/search"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	syncer "github.com/Lephiziel/findrail/internal/sync"
 	"github.com/Lephiziel/findrail/pkg/connector"
@@ -146,6 +147,78 @@ func TestWatcherSetupRetriesAndOverflowUsesSafeWarning(t *testing.T) {
 	watcher.failAdd = false
 	watcher.mu.Unlock()
 	eventually(t, func() bool { return m.Status()[0].Mode == "events" && m.Status()[0].WatchWarningCode == "" })
+}
+
+func TestClosedWatcherChannelsAreReplacedWithoutWaitingForPolling(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	root, data := t.TempDir(), t.TempDir()
+	path := filepath.Join(root, "note.md")
+	if err := os.WriteFile(path, []byte("baseline"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sqlite.Open(ctx, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	conn, err := filesystem.New(root, 1<<20, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ingest.Run(ctx, store, conn); err != nil {
+		t.Fatal(err)
+	}
+	created := make(chan *testWatcher, 4)
+	m := syncer.New(store, syncer.Config{
+		Factory: func(source connector.Source) (*filesystem.Connector, error) {
+			return filesystem.NewWithOptions(source.Root, filesystem.Options{
+				MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes,
+				MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken,
+				RegistrationRevision: source.RegistrationRevision,
+			}, data)
+		},
+		WatcherFactory: func() (syncer.Watcher, error) {
+			watcher := newTestWatcher()
+			created <- watcher
+			return watcher, nil
+		},
+		Interval: time.Hour, DiscoveryInterval: 10 * time.Millisecond, Debounce: 10 * time.Millisecond,
+	})
+	done := make(chan struct{})
+	go func() { defer close(done); m.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	var first, second *testWatcher
+	select {
+	case first = <-created:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first watcher was not created")
+	}
+	eventually(t, func() bool {
+		status := m.Status()
+		return len(status) == 1 && status[0].State == "idle" && status[0].Mode == "events"
+	})
+	_ = first.Close()
+	select {
+	case second = <-created:
+	case <-time.After(3 * time.Second):
+		t.Fatal("closed watcher remained installed instead of being recreated")
+	}
+	eventually(t, func() bool {
+		status := m.Status()
+		return len(status) == 1 && status[0].State == "idle" && status[0].Mode == "events"
+	})
+	if err := os.WriteFile(path, []byte("replacementwatchermarker"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	second.events <- fsnotify.Event{Name: path, Op: fsnotify.Write}
+	eventually(t, func() bool {
+		result, err := store.Search(ctx, search.Request{Query: "replacementwatchermarker", Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.Total == 1
+	})
 }
 
 func TestContinuousWatcherEventsCannotDeferRefreshForever(t *testing.T) {

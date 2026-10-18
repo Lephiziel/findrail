@@ -49,3 +49,9 @@ Example (optional error fields omitted when there is no warning/failure):
 ```
 
 No database schema or durable attempt history is implied by this response.
+
+Changing a worker's source registration/settings starts a new process-local
+status generation; old attempt/error fields are not carried into it. The source
+inventory and durable report remain the authority for an earlier committed scan.
+Unexpected closure of either watcher channel is treated as unavailable and
+recreates the watcher; polling remains the recovery path if setup still fails.
