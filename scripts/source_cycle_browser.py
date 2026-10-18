@@ -138,7 +138,7 @@ def run(browser, base, source, url, restart, recorder, paging):
         assert archive.is_file() and "fingerprint" in element("snapshot-summary").text
         assert browser.execute_script("return window.localEvidenceCollection.entries") == state["pinned"]
         element("snapshot-close").send_keys(Keys.ENTER)
-        assert browser.switch_to.active_element.text == "Export snapshot"
+        wait.until(lambda _: browser.switch_to.active_element.text == "Export snapshot")
     recorder.run("explicit_preset_file_and_host_path_source_export_jobs", preset_and_source_export)
 
     def destination_bundle_import():
