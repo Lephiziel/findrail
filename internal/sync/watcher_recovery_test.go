@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -167,8 +168,12 @@ func TestContinuousWatcherEventsCannotDeferRefreshForever(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := make(chan *testWatcher, 1)
+	var factoryCalls atomic.Int32
 	m := syncer.New(store, syncer.Config{
 		Factory: func(source connector.Source) (*filesystem.Connector, error) {
+			if factoryCalls.Add(1) == 1 {
+				return nil, errors.New("synthetic event path filter bypass")
+			}
 			return filesystem.NewWithOptions(source.Root, filesystem.Options{
 				MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes,
 				MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken,
