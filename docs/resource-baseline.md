@@ -86,6 +86,47 @@ different native hosts are not evidence of Go-code speedup.
 
 ## Measurements
 
+### 2026-10-18 native TASK17 scale run (draft candidate)
+
+Host: Linux x86_64, Go 1.27.2, Python 3.14.8. Fixture v2, seed 42, synthetic
+corpus SHA-256 `a2e69b1a1a28c5617ae93f6295578f105730ca235b47e15604dc2a21c4ab1c08`
+(10k) and `5680cc710acd926ad0114c69169eb4d31de428c657b27a5850ce2ef4aae6714a`
+(100k). Candidate source revision `e7c7af2e004a59d0625049de1490e4969008f217`,
+schema 8, binary SHA-256
+`5807ade7a1a5e495661a10807a34ed7e52466245a06758c2a9c24d184d45ad10`.
+Five measured requests per query (`common`, `rare`) after one excluded warmup
+each (ten warm samples); page profile timing includes complete traversal to the
+1,000-result window, separately for each limit.
+
+| Metric | 10,000 documents | 100,000 documents |
+|---|---:|---:|
+| Indexed / skipped; synthetic PDF pages | 10,000 / 0; 2,500 | 100,000 / 0; 25,000 |
+| Generated input / extracted text bytes | 4,834,814 / 4,817,314 | 48,311,393 / 48,136,393 |
+| Index wall ms | 8,278.596 | 92,062.148 |
+| DB + WAL + SHM bytes after index, before doctor/search | 15,405,056 | 153,378,816 |
+| Server startup ms | 6.975 | 7.506 |
+| First HTTP request after startup ms (not cold cache) | 15.941 | 174.682 |
+| Warm HTTP p50 / p95 ms (10 samples) | 8.387 / 15.459 | 73.748 / 169.536 |
+| Page 20/50/100 full-window traversal p50 ms | not measured in comparison run | 168.641 / 165.424 / 162.296 |
+| Page-window returned / total common matches | not recorded | 1,000 / 50,000 |
+| Sampled max server RSS (not process peak) | 26,755,072 | 26,845,184 |
+
+The 10k run compares the production-source baseline at
+`bb5b4d80a7558b7a9dd3a7749f519eec5cefe0ca` (binary SHA-256
+`bb719e0bab52c12cb33dd5b17930c0f8fe6438999be76677fb06337f8cfeedb4`) and this
+candidate on the same Linux host with matching fixture hash. The candidate's
+warm HTTP p50/p95 was 8.387/15.459 ms versus baseline 8.125/14.802 ms (only ten
+samples each); index time was 8,278.596 ms versus baseline 8,243.150 ms. This
+small observed difference is not a stable regression estimate. Reports are
+temporary local artifacts, not checked in. 100k was candidate-only. The measured
+candidate SHA is the fetched base, not this tooling commit; these figures do not
+include the harness change. RSS was sampled per request, not captured as peak;
+native Linux synthetic results do not generalize to other OSes or real-user
+workloads. The p95 <150 ms target remains an engineering goal, not an SLO.
+
+TASK17 remains incomplete: this profile does not yet measure successful refresh
+or refresh cancellation while concurrent reads execute.
+
 ### 2026-10-15 native review measurement
 
 Host: Linux x86_64, AMD EPYC 9V74, Go 1.27.2, Python 3.12.14.

@@ -355,7 +355,7 @@ def main():
             other = a.compare.resolve(strict=True)
             with tempfile.TemporaryDirectory(prefix="findrail-resource-compare-") as temp:
                 other_report = Path(temp) / "report.json"
-                run([os.sys.executable, str(Path(__file__).resolve()), "--binary", str(other), "--documents", str(a.documents), "--seed", str(a.seed), "--queries", str(a.queries), "--report", str(other_report)] + (["--allow-large"] if a.documents == 100000 else []), remaining_timeout(deadline, MAX_SECONDS))
+                run([os.sys.executable, str(Path(__file__).resolve()), "--binary", str(other), "--documents", str(a.documents), "--seed", str(a.seed), "--queries", str(a.queries), "--report", str(other_report)] + (["--allow-large"] if a.documents == 100000 else []) + (["--source-cycle-boundaries"] if a.source_cycle_boundaries else []), remaining_timeout(deadline, MAX_SECONDS))
                 measured = json.loads(other_report.read_text(encoding="utf-8"))
             if measured.get("status") != "success" or measured.get("fixture", {}).get("corpus_sha256") != report["fixture"]["corpus_sha256"]:
                 raise RuntimeError("comparison workload differs or second run was incomplete")
