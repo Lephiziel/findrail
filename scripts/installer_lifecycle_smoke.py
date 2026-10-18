@@ -37,7 +37,7 @@ def main():
         package.verify_archive(archive, expected_target, version)
         # WScript.Shell expands percent-delimited environment references in
         # shortcut targets, so Windows uses only valid Unicode/space path chars.
-        first_name = 'путь space' if os.name == 'nt' else 'первый путь % "$ \\'
+        first_name = 'é space' if os.name == 'nt' else 'первый путь % "$ \\'
         first = package.extract_verified(archive, root / first_name)
         second = package.extract_verified(archive, root / 'updated extraction 📦')
         info = json.loads((first / 'BUILD-INFO.json').read_text(encoding='utf-8'))
