@@ -16,6 +16,32 @@ spec.loader.exec_module(resource_check)
 
 
 class GeneratorTests(unittest.TestCase):
+    def test_paging_profiles_request_three_real_limits_and_stop_at_window(self):
+        calls = []
+        def open_page(url, timeout):
+            from urllib.parse import urlparse, parse_qs
+            from unittest.mock import Mock
+            params = parse_qs(urlparse(url).query)
+            limit = int(params['limit'][0]); offset = int(params.get('cursor', ['0'])[0])
+            calls.append(limit)
+            size = min(limit, 1000-offset)
+            page = {'total': 1500, 'offset': offset,
+                    'results': [{'id': str(i)} for i in range(offset, offset+size)],
+                    'next_cursor': str(offset+size) if offset+size < 1000 else None,
+                    'end_reason': 'window_limit' if offset+size == 1000 else None}
+            response = Mock()
+            response.__enter__ = lambda _: response
+            response.__exit__ = lambda *args: None
+            response.read = lambda cap: json.dumps(page).encode()
+            return response
+        from unittest.mock import patch
+        with patch.object(resource_check.urllib.request, 'urlopen', side_effect=open_page):
+            profile = resource_check.paging_profile('http://127.0.0.1', 1500, time.monotonic()+10)
+        self.assertEqual(profile['window_limit'], 1000)
+        self.assertEqual(profile['total'], 1500)
+        self.assertEqual(set(calls), {20, 50, 100})
+        self.assertTrue(all(v['returned'] == 1000 for v in profile['page_sizes'].values()))
+
     def corpus(self, seed):
         with tempfile.TemporaryDirectory(prefix="findrail-fixture-test-") as temp:
             root = Path(temp) / "source"

@@ -143,28 +143,34 @@ def remaining_timeout(deadline, maximum):
 
 
 def paging_profile(base_url, expected, deadline):
-    """Measure the existing seeded workload through the bounded cursor API."""
-    ids, sizes, latencies = [], [], []
-    cursor = None
-    for _ in range(10):
-        params = {"q": QUERIES["common"], "limit": 100}
-        if cursor: params["cursor"] = cursor
-        started = time.perf_counter()
-        with urllib.request.urlopen(base_url + "/api/v1/search/pages?" + urllib.parse.urlencode(params),
-                                    timeout=remaining_timeout(deadline, 10)) as response:
-            raw = response.read((512 << 10) + 1)
-        latencies.append((time.perf_counter() - started) * 1000); sizes.append(len(raw))
-        if len(raw) > 512 << 10: raise RuntimeError("page exceeded encoded response cap")
-        page = json.loads(raw)
-        if page["total"] != expected or page["offset"] != len(ids): raise RuntimeError("paging fixture shape changed")
-        ids.extend(item["id"] for item in page["results"])
-        cursor = page["next_cursor"]
-        if cursor is None:
-            if page["end_reason"] != "complete": raise RuntimeError("paging window incomplete")
-            break
-    if cursor or len(ids) != expected or len(set(ids)) != expected: raise RuntimeError("paging lost or duplicated results")
-    return {"pages": len(sizes), "returned": len(ids), "beyond_237": len(ids) > 237,
-            "max_response_bytes": max(sizes), "latency_ms": latency_summary(latencies)}
+    """Exercise real page sizes and traverse only the API's 1,000-result window."""
+    profiles = {}
+    for page_size in (20, 50, 100):
+        ids, sizes, latencies, previous = [], [], [], None
+        cursor = None
+        while len(ids) < min(expected, 1000):
+            params = {"q": QUERIES["common"], "limit": page_size}
+            if cursor: params["cursor"] = cursor
+            started = time.perf_counter()
+            with urllib.request.urlopen(base_url + "/api/v1/search/pages?" + urllib.parse.urlencode(params),
+                                        timeout=remaining_timeout(deadline, 10)) as response:
+                raw = response.read((512 << 10) + 1)
+            latencies.append((time.perf_counter() - started) * 1000); sizes.append(len(raw))
+            if len(raw) > 512 << 10: raise RuntimeError("page exceeded encoded response cap")
+            page = json.loads(raw)
+            if page["total"] != expected or page["offset"] != len(ids): raise RuntimeError("paging fixture shape changed")
+            batch = [item["id"] for item in page["results"]]
+            if not batch or batch[0] == previous: raise RuntimeError("paging order contains duplicate boundary")
+            ids.extend(batch); previous = batch[-1]; cursor = page["next_cursor"]
+            if cursor is None: break
+        target = min(expected, 1000)
+        if len(ids) != target or len(set(ids)) != target: raise RuntimeError("paging lost or duplicated results")
+        if expected > 1000 and cursor is not None: raise RuntimeError("paging exceeded the result window")
+        if expected <= 1000 and cursor is not None: raise RuntimeError("paging window did not complete")
+        profiles[str(page_size)] = {"pages": len(sizes), "returned": len(ids),
+                                    "window_complete": expected <= 1000,
+                                    "max_response_bytes": max(sizes), "latency_ms": latency_summary(latencies)}
+    return {"window_limit": 1000, "total": expected, "page_sizes": profiles}
 
 
 def bundle_boundary_profile(binary, data_dir, source_id, deadline):

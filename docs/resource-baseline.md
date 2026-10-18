@@ -24,6 +24,30 @@ python3 scripts/search_resource_check.py --binary /tmp/findrail-alpha4 \
   --queries 5 --report /tmp/findrail-comparison.json
 ```
 
+For a long-session source candidate, opt into HTTP cursor traversal and the
+existing bounded evidence-bundle boundary checks with
+`--source-cycle-boundaries`. This exercises page limits 20, 50 and 100 through
+the actual `/api/v1/search/pages` endpoint and traverses no more than the API's
+1,000-result window. It does not raise the legacy search limit or request an
+evaluation result set above 100. Each size restarts traversal from the first
+page; cursors are process-local. `total`, contiguous offsets and unique result
+IDs are checked.
+
+Example large run (deliberately not part of ordinary CI):
+
+```sh
+python3 scripts/search_resource_check.py --binary /tmp/findrail \
+  --documents 100000 --allow-large --seed 42 --queries 5 \
+  --source-cycle-boundaries --report /tmp/findrail-resource-100k.json
+```
+
+Large-profile reports are local artifacts and are not uploaded. Keep baseline
+and candidate builds, their reports, and data directories isolated; never run an
+older binary against a candidate-migrated index. A successful report does not
+mean a refresh/cancellation-under-concurrent-search workload was measured; this
+harness profile currently measures indexing, ordinary/paged HTTP search, and
+evidence preview only.
+
 The supported profiles are 100 (smoke), 1,000, 10,000, and 100,000. The latter
 requires explicit `--allow-large`. Generation enforces a 256 MiB cap on both
 generated text input and total corpus file bytes, plus a 5-minute/30-minute
