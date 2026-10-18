@@ -379,7 +379,9 @@ def main():
             browser.find_element(By.ID, "close-preview").click()
             browser.find_element(By.ID, "collection-open").click()
             wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".collection-row textarea")) == 1)
-            assert "unsaved freshness note" in browser.find_element(By.CSS_SELECTOR, ".collection-row textarea").get_attribute("value")
+            freshness_note = browser.find_element(By.CSS_SELECTOR, ".collection-row textarea")
+            assert "unsaved freshness note" in freshness_note.get_attribute("value")
+            freshness_note.clear()
             browser.find_element(By.ID, "collection-close").click()
             browser.execute_script("window.fetch=window.__freshFetch")
             freshness_case.update(status="passed", elapsed_seconds=round(time.monotonic()-freshness_started, 3))
@@ -405,7 +407,7 @@ def main():
             wait.until(lambda d: len(d.find_elements(By.CLASS_NAME, "collection-row")) == 2)
             def add_note(_):
                 try:
-                    textarea = browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")[-1]
+                    textarea = browser.find_element(By.CSS_SELECTOR, ".collection-row textarea")
                     if textarea.get_attribute("value") == "note from packaged journey":
                         return True
                     textarea.send_keys("note from packaged journey")
