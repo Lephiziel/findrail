@@ -16,6 +16,57 @@ spec.loader.exec_module(resource_check)
 
 
 class GeneratorTests(unittest.TestCase):
+    def test_refresh_deadline_still_reaps_running_child(self):
+        from unittest.mock import Mock, patch
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        launched = False
+        def launch(*args, **kwargs):
+            nonlocal launched
+            launched = True
+            return child
+        def remaining(*args):
+            if launched:
+                raise TimeoutError('synthetic deadline after child launch')
+            return 5
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                (root/'doc-000000.md').write_text('original')
+                (root/'doc-000001.go').write_text('original')
+                with patch.object(resource_check, 'run', return_value=Mock(stdout='{"updated":1}')), \
+                     patch.object(resource_check.subprocess, 'Popen', side_effect=launch), \
+                     patch.object(resource_check, 'remaining_timeout', side_effect=remaining):
+                    with self.assertRaises(TimeoutError):
+                        resource_check.refresh_profile(Path(sys.executable), root, root,
+                                                       'http://127.0.0.1:1', 1, 0)
+                self.assertIsNotNone(child.poll(), 'expired deadline left index child running')
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+
+    def test_refresh_reader_start_failure_still_reaps_running_child(self):
+        from unittest.mock import Mock, patch
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        reader = Mock()
+        reader.start.side_effect = RuntimeError('synthetic thread start failure')
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                (root/'doc-000000.md').write_text('original')
+                (root/'doc-000001.go').write_text('original')
+                with patch.object(resource_check, 'run', return_value=Mock(stdout='{"updated":1}')), \
+                     patch.object(resource_check.subprocess, 'Popen', return_value=child), \
+                     patch.object(resource_check.threading, 'Thread', return_value=reader):
+                    with self.assertRaisesRegex(RuntimeError, 'thread start failure'):
+                        resource_check.refresh_profile(Path(sys.executable), root, root,
+                                                       'http://127.0.0.1:1', 1, time.monotonic()+5)
+                self.assertIsNotNone(child.poll(), 'reader failure left index child running')
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+
     def test_paging_profiles_request_three_real_limits_and_stop_at_window(self):
         calls = []
         def open_page(url, timeout):

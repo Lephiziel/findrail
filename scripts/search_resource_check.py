@@ -262,9 +262,11 @@ def refresh_profile(binary, data_dir, source, base_url, expected, deadline):
     reader = threading.Thread(target=read_loop, name="resource-refresh-read", daemon=True)
     child = subprocess.Popen(index_args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True, shell=False)
-    reader.start()
-    canceled_started = time.perf_counter()
+    reader_started = False
     try:
+        reader.start()
+        reader_started = True
+        canceled_started = time.perf_counter()
         # Keep the refresh alive until both the minimum overlap and a real read
         # completion have been observed; never wait beyond the shared deadline.
         overlap_deadline = time.monotonic() + min(5, remaining_timeout(deadline, 5))
@@ -284,8 +286,13 @@ def refresh_profile(binary, data_dir, source, base_url, expected, deadline):
             raise RuntimeError("canceled refresh unexpectedly committed successfully")
     finally:
         stop_reads.set()
-        reader.join(timeout=remaining_timeout(deadline, 5))
-        stop_process(child)
+        # Cleanup has its own bounded allowance even when the work deadline
+        # expired. A join/start failure must not bypass child termination.
+        try:
+            if reader_started:
+                reader.join(timeout=20)
+        finally:
+            stop_process(child)
     if reader.is_alive():
         raise RuntimeError("concurrent read sampler did not stop")
     if not read_samples:
