@@ -13,6 +13,11 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 def run(browser, base, source, url, restart, recorder, paging):
     wait = WebDriverWait(browser, 25)
     element = lambda name: browser.find_element(By.ID, name)
+
+    def source_option_present(source_id):
+        return browser.execute_script(
+            "return [...document.getElementById('source').options].some(option=>option.value===arguments[0])",
+            source_id)
     archive = base / "integrated snapshot – 雪.zip"
     bundle = base / "findrail-evidence-bundle.json"
     preset = base / "findrail-search-preset.json"
@@ -196,7 +201,7 @@ def run(browser, base, source, url, restart, recorder, paging):
         wait.until(lambda _: "imported" in element("snapshot-summary").text); element("snapshot-close").click()
         wait.until(lambda _: len(inventory()) == 2)
         frozen = next(s for s in inventory() if s["kind"] == "archive")["id"]
-        wait.until(lambda _: any(o.get_attribute("value") == frozen for o in Select(element("source")).options))
+        wait.until(lambda _: source_option_present(frozen))
         Select(element("source")).select_by_value(frozen)
         search("needledocxlate", "docx"); preview("needledocxlate")
         assert "Frozen imported snapshot" in element("preview-notice").text and element("open-original").get_property("hidden")
@@ -211,7 +216,7 @@ def run(browser, base, source, url, restart, recorder, paging):
         wait.until(lambda _: len(browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")) == 3)
         assert [e.get_attribute("value") for e in browser.find_elements(By.CSS_SELECTOR, ".collection-row textarea")] == [e["note"] for e in state["bundle"]["entries"]]
         element("collection-close").click()
-        wait.until(lambda _: any(o.get_attribute("value") == frozen for o in Select(element("source")).options))
+        wait.until(lambda _: source_option_present(frozen))
         Select(element("source")).select_by_value(frozen); search("needledocxlate", "docx")
         browser.execute_script("""
             window.__cycleFetch=window.fetch.bind(window);window.__cycleHold=true;
@@ -225,7 +230,7 @@ def run(browser, base, source, url, restart, recorder, paging):
         element("close-preview").click()
         source_action(frozen, "Removes only"); element("confirm-remove").send_keys(Keys.ENTER)
         wait.until(lambda _: len(inventory()) == 1)
-        wait.until(lambda _: not any(o.get_attribute("value") == frozen for o in Select(element("source")).options))
+        wait.until(lambda _: not source_option_present(frozen))
         inspect(); element("snapshot-name").send_keys("Re-added frozen source"); element("snapshot-submit").click()
         wait.until(lambda _: "imported" in element("snapshot-summary").text); element("snapshot-close").click()
         wait.until(lambda _: len(inventory()) == 2)
