@@ -40,7 +40,8 @@ def main():
         # shortcut targets, so Windows uses only valid Unicode/space path chars.
         first_name = 'é space' if os.name == 'nt' else 'первый путь % "$ \\'
         first = package.extract_verified(archive, root / first_name)
-        second = package.extract_verified(archive, root / 'updated extraction 📦')
+        second_name = 'update extraction' if os.name == 'nt' else 'updated extraction 📦'
+        second = package.extract_verified(archive, root / second_name)
         info = json.loads((first / 'BUILD-INFO.json').read_text(encoding='utf-8'))
         if info.get('revision') != args.candidate_sha or info.get('dirty') is not False:
             raise ValueError('verified archive provenance does not match candidate SHA / clean source')
