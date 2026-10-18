@@ -90,18 +90,6 @@ class GeneratorTests(unittest.TestCase):
             self.assertIn(b"requires --allow-large", result.stderr)
             self.assertFalse(report.exists())
 
-    def test_source_cycle_requires_scale_profile(self):
-        script = Path(__file__).with_name("search_resource_check.py")
-        with tempfile.TemporaryDirectory(prefix="resource-cycle-gate-") as temp:
-            report = Path(temp) / "not-created.json"
-            result = subprocess.run([sys.executable, str(script), "--binary", sys.executable,
-                                     "--documents", "1000", "--seed", "42", "--report", str(report),
-                                     "--source-cycle-boundaries"], stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, check=False)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(b"requires the 10000- or 100000-document profile", result.stderr)
-            self.assertFalse(report.exists())
-
     def test_failed_index_reports_failure_and_cleans_fixture(self):
         script = Path(__file__).with_name("search_resource_check.py")
         with tempfile.TemporaryDirectory(prefix="resource-failure-test-") as temp:

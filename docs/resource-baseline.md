@@ -28,8 +28,7 @@ For a long-session source candidate, opt into HTTP cursor traversal and the
 existing bounded evidence-bundle boundary checks with
 `--source-cycle-boundaries`. This exercises page limits 20, 50 and 100 through
 the actual `/api/v1/search/pages` endpoint and traverses no more than the API's
-1,000-result window; it is available only for 10k and 100k scale profiles. It
-does not raise the legacy search limit or request an
+1,000-result window. It does not raise the legacy search limit or request an
 evaluation result set above 100. Each size restarts traversal from the first
 page; cursors are process-local. `total`, contiguous offsets, unique IDs and
 identical ordering across page sizes are checked. Page request latencies include
@@ -59,13 +58,15 @@ The 100k opt-in comparison uses the same command with
 
 Large-profile reports are local artifacts and are not uploaded. Keep baseline
 and candidate builds, their reports, and data directories isolated; never run an
-older binary against a candidate-migrated index. This profile changes a
-synthetic document and records one successful full-source refresh, then changes
-a second document and cancels another full scan with SIGTERM while a separate
-thread continuously issues HTTP search requests. It checks successful reads,
-unsuccessful cancellation, and preservation of the previous committed content.
-This local process cancellation is not a UI cancellation or cross-platform
-signal guarantee.
+older binary against a candidate-migrated index. On 10k/100k, this profile
+changes a synthetic document and records one successful full-source refresh,
+then changes a second document and cancels another full scan with SIGTERM while
+a separate thread continuously issues HTTP search requests. It checks
+successful reads, unsuccessful cancellation, and preservation of the previous
+committed content. The existing 1k CI boundary profile retains paging and
+evidence-boundary checks but records `refresh_cycle.status=not_measured`; it is
+not a long-session measurement. This local process cancellation is not a UI
+cancellation or cross-platform signal guarantee.
 
 The supported profiles are 100 (smoke), 1,000, 10,000, and 100,000. The latter
 requires explicit `--allow-large`. Generation enforces a 256 MiB cap on both

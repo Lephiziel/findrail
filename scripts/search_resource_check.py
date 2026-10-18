@@ -383,8 +383,6 @@ def main():
     p.add_argument("--allow-large", action="store_true", help="required for 100000-document profile")
     a = p.parse_args()
     if a.documents == 100000 and not a.allow_large: p.error("100000 documents requires --allow-large")
-    if a.source_cycle_boundaries and a.documents < 10000:
-        p.error("--source-cycle-boundaries requires the 10000- or 100000-document profile")
     if not 1 <= a.queries <= 100: p.error("--queries must be 1..100")
     binary = a.binary.resolve(strict=True)
     deadline = time.monotonic() + min(MAX_SECONDS, 300 if a.documents <= 1000 else MAX_SECONDS)
@@ -474,8 +472,12 @@ def main():
                     per_query[qid] = {"repeats": len(query_latencies), "latency_ms": latency_summary(query_latencies)}
                 if a.source_cycle_boundaries:
                     report["metrics"]["paging_window"] = paging_profile(base_url, expected_counts["common"], deadline)
-                    report["metrics"]["refresh_cycle"] = refresh_profile(
-                        binary, data_dir, source, base_url, expected_counts["common"], deadline)
+                    if a.documents >= 10000:
+                        report["metrics"]["refresh_cycle"] = refresh_profile(
+                            binary, data_dir, source, base_url, expected_counts["common"], deadline)
+                    else:
+                        report["metrics"]["refresh_cycle"] = {
+                            "status": "not_measured", "reason": "long-session refresh requires 10000+ documents"}
             finally:
                 stop_process(server)
             if a.source_cycle_boundaries:
