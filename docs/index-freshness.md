@@ -19,6 +19,8 @@ Warnings and errors use bounded, non-path text and stable codes. Consumers shoul
 prefer the code; text can be absent and codes can be unknown. The additive
 `watch_warning_code` values currently include `watch_unavailable` and
 `watch_degraded`; `last_error_code` reports a stable refresh failure category.
+Current `last_error_code` values include `scan_failed`, `canceled`,
+`deadline_exceeded`, `stale_source`, and `attempt_initialization_failed`.
 Existing API1 fields remain unchanged.
 
 Example (optional error fields omitted when there is no warning/failure):

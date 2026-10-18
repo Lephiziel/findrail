@@ -54,7 +54,30 @@ type Config struct {
 	PollOnly          bool
 	Factory           func(connector.Source) (*filesystem.Connector, error)
 	Coordinator       *sourcecoord.Locks
+	WatcherFactory    func() (Watcher, error)
 }
+
+// Watcher is the notification surface consumed by a source worker. Config can
+// supply an implementation for deterministic recovery testing; production uses
+// fsnotify without changing the reconciliation contract.
+type Watcher interface {
+	Add(string) error
+	Remove(string) error
+	WatchList() []string
+	Close() error
+	Events() <-chan fsnotify.Event
+	Errors() <-chan error
+}
+
+type fsnotifyWatcher struct{ watcher *fsnotify.Watcher }
+
+func (w fsnotifyWatcher) Add(path string) error         { return w.watcher.Add(path) }
+func (w fsnotifyWatcher) Remove(path string) error      { return w.watcher.Remove(path) }
+func (w fsnotifyWatcher) WatchList() []string           { return w.watcher.WatchList() }
+func (w fsnotifyWatcher) Close() error                  { return w.watcher.Close() }
+func (w fsnotifyWatcher) Events() <-chan fsnotify.Event { return w.watcher.Events }
+func (w fsnotifyWatcher) Errors() <-chan error          { return w.watcher.Errors }
+
 type Manager struct {
 	store          *sqlite.Store
 	config         Config
@@ -65,6 +88,15 @@ type Manager struct {
 }
 
 func New(store *sqlite.Store, config Config) *Manager {
+	if config.WatcherFactory == nil {
+		config.WatcherFactory = func() (Watcher, error) {
+			watcher, err := fsnotify.NewWatcher()
+			if err != nil {
+				return nil, err
+			}
+			return fsnotifyWatcher{watcher: watcher}, nil
+		}
+	}
 	if config.Coordinator == nil {
 		config.Coordinator = sourcecoord.New()
 	}
@@ -216,9 +248,9 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source, genera
 		default:
 		}
 	}
-	var watcher *fsnotify.Watcher
+	var watcher Watcher
 	var watcherDone chan struct{}
-	startWatching := func(w *fsnotify.Watcher) {
+	startWatching := func(w Watcher) {
 		watcherDone = make(chan struct{})
 		done := watcherDone
 		go func() {
@@ -227,14 +259,14 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source, genera
 				select {
 				case <-ctx.Done():
 					return
-				case event, ok := <-w.Events:
+				case event, ok := <-w.Events():
 					if !ok {
 						return
 					}
 					if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove|fsnotify.Rename) != 0 && (eventConnector == nil || eventConnector.RelevantPath(event.Name)) {
 						signal()
 					}
-				case _, ok := <-w.Errors:
+				case _, ok := <-w.Errors():
 					if !ok {
 						return
 					}
@@ -250,7 +282,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source, genera
 	}
 	if !m.config.PollOnly {
 		var err error
-		watcher, err = fsnotify.NewWatcher()
+		watcher, err = m.config.WatcherFactory()
 		if err != nil {
 			m.update(ctx, source.ID, generation, func(s *Status) {
 				s.WatchWarning = "File change notifications are unavailable; periodic refresh remains active."
@@ -332,7 +364,7 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source, genera
 			m.progress(ctx, source.ID, generation, attempt, started, 0, 0, true, "enumerating_extracting", false, "", "")
 			if !m.config.PollOnly && watcher == nil {
 				var watchErr error
-				watcher, watchErr = fsnotify.NewWatcher()
+				watcher, watchErr = m.config.WatcherFactory()
 				if watchErr != nil {
 					m.update(ctx, source.ID, generation, func(s *Status) {
 						s.Mode = "polling"
