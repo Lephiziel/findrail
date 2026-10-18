@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise packaged per-user installer resources in a disposable native destination."""
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -80,7 +81,7 @@ def main():
             if not ps:
                 raise RuntimeError('PowerShell unavailable on Windows native runner')
             inspect_script = root / 'inspect-shortcut.ps1'
-            inspect_script.write_text("param([string]$ShortcutPath)\n$s=(New-Object -ComObject WScript.Shell).CreateShortcut($ShortcutPath)\n[pscustomobject]@{Target=$s.TargetPath;Description=$s.Description}|ConvertTo-Json -Compress\n", encoding='utf-8')
+            inspect_script.write_text("param([string]$ShortcutPath)\n$s=(New-Object -ComObject WScript.Shell).CreateShortcut($ShortcutPath)\n$j=[pscustomobject]@{Target=$s.TargetPath;Description=$s.Description}|ConvertTo-Json -Compress\n[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j))\n", encoding='utf-8')
             def run(tree, name):
                 script = tree / resource / name
                 command = [ps, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script)]
@@ -98,7 +99,8 @@ def main():
                 return result
             entry = destination / 'Findrail.lnk'
             def inspect(tree):
-                value = json.loads(subprocess.check_output([ps, '-NoProfile', '-File', str(inspect_script), '-ShortcutPath', str(entry)], text=True))
+                encoded = subprocess.check_output([ps, '-NoProfile', '-File', str(inspect_script), '-ShortcutPath', str(entry)], text=True).strip()
+                value = json.loads(base64.b64decode(encoded).decode('utf-8'))
                 expected_binary = tree / 'findrail-desktop.exe'
                 try:
                     same_target = os.path.samefile(value['Target'], expected_binary)
