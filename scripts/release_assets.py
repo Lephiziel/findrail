@@ -23,8 +23,8 @@ def contract_schema(version):
     if version == '0.1.0-alpha.4':
         return 7
     if version == '0.1.0-alpha.5':
-        # Unpublished candidate only: schema follows the trusted checked-out source.
-        return package.schema_version()
+        # Explicit release contract; later source migrations do not rewrite it.
+        return 8
     raise ValueError('unsupported release/candidate version contract')
 
 

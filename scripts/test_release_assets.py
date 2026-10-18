@@ -194,17 +194,15 @@ class ReleaseAssetTests(unittest.TestCase):
             with patch.object(release.package, 'schema_version', return_value=8):
                 self.assertEqual(release.verify(output, '0.1.0-alpha.4', revision)['schema_version'], 7)
 
-    def test_alpha5_candidate_tracks_trusted_source_schema_only(self):
-        for source_schema in (7, 8):
-            with self.subTest(source_schema=source_schema), tempfile.TemporaryDirectory() as temp:
+    def test_alpha5_schema_is_frozen_when_source_advances(self):
+        with patch.object(release.package, 'schema_version', return_value=9):
+            self.assertEqual(release.contract_schema('0.1.0-alpha.5'), 8)
+            with tempfile.TemporaryDirectory() as temp:
                 root = pathlib.Path(temp)
-                with patch.object(release.package, 'schema_version', return_value=source_schema):
-                    self.assertEqual(release.contract_schema('0.1.0-alpha.5'), source_schema)
-                    source, revision = self.candidate(root, version='0.1.0-alpha.5', schema=source_schema)
-                    output = root / 'release'
-                    manifest = release.assemble(source, output, '0.1.0-alpha.5', revision)
-                    self.assertEqual(manifest['schema_version'], source_schema)
-                    self.assertEqual(release.verify(output, '0.1.0-alpha.5', revision)['schema_version'], source_schema)
+                source, revision = self.candidate(root, version='0.1.0-alpha.5', schema=8)
+                output = root / 'release'
+                self.assertEqual(release.assemble(source, output, '0.1.0-alpha.5', revision)['schema_version'], 8)
+                self.assertEqual(release.verify(output, '0.1.0-alpha.5', revision)['schema_version'], 8)
 
     def test_alpha3_and_alpha4_contracts_do_not_follow_alpha5_source_schema(self):
         with patch.object(release.package, 'schema_version', return_value=8):
