@@ -65,6 +65,33 @@ python3 scripts/release_assets.py verify \
 The native artifacts contain only their archive and a small verification report;
 no temporary indexes, user paths, credentials, or test databases are uploaded.
 
+## Shared integrated browser gate
+
+Standalone `packaged-journey.yml` and the mandatory Alpha release candidate
+browser job both call `scripts/packaged_journey.py` with the same verified
+extracted Linux executable. The shared case list includes the existing preset
+and evidence-bundle browser smokes plus `portable_transfer_browser_smoke.py` for
+cross-feature A/B/C transfer, note/cursor fences and uncertain commit outcomes.
+The latter requires TASK 11 Sources UI in main; a missing dependency fails the
+case and does not certify TASK 12. See [the alpha.5 acceptance inputs and
+commands](release-smoke-alpha5.md#integrated-candidate-gate).
+
+An explicit workflow preparation step builds the existing offline synthetic
+GitHub fixture writer. The orchestrator requires its path for the collection
+smoke and records its digest separately; it never runs `go run` or builds/selects
+a replacement application during acceptance.
+
+The JSON report records only executed cases and their durations, including the
+failed case. Transfer subcases are embedded in the orchestrator report. Identity
+failure stops before invoking smokes; an explicit browser skip produces an
+`incomplete` report with skipped cases, and a missing browser fails. Timeouts
+reap the complete child process group; stdout/stderr are drained to temporary
+files with bounded diagnostic tails. Both workflow artifact steps run even on
+failure, retaining `packaged-journey-<sha>` for 14 days and
+`release-browser-journey-<sha>` for 30 days respectively. No indexes, browser
+profiles or raw logs are uploaded. A failed browser gate still prevents
+aggregation/publication. There is no second release pipeline.
+
 ## Published alpha.3 asset contract
 
 The immutable published alpha.3 contains exactly these eight files (no staging extras):
