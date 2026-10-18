@@ -16,6 +16,99 @@ spec.loader.exec_module(resource_check)
 
 
 class GeneratorTests(unittest.TestCase):
+    def test_refresh_deadline_still_reaps_running_child(self):
+        from unittest.mock import Mock, patch
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        launched = False
+        def launch(*args, **kwargs):
+            nonlocal launched
+            launched = True
+            return child
+        def remaining(*args):
+            if launched:
+                raise TimeoutError('synthetic deadline after child launch')
+            return 5
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                (root/'doc-000000.md').write_text('original')
+                (root/'doc-000001.go').write_text('original')
+                with patch.object(resource_check, 'run', return_value=Mock(stdout='{"updated":1}')), \
+                     patch.object(resource_check.subprocess, 'Popen', side_effect=launch), \
+                     patch.object(resource_check, 'remaining_timeout', side_effect=remaining):
+                    with self.assertRaises(TimeoutError):
+                        resource_check.refresh_profile(Path(sys.executable), root, root,
+                                                       'http://127.0.0.1:1', 1, 0)
+                self.assertIsNotNone(child.poll(), 'expired deadline left index child running')
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+
+    def test_refresh_reader_start_failure_still_reaps_running_child(self):
+        from unittest.mock import Mock, patch
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        reader = Mock()
+        reader.start.side_effect = RuntimeError('synthetic thread start failure')
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                (root/'doc-000000.md').write_text('original')
+                (root/'doc-000001.go').write_text('original')
+                with patch.object(resource_check, 'run', return_value=Mock(stdout='{"updated":1}')), \
+                     patch.object(resource_check.subprocess, 'Popen', return_value=child), \
+                     patch.object(resource_check.threading, 'Thread', return_value=reader):
+                    with self.assertRaisesRegex(RuntimeError, 'thread start failure'):
+                        resource_check.refresh_profile(Path(sys.executable), root, root,
+                                                       'http://127.0.0.1:1', 1, time.monotonic()+5)
+                self.assertIsNotNone(child.poll(), 'reader failure left index child running')
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+
+    def test_paging_profiles_request_three_real_limits_and_stop_at_window(self):
+        calls = []
+        def open_page(url, timeout):
+            from urllib.parse import urlparse, parse_qs
+            from unittest.mock import Mock
+            params = parse_qs(urlparse(url).query)
+            limit = int(params['limit'][0]); offset = int(params.get('cursor', ['0'])[0])
+            calls.append(limit)
+            size = min(limit, 1000-offset)
+            page = {'total': 1500, 'offset': offset,
+                    'results': [{'id': str(i)} for i in range(offset, offset+size)],
+                    'next_cursor': str(offset+size) if offset+size < 1000 else None,
+                    'end_reason': 'window_limit' if offset+size == 1000 else None}
+            response = Mock()
+            response.__enter__ = lambda _: response
+            response.__exit__ = lambda *args: None
+            response.read = lambda cap: json.dumps(page).encode()
+            return response
+        from unittest.mock import patch
+        with patch.object(resource_check.urllib.request, 'urlopen', side_effect=open_page):
+            profile = resource_check.paging_profile('http://127.0.0.1', 1500, time.monotonic()+10)
+        self.assertEqual(profile['window_limit'], 1000)
+        self.assertEqual(profile['total'], 1500)
+        self.assertEqual(profile['returned'], 1000)
+        self.assertTrue(profile['beyond_237'])
+        self.assertEqual(profile['pages'], 10)
+        self.assertEqual(set(calls), {20, 50, 100})
+        self.assertTrue(all(v['returned'] == 1000 for v in profile['page_sizes'].values()))
+        self.assertEqual({size: values['pages'] for size, values in profile['page_sizes'].items()},
+                         {'20': 50, '50': 20, '100': 10})
+        def reordered_page(url, timeout):
+            from urllib.parse import urlparse, parse_qs
+            response = open_page(url, timeout)
+            if int(parse_qs(urlparse(url).query)['limit'][0]) == 50:
+                payload = json.loads(response.read(1 << 20))
+                payload['results'].reverse()
+                response.read = lambda cap: json.dumps(payload).encode()
+            return response
+        with patch.object(resource_check.urllib.request, 'urlopen', side_effect=reordered_page):
+            with self.assertRaisesRegex(RuntimeError, "order changed"):
+                resource_check.paging_profile('http://127.0.0.1', 1500, time.monotonic()+10)
+
     def corpus(self, seed):
         with tempfile.TemporaryDirectory(prefix="findrail-fixture-test-") as temp:
             root = Path(temp) / "source"
@@ -30,6 +123,26 @@ class GeneratorTests(unittest.TestCase):
         self.assertNotEqual(first[0], self.corpus(43)[0])
         self.assertEqual(first[2], 100)
         self.assertLess(first[1], resource_check.MAX_BYTES)
+
+    def test_generated_byte_budget_stops_before_over_budget_write(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory(prefix="resource-budget-test-") as temp:
+            root = Path(temp)
+            with patch.object(resource_check, "MAX_BYTES", 1):
+                with self.assertRaisesRegex(ValueError, "corpus byte cap"):
+                    resource_check.generate(root, 100, 42, time.monotonic()+10)
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_100k_profile_requires_explicit_opt_in(self):
+        script = Path(__file__).with_name("search_resource_check.py")
+        with tempfile.TemporaryDirectory(prefix="resource-large-gate-") as temp:
+            report = Path(temp) / "not-created.json"
+            result = subprocess.run([sys.executable, str(script), "--binary", sys.executable,
+                                     "--documents", "100000", "--seed", "42", "--report", str(report)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b"requires --allow-large", result.stderr)
+            self.assertFalse(report.exists())
 
     def test_failed_index_reports_failure_and_cleans_fixture(self):
         script = Path(__file__).with_name("search_resource_check.py")
@@ -56,6 +169,9 @@ class GeneratorTests(unittest.TestCase):
             (root / "findrail.db").write_bytes(b"db")
             (root / "findrail.db-wal").write_bytes(b"wal")
             self.assertEqual(resource_check.database_sizes(root), {"findrail.db": 2, "findrail.db-wal": 3, "findrail.db-shm": 0})
+            (root / "fixture.txt").write_bytes(b"input")
+            (root / "nested").mkdir()
+            self.assertEqual(resource_check.directory_file_bytes(root), 10)
 
     @unittest.skipUnless(os.name == "posix", "requires catchable POSIX SIGTERM")
     def test_cancel_stops_child_and_cleans_owned_directories(self):
