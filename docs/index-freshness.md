@@ -76,7 +76,7 @@ wall-clock stale threshold.
   are shown; refresh and configure are unavailable.
 - **Results and Preview:** preview text is the indexed snapshot. Its document
   modification metadata and known source update state are separate facts. “Open
-  current original” delegates to the native opener and may open a newer external
+  original” delegates to the native opener and may open a newer external
   file; the browser does not read that path or claim a current full-file hash
   verification.
 

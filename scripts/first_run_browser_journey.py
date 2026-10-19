@@ -19,6 +19,7 @@ import time
 import urllib.request
 
 from selenium import webdriver
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -82,7 +83,9 @@ def run(binary):
                 active = driver.switch_to.active_element
                 if active == target:
                     return active
-                active.send_keys(Keys.TAB)
+                # Element.send_keys on a focused file input is an upload API;
+                # Actions dispatches the actual keyboard event through it.
+                ActionChains(driver).send_keys(Keys.TAB).perform()
             raise AssertionError("Tab order did not reach the requested control")
 
         def activate(by, value):
