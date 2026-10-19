@@ -198,6 +198,8 @@ jobs:
             "$PY" scripts/search_resource_check.py --binary "$BINARY" --documents 1000 --seed 42 --queries 2 \
               --source-cycle-boundaries --report "$RUNNER_TEMP/source-cycle-resource-boundaries.json"
             "$PY" scripts/portable_resource_check.py "$BINARY" > "$RUNNER_TEMP/snapshot-resource-boundary.json"
+            "$PY" scripts/recovery_candidate.py --binary "$BINARY" --revision "$CANDIDATE_SHA" --schema 8 \
+              --work-dir "$RUNNER_TEMP/recovery-work" --report "$RUNNER_TEMP/recovery-candidate.json"
           fi
       - name: Save verification result and archive
         if: always()
@@ -217,6 +219,7 @@ jobs:
             if [[ -f "$report" ]]; then cp "$report" "$RUNNER_TEMP/release-evidence/"; fi
           done
           if [[ -f "$RUNNER_TEMP/install-lifecycle.json" ]]; then cp "$RUNNER_TEMP/install-lifecycle.json" "$RUNNER_TEMP/release-evidence/install-lifecycle-${TARGET}.json"; fi
+          if [[ -f "$RUNNER_TEMP/recovery-candidate.json" ]]; then cp "$RUNNER_TEMP/recovery-candidate.json" "$RUNNER_TEMP/release-evidence/"; fi
           PY=python3; [[ '${{ runner.os }}' != Windows ]] || PY=python
           "$PY" scripts/candidate_record.py native --native-directory "$RUNNER_TEMP/release-evidence" \
             --candidate-sha "$CANDIDATE_SHA" --candidate-version "$VERSION" --target "$TARGET" \
@@ -423,6 +426,10 @@ jobs:
           python3 scripts/candidate_record.py summary --native-directory "$RUNNER_TEMP/native" \
             --assets "$RUNNER_TEMP/release-assets" --browser-report "$RUNNER_TEMP/browser-record/packaged-journey-report.json" \
             --candidate-sha "$CANDIDATE_SHA" --candidate-version "$VERSION" --report "$RUNNER_TEMP/verification-summary.json"
+          python3 scripts/readiness.py --candidate "$RUNNER_TEMP/verification-summary.json" \
+            --candidate-sha "$CANDIDATE_SHA" --candidate-version "$VERSION" \
+            --recovery "$RUNNER_TEMP/native/release-package-${CANDIDATE_SHA}-linux-amd64/recovery-candidate.json" \
+            --output "$RUNNER_TEMP/release-readiness.json"
       - uses: actions/upload-artifact@v7
         with:
           name: release-assets-${{ needs.validate-source.outputs.candidate_sha }}
@@ -434,6 +441,13 @@ jobs:
         with:
           name: release-verification-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/verification-summary.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-readiness-${{ needs.validate-source.outputs.candidate_sha }}
+          path: ${{ runner.temp }}/release-readiness.json
           if-no-files-found: error
           overwrite: true
           retention-days: 30

@@ -35,9 +35,13 @@ single-user retrieval workflow is dependable.
    Findrail returns passages and provenance; the model provider is selected by
    the user and receives only the permitted retrieval output.
 
-The local-folder journey is implemented in the alpha, including PDF pages,
-preview and automatic refresh. Location copying is available; a desktop opener
-and the connected / AI journeys remain planned.
+The local-folder journey is implemented in the source candidate, including PDF
+pages, preview, automatic refresh, freshness reporting, and saved evidence
+collections. Location copying and the opt-in desktop opener are implemented.
+The read-only MCP interface is an available AI-client integration; the model
+provider is chosen by the user. Connected private sources and hosted/team AI
+journeys remain planned. See [release readiness](release-readiness.md) for the
+candidate/release evidence distinction.
 
 ## Product principles
 
@@ -91,12 +95,12 @@ not the number of connectors listed on a landing page.
 
 ## Validation targets
 
-For the first public alpha, recruit 10–15 independent testers using their own
-data. Track installation completion, successful search tasks, repeated weekly
-use, false positive / missed result reports, and requests for additional sources.
-Participation and any telemetry are opt-in; the current runtime has no analytics.
+For eventual v1 evaluation, a target of 10–15 independent voluntary reports is a
+research goal, not an automatic release flag. Reports are user-submitted; the
+runtime has no analytics and must not collect private documents or query logs.
+See the [voluntary feedback template](../.github/ISSUE_TEMPLATE/voluntary_usage.yml).
 
-Performance targets, to be measured on declared hardware: p95 keyword latency
-under 150 ms over a 100k-document test corpus, a documented index size, responsive
-cancellation, and bounded extraction memory. These are engineering targets, not
-measured properties of the foundation.
+Performance targets: p95 keyword latency under 150 ms over a 100k-document test
+corpus, documented index size, responsive cancellation, and bounded extraction
+memory. These are targets, not claims; measured evidence is recorded separately
+in the release-readiness record.
