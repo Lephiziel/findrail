@@ -97,9 +97,12 @@ def run(binary):
             try:
                 for width, scale in ((320, 1), (375, 1), (160, 2)):
                     driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
-                        "width": width, "height": 900, "deviceScaleFactor": scale, "mobile": False})
+                        "width": width, "height": 900 // scale, "deviceScaleFactor": scale, "mobile": False})
                     assert driver.execute_script("return innerWidth") == width
-                    assert driver.execute_script("return document.documentElement.scrollWidth <= innerWidth+1"), "first-run layout overflows"
+                    overflow = driver.execute_script("""return [...document.querySelectorAll('body *')]
+                        .filter(e=>e.getClientRects().length&&e.getBoundingClientRect().right>innerWidth+1)
+                        .slice(0,8).map(e=>({tag:e.tagName,id:e.id,right:Math.round(e.getBoundingClientRect().right)}))""")
+                    assert driver.execute_script("return document.documentElement.scrollWidth <= innerWidth+1"), f"layout overflow at width={width}, scale={scale}: {overflow}"
                     for control in controls:
                         tab_to(By.ID, control)
             finally:
