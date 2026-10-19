@@ -84,3 +84,34 @@ explicit, application-specific allowance in Privacy & Security according to
 your system policy. That approval path was not exercised in this run. Do not
 disable system-wide protections to run the alpha; signing and notarization
 remain release limitations, not completed stable-installation work.
+
+## Linux amd64: alpha.5 source candidate (2026-10-19)
+
+Evidence type: **manual, owner-reported**. The owner confirmed completing the
+provided `START_HERE` synthetic acceptance procedure successfully. This is a
+check of the supplied source candidate, rather than a public release download.
+The exact Linux distribution/version and browser version were not reported.
+
+- Candidate source: `109678f69e76c2a0b64a64ef8566c41e570e1a13`.
+- Version/schema: `0.1.0-alpha.5`, schema 8, Linux amd64.
+- Original archive: `findrail_0.1.0-alpha.5_linux-amd64.tar.gz`.
+- Archive SHA-256: `b61c48f4d69785722cba8f061debc4b88c37750833d7775052c2798b174e3350`.
+- Archive origin: the successful
+  [candidate CI run](https://github.com/Lephiziel/findrail/actions/runs/39249908887);
+  the supplied binary was not rebuilt for the check.
+
+Reported procedure outcome:
+
+| Step | Result |
+|---|---|
+| Desktop launch with a separate test data directory | Passed |
+| Add the synthetic folder; remembered-word search across Markdown, DOCX and PDF; Word Preview and PDF page 2 | Passed |
+| Edit a synthetic Markdown document and find the new marker after updating the index | Passed |
+| Save a named collection with two citations and a note; Quit and reopen using the same data directory | Passed; saved evidence restored |
+
+Refresh timing and whether the automatic watcher or explicit Refresh was used
+were not separately reported. This procedure did not establish per-user OS-menu
+installation, native original-file opening, uninstall, accessibility, Windows
+or Apple Silicon GUI coverage. Those scopes retain their own evidence.
+This report stays attached to source `109678f`; it does not certify the bytes
+of a subsequent release-preparation or publication commit.

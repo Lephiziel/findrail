@@ -1,52 +1,74 @@
-# Findrail 0.1.0-alpha.5 release notes (prepared)
+# Findrail 0.1.0-alpha.5
 
-These notes describe the prepared alpha.5 contract, not a published release.
-Until the owner authorizes publication, alpha.4 remains the current download.
+Alpha.5 extends local search with passage windows, paged results, portable
+source workflows, and explicit evidence transfer. The app runs locally with
+its SQLite index and embedded browser interface; Go, Python and a database
+server are not runtime requirements.
 
-## What's new
+## Highlights
 
-- Passage windows show matching text with surrounding indexed context; PDF
-  citations retain original page numbers. DOCX files do not have Word page
-  numbers in Findrail.
-- Search results have First/Previous/Next navigation and 20/50/100 page sizes,
-  within a bounded 1,000-result window. A changed index requires an explicit
-  restart of the result window. Preset files preserve search configuration;
-  preview, explicit source mapping and **Apply** do not run a search.
-- Evidence bundles transfer selected exact passages, notes, ordering and offsets
-  into a new saved collection after explicit source mapping and confirmation.
-  Markdown citation export remains available. Source changes and conflicts are
-  checked before an atomic import.
-- The Sources UI can export, inspect and import portable indexed-text snapshots
-  through local jobs and explicit paths on the machine running Findrail. Imported
-  sources are frozen and work independently of the originals; this does not
-  upload a browser file. A snapshot contains indexed text and provenance, not
-  original files, saved collections or a complete data-directory backup.
-- Diagnostics can be inspected and explicitly downloaded without uploading a
-  report. `doctor --integrity` adds bounded structural and foreign-key checks;
-  it does not repair an index or certify full FTS consistency or search quality.
+- **Passage windows** show matching text with surrounding indexed context,
+  including late Markdown and Word passages. PDF citations retain original
+  page numbers; DOCX previews show body text rather than Word layout or pages.
+- **Paged results** support First/Previous/Next and page sizes 20/50/100 within
+  the 1,000-result window. An index change requires an explicit restart of
+  that result window. Search presets preserve configuration; Apply leaves
+  searching explicit and keeps pinned evidence and unsaved notes.
+- **Evidence bundles** transfer exact saved passages, notes, order and offsets
+  into a new collection after explicit source mapping and conflict checks.
+  Markdown citation export remains available.
+- **Portable source jobs** export, inspect and import indexed-text snapshots
+  through explicit paths on the Findrail host. Imported sources are independent
+  frozen snapshots. They contain indexed text and provenance, rather than
+  original files, saved collections or a complete index backup.
+- **Freshness and first-run guidance** distinguish indexed snapshots from current
+  originals, preserve usable results after a failed refresh, and show unsaved
+  collection changes separately from operational messages. Original actions use
+  Open original / Open containing folder consistently. Narrow layouts and the
+  keyboard save/Quit/reopen path have automated browser coverage.
+- **Recovery and installation checks** exercise abrupt-stop/reopen integrity,
+  complete old-or-new index state, native per-user install/update/uninstall and
+  data preservation. Explicit diagnostics export and `doctor --integrity` remain
+  local; integrity checks do not repair the index or certify search relevance.
 
-## Installation and upgrade
+Desktop launch, opt-in original opening, saved collections, public GitHub file
+snapshots, read-only stdio MCP and the optional VS Code client remain available.
 
-The prepared contract remains five native archives plus the optional VSIX,
-`release-manifest.json` and `SHA256SUMS.txt`. The application uses schema **8**,
-Client API **1** and extension **0.1.0**. No Go, Python or database server is
-required to run an archive. Follow its `INSTALL.txt`; public download links are
-switched only after publication and verification.
+## Installation, upgrade and rollback
 
-Before opening an existing index, stop every Findrail process and back up the
-**whole data directory**, including WAL/SHM files when present. Alpha.4 uses
-schema 7 and cannot open schema 8. Rollback restores the full stopped pre-upgrade
-backup to a separate directory and uses the matching old binary; there is no
-reverse migration. Uninstalling desktop resources preserves the data directory
-and original documents. Portable snapshots and evidence exports are not backups.
+The distribution contains five native app archives, the optional VSIX,
+`release-manifest.json` and `SHA256SUMS.txt`. Verify the matching checksum,
+extract into a directory you own and follow `INSTALL.txt`. macOS requires 13+.
+The application uses **schema 8**, **Client API 1** and extension **0.1.0**.
 
-## Boundaries
+Stop every Findrail process and back up the **whole data directory**, including
+WAL/SHM files when present, before upgrading an existing index. Alpha.4 uses
+schema 7 and cannot open schema 8. Rollback restores a complete stopped
+pre-upgrade backup to a separate directory and uses the matching old binary;
+there is no reverse migration. Portable snapshots and evidence exports are
+not database backups. Uninstalling desktop resources preserves indexed data
+and original documents.
 
-The preview displays indexed text. The original viewer opens the current original
-file, which may have changed since indexing. This is an unsigned alpha; automated
-coverage applies only to recorded environments and synthetic fixtures. Manual
-Finder/SmartScreen/external-viewer coverage is separate from native CI. The local
-index and exported copies contain plaintext. `serve`/`demo` remain read-only with
-temporary collections; management is available in `start`/desktop. Native opening
-remains opt-in. OCR, semantic search, private GitHub and automatic updates are not
-included.
+## Validation and limits
+
+The release pipeline requires exact-head Go/vet/race/UI checks, five native
+package targets, extracted packaged browser and MCP journeys, installed VSIX,
+upgrade/restore, integrity and complete asset verification before publication.
+The owner reported the supplied Linux source-candidate acceptance procedure
+passed on 19 October 2026; its exact provenance and scope are recorded in
+[platform installation](https://github.com/Lephiziel/findrail/blob/main/docs/platform-installation.md).
+This is not a manual Windows or Apple Silicon first-run report.
+
+A pre-release Linux measurement on 100,000 synthetic documents recorded warm
+HTTP search p95 of **201 ms**, above the **150 ms engineering target**. It used
+only ten measured requests and has no same-host comparison; it is not a latency
+SLO or proof of a regression. See the candidate identities, measured limits
+and raw reports in the
+[resource baseline](https://github.com/Lephiziel/findrail/blob/main/docs/resource-baseline.md).
+
+This remains an unsigned alpha. Manual Finder/SmartScreen, external-viewer and
+assistive-technology coverage is separate from native CI. The local index and
+exported copies contain plaintext. `serve`/`demo` remain read-only with temporary
+collections; management and persistent collections are available in writable
+start/desktop sessions. Native opening remains opt-in. OCR, semantic search,
+private GitHub, team authentication and automatic updates are not included.
