@@ -20,6 +20,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select, WebDriverWait
 
 from smoke import docx_fixture, pdf_fixture
+from packaged_journey import command
 
 
 def main():
@@ -408,6 +409,11 @@ def main():
             print("Extracted desktop browser journey passed: fresh start, UI folder, schema-8 diagnostics download, PDF page 2/Advanced fallback, late text/DOCX exact quote, named collection note/order/export/restart, keyboard focus across refresh, read-only serve, changed evidence, Forget purge and protected Quit/drain.")
         finally:
             stop()
+
+    # Reuse the supplied extracted candidate and pinned browser. Failure here
+    # fails this existing packaged-browser boundary; no second app is built.
+    print(command([sys.executable, str(pathlib.Path(__file__).with_name("first_run_browser_journey.py")),
+                   str(binary)], timeout=240).stdout.strip())
 
 
 if __name__ == "__main__":
