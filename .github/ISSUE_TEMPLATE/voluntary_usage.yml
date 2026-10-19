@@ -71,7 +71,7 @@ body:
     id: return_use
     attributes:
       label: Reused after several days
-      options: [Yes, No, Not yet]
+      options: ["Yes", "No", "Not yet"]
     validations:
       required: true
   - type: textarea
