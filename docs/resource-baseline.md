@@ -1,9 +1,10 @@
 # Search resource baseline (candidate tooling)
 
-This reproducible harness measures the shipped CLI, not a ranking score. It
-creates fictional text, Go, DOCX, and one-page PDF files; no evaluation corpus,
-external data, network access, or downloaded binary is used. It is intended for
-resource characterization before a search optimization is proposed.
+This reproducible harness measures the supplied production CLI, not a ranking
+score. It creates fictional text, Go, DOCX, and one-page PDF files; it does not
+use an evaluation corpus or access the network. The caller supplies an explicitly
+prepared binary; the harness never downloads or rebuilds one. It characterizes
+resources before a search optimization is proposed.
 
 ## Run
 
@@ -109,6 +110,40 @@ fixture seed/version and query workload for comparisons; measurements on
 different native hosts are not evidence of Go-code speedup.
 
 ## Measurements
+
+### 2026-10-19 extracted alpha.5 pre-release candidate
+
+Both runs used the clean production Linux amd64 archive from
+[candidate CI](https://github.com/Lephiziel/findrail/actions/runs/39249908887),
+source `109678f69e76c2a0b64a64ef8566c41e570e1a13`, version `0.1.0-alpha.5`,
+schema 8. Archive SHA-256:
+`b61c48f4d69785722cba8f061debc4b88c37750833d7775052c2798b174e3350`;
+CLI SHA-256: `ae62d49aa90562bdda74456b9b3604b7ff87b56679387d1d881f3573fa4a8fa7`.
+No application was rebuilt. Host: Linux x86_64, Python 3.12.14; a specific CPU
+model and server RSS were unavailable. Fixture v2, seed 42, five measured
+requests per common/rare query after one excluded warmup per query (ten warm
+requests total). Both runs completed bounded paging, full refresh, concurrent
+reads and cancellation preserving the previously committed content.
+
+| Metric | 10,000 documents | 100,000 documents |
+|---|---:|---:|
+| Indexed / skipped | 10,000 / 0 | 100,000 / 0 |
+| Index wall seconds | 11.211 | 117.566 |
+| Successful full refresh seconds | 9.254 | 97.970 |
+| Warm HTTP p50 / p95 ms | 9.119 / 18.251 | 77.374 / 201.291 |
+| Page request p95 ms, limits 20 / 50 / 100 | 47.186 / 41.561 / 49.397 | 201.458 / 258.699 / 238.633 |
+| DB + WAL + SHM bytes at the recorded post-index point | 15,417,344 | 153,427,968 |
+
+The observed 100k warm p95 exceeds the 150 ms engineering target. With ten
+samples, no same-host reference, and no controlled cold cache, this is a
+profiling lead rather than an SLO or a demonstrated regression. Page-fetch and
+total-count costs should be characterized before selecting an optimization.
+Raw bounded reports: [10k](resource-reports/2026-10-19-alpha5-109678f-10000.json)
+and [100k](resource-reports/2026-10-19-alpha5-109678f-100000.json).
+These records certify their named pre-release candidate; they do not certify
+later release-preparation commits or a future public tag. The scale evidence
+classifier's passed status means complete, consistent measurements, not that
+the 150 ms latency target was achieved.
 
 ### 2026-10-18 native TASK17 source-candidate scale run
 

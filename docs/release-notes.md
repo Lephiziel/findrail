@@ -1,89 +1,74 @@
-# Findrail 0.1.0-alpha.4
+# Findrail 0.1.0-alpha.5
 
-Alpha.4 connects local search to an everyday workflow: launch Findrail, find a
-passage, reopen the original file, and return to a saved collection after a
-restart. The app still runs locally with its own SQLite index and embedded web
-interface. Go, Python and a database server are not runtime requirements.
+Alpha.5 extends local search with passage windows, paged results, portable
+source workflows, and explicit evidence transfer. The app runs locally with
+its SQLite index and embedded browser interface; Go, Python and a database
+server are not runtime requirements.
 
 ## Highlights
 
-- A separate **desktop launcher**, with per-user Linux menu installation, a
-  macOS app bundle and Windows Start-menu shortcut resources in the five app
-  archives. A second launch reopens the verified existing instance for the
-  same data directory. Closing a tab keeps the app running; **Quit Findrail**
-  stops it. The CLI's foreground `start`, `serve` and `demo` remain available.
-- **Open original / open containing folder**, explicitly enabled with
-  `start --enable-originals` (or `findrail-desktop --enable-originals`).
-  Actions apply to eligible, verified local documents from selected folders.
-  Preview shows the indexed snapshot; the external app opens the current file.
-  A PDF viewer may open at its default page. DOCX has no page-number claim.
-- **Named evidence collections** in writable `start` and desktop sessions.
-  Save exact passages, notes, names and ordering, then load them from the same
-  data directory after restarting. Saving is explicit. Historical passages
-  retain their original text; source removal or committed document pruning
-  removes attached entries. Read-only `serve` / `demo` keep temporary in-tab
-  collections, and portable source export does not include collections.
-- Strengthened package and upgrade verification: desktop resources, executable
-  modes, safe extraction, single-instance lifecycle, collection restoration,
-  schema-6 upgrade and stopped-backup restoration with the published alpha.3
-  binary. Previously published alpha.3 assets and tag remain unchanged.
+- **Passage windows** show matching text with surrounding indexed context,
+  including late Markdown and Word passages. PDF citations retain original
+  page numbers; DOCX previews show body text rather than Word layout or pages.
+- **Paged results** support First/Previous/Next and page sizes 20/50/100 within
+  the 1,000-result window. An index change requires an explicit restart of
+  that result window. Search presets preserve configuration; Apply leaves
+  searching explicit and keeps pinned evidence and unsaved notes.
+- **Evidence bundles** transfer exact saved passages, notes, order and offsets
+  into a new collection after explicit source mapping and conflict checks.
+  Markdown citation export remains available.
+- **Portable source jobs** export, inspect and import indexed-text snapshots
+  through explicit paths on the Findrail host. Imported sources are independent
+  frozen snapshots. They contain indexed text and provenance, rather than
+  original files, saved collections or a complete index backup.
+- **Freshness and first-run guidance** distinguish indexed snapshots from current
+  originals, preserve usable results after a failed refresh, and show unsaved
+  collection changes separately from operational messages. Original actions use
+  Open original / Open containing folder consistently. Narrow layouts and the
+  keyboard save/Quit/reopen path have automated browser coverage.
+- **Recovery and installation checks** exercise abrupt-stop/reopen integrity,
+  complete old-or-new index state, native per-user install/update/uninstall and
+  data preservation. Explicit diagnostics export and `doctor --integrity` remain
+  local; integrity checks do not repair the index or certify search relevance.
 
-Existing keyword search, Advanced queries, DOCX body text, PDF evidence, folder
-refresh, public GitHub file snapshots, portable indexed-text snapshots, read-only
-stdio MCP and the optional read-only VS Code client remain available.
+Desktop launch, opt-in original opening, saved collections, public GitHub file
+snapshots, read-only stdio MCP and the optional VS Code client remain available.
 
-## Install and first run
+## Installation, upgrade and rollback
 
-Download the archive for your OS/CPU and the matching `SHA256SUMS.txt` from this
-release. Verify the archive checksum, extract it, and read `INSTALL.txt`.
-The archive includes the normal CLI and the separate desktop launcher; the VSIX
-is an optional separate client, version `0.1.0`, requiring server/client API v1.
+The distribution contains five native app archives, the optional VSIX,
+`release-manifest.json` and `SHA256SUMS.txt`. Verify the matching checksum,
+extract into a directory you own and follow `INSTALL.txt`. macOS requires 13+.
+The application uses **schema 8**, **Client API 1** and extension **0.1.0**.
 
-For a terminal session, run `./findrail start` on Linux/macOS or
-`.\findrail.exe start` in Windows PowerShell, then add a folder in **Sources**.
-For OS-menu installation, run the per-user script under `launcher/linux/`,
-`launcher/macos/` or `launcher/windows/`. macOS includes `Findrail.app`.
-Desktop sessions use a dynamic loopback port; open the actual URL provided by
-the app, rather than assuming the CLI's default port.
-
-Native opening is opt-in. To try it in a separate data directory:
-
-```bash
-./findrail-desktop --data-dir ./findrail-alpha4-test --enable-originals
-```
-
-On macOS use the executable inside `Findrail.app/Contents/MacOS/`; on Windows
-use `findrail-desktop.exe`. When reusing an existing desktop instance, the
-first process's configuration remains active; stop it before changing flags.
-
-## Upgrade and rollback
-
-**Alpha.4 uses schema 7. Published alpha.3 uses schema 6.** Stop all processes
-that use the index, then back up the complete data directory, including SQLite
-WAL/SHM files when present, before the new binary opens it. Migrations 1–7 run
-forward; there is no reverse migration. Alpha.3 cannot read a schema-7 index.
-Rollback restores the whole stopped, pre-upgrade backup to a separate location
-and uses the corresponding older binary. Use a fresh data directory for a first
-test if you do not want to migrate your existing index.
-
-Uninstalling menu/shortcut/app resources preserves indexed data. Deleting the
-data directory is separate and does not delete original documents. Indexed
-text, paths, collections and backup copies are plaintext.
+Stop every Findrail process and back up the **whole data directory**, including
+WAL/SHM files when present, before upgrading an existing index. Alpha.4 uses
+schema 7 and cannot open schema 8. Rollback restores a complete stopped
+pre-upgrade backup to a separate directory and uses the matching old binary;
+there is no reverse migration. Portable snapshots and evidence exports are
+not database backups. Uninstalling desktop resources preserves indexed data
+and original documents.
 
 ## Validation and limits
 
-The release pipeline must verify the exact release commit through full CI,
-five native package jobs, an extracted Linux browser journey, installed VSIX
-checks and complete manifest/checksum verification before publication.
-Automated native-opening checks use controlled executable adapters; they do not
-certify every external viewer or OS menu. On 2026-10-14 the owner reported the
-short desktop acceptance check passed, including menu launch, opening originals
-and restoring a saved collection. Exact OS/viewer details and independent manual
-GUI coverage on other platforms are not established by that report. See
-`docs/release-smoke-alpha4.md`.
+The release pipeline requires exact-head Go/vet/race/UI checks, five native
+package targets, extracted packaged browser and MCP journeys, installed VSIX,
+upgrade/restore, integrity and complete asset verification before publication.
+The owner reported the supplied Linux source-candidate acceptance procedure
+passed on 19 October 2026; its exact provenance and scope are recorded in
+[platform installation](https://github.com/Lephiziel/findrail/blob/main/docs/platform-installation.md).
+This is not a manual Windows or Apple Silicon first-run report.
 
-This remains an unsigned alpha. Code signing, notarization, automatic updates,
-OCR, semantic retrieval, private GitHub and team authentication are not included.
-macOS builds require macOS 13 or newer. Public GitHub refresh is manual.
-Local folder search uploads no documents and has no runtime telemetry; an MCP
-client can forward returned passages to its chosen model provider.
+A pre-release Linux measurement on 100,000 synthetic documents recorded warm
+HTTP search p95 of **201 ms**, above the **150 ms engineering target**. It used
+only ten measured requests and has no same-host comparison; it is not a latency
+SLO or proof of a regression. See the candidate identities, measured limits
+and raw reports in the
+[resource baseline](https://github.com/Lephiziel/findrail/blob/main/docs/resource-baseline.md).
+
+This remains an unsigned alpha. Manual Finder/SmartScreen, external-viewer and
+assistive-technology coverage is separate from native CI. The local index and
+exported copies contain plaintext. `serve`/`demo` remain read-only with temporary
+collections; management and persistent collections are available in writable
+start/desktop sessions. Native opening remains opt-in. OCR, semantic search,
+private GitHub, team authentication and automatic updates are not included.
