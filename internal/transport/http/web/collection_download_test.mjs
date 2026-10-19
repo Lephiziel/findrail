@@ -14,9 +14,10 @@ function harness() {
   const elements = new Map(), listeners = new Map(), downloads = [];
   let resolveInventory, blob;
   const element = id => {
-    if (!elements.has(id)) elements.set(id, {value:'',textContent:'',children:[],
+    if (!elements.has(id)) elements.set(id, {value:'',textContent:'',children:[],handlers:{},
       replaceChildren(){this.children=[]},append(...nodes){this.children.push(...nodes)},
-      setAttribute(){},addEventListener(){},focus(){}});
+      setAttribute(){},addEventListener(type,fn){this.handlers[type]=fn},focus(){},
+      querySelector(){const find=node=>typeof node.onclick==='function'?node:node.children?.map(find).find(Boolean);return this.children.map(find).find(Boolean)}});
     return elements.get(id);
   };
   const document = {getElementById:element,createElement:tag=>tag==='a'
@@ -30,7 +31,7 @@ function harness() {
   vm.runInContext(source+'\ninitializeCollectionsUI({document,window,fetch});',context);
   window.localEvidenceCollection.add(evidence,evidence.text);
   element('collection-title').value='Retry notes';
-  return {element,window,downloads,resolve(data){resolveInventory(data)}};
+  return {element,window,downloads,notify(type){listeners.get(type)?.()},resolve(data){resolveInventory(data)}};
 }
 const inventory = {sources:[{id:'fictional-source',kind:'filesystem',name:'Demo',root:'/fictional',documents:1}]};
 
@@ -65,4 +66,41 @@ test('failed saved-citation validation still stops the download', async () => {
   h.window.findrailValidateSavedCollection=async()=>false;
   await h.element('collection-download').onclick();
   assert.equal(h.downloads.length,0);
+});
+
+test('temporary edits offer export; writable edits offer Save and survive other status messages', () => {
+  const h=harness();
+  const title=h.element('collection-title');
+  title.oninput({target:title});
+  assert.match(h.element('collection-dirty').textContent,/Temporary changes.*Export Markdown/);
+  assert.doesNotMatch(h.element('collection-dirty').textContent,/Save/);
+  h.window.findrailCollectionPersistence=true;
+  h.notify('findrail-collection-persistence');
+  assert.match(h.element('collection-dirty').textContent,/Unsaved changes.*Save changes/);
+  assert.equal(h.element('collection-save').textContent,'Save changes');
+  h.element('collection-status').textContent='Downloaded a copy.';
+  assert.match(h.element('collection-dirty').textContent,/Unsaved changes/);
+  h.window.findrailSavedCollectionGeneration=h.window.localEvidenceCollection.generation;
+  h.notify('persistent-collection-loaded');
+  assert.equal(h.element('collection-save').textContent,'Save collection');
+  assert.equal(h.element('collection-dirty').textContent,'');
+});
+
+test('note and order edits update the separate dirty indicator', () => {
+  const h=harness(),c=h.window.localEvidenceCollection;
+  h.window.findrailCollectionPersistence=true;
+  c.add({...evidence,id:'doc_'+'b'.repeat(64),title:'other.md',text:'Another quote'},'Another quote');
+  h.window.findrailSavedCollectionGeneration=c.generation;
+  h.notify('persistent-collection-loaded');
+  let rows=h.element('collection-list').children;
+  const note=rows[0].children.find(node=>'input' in node.handlers);
+  note.value='Changed note';note.handlers.input();
+  assert.match(h.element('collection-dirty').textContent,/Unsaved changes/);
+  h.window.findrailSavedCollectionGeneration=c.generation;
+  h.notify('persistent-collection-loaded');
+  rows=h.element('collection-list').children;
+  const actions=rows[0].children.at(-1);
+  actions.children.find(node=>node.textContent==='Move down').onclick();
+  assert.equal(c.entries[1].id,evidence.id);
+  assert.match(h.element('collection-dirty').textContent,/Unsaved changes/);
 });

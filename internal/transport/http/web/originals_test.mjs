@@ -4,13 +4,14 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const module=readFileSync(new URL('./preview_ui.mjs',import.meta.url),'utf8');
+const html=readFileSync(new URL('./index.html',import.meta.url),'utf8');
 const start=module.indexOf('{\n',module.indexOf('export async function initializePreviewUI('))+2;
 const script=module.slice(start,module.lastIndexOf('\n}')).replace(/^if \(!document \|\| initializedDocuments\.has\(document\)\) return;\ninitializedDocuments\.add\(document\);\n/m,'');
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 
 function harness(capability=true,delayedBootstrap=false){
   const listeners=new Map(),elements=new Map();let pendingPost,lastBody;
-  const element=id=>{if(!elements.has(id))elements.set(id,{id,hidden:true,textContent:'',children:[],handlers:{},addEventListener(type,fn){this.handlers[type]=fn},append(...xs){this.children.push(...xs)},after(){},setAttribute(){}});return elements.get(id)};
+  const element=id=>{if(!elements.has(id))elements.set(id,{id,hidden:true,textContent:html.match(new RegExp('<button[^>]*id="'+id+'"[^>]*>([^<]*)</button>'))?.[1]||'',children:[],handlers:{},addEventListener(type,fn){this.handlers[type]=fn},append(...xs){this.children.push(...xs)},after(){},setAttribute(){}});return elements.get(id)};
   const window={findrailNativeCapability:{enabled:capability,token:capability?'token':''},addEventListener(t,fn){listeners.set(t,fn)},dispatchEvent(e){listeners.get(e.type)?.(e)}};
   let releaseBootstrap;
   if(delayedBootstrap){delete window.findrailNativeCapability;window.findrailBootstrap=new Promise(resolve=>{releaseBootstrap=()=>{window.findrailNativeCapability={enabled:capability,token:capability?'token':''};resolve()}})}
@@ -58,7 +59,8 @@ test('result action sends only document identity, action, and indexed page',asyn
   const h=harness();await flush();const card={children:[],append(...nodes){this.children.push(...nodes)}};
   const item={id:'doc-result',source_id:'source',source_kind:'filesystem',original_identity:identity,page:4};
   h.window.dispatchEvent(new CustomEvent('findrail-result-created',{detail:{item,card}}));
-  const actionBox=card.children[0];assert.deepEqual(actionBox.children.map(x=>x.textContent),['Open current original','Open current folder']);
+  const actionBox=card.children[0];assert.deepEqual(actionBox.children.map(x=>x.textContent),['Open original','Open containing folder']);
+  assert.deepEqual(actionBox.children.map(x=>x.textContent),['open-original','open-folder'].map(id=>h.element(id).textContent),'Preview and result labels must agree');
   actionBox.children[0].handlers.click();await flush();
   assert.deepEqual(h.lastBody,{document_id:'doc-result',original_identity:identity,action:'file',page:4});
   assert.equal(Object.hasOwn(h.lastBody,'path'),false);
