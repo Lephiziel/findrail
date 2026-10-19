@@ -1,0 +1,83 @@
+name: Voluntary Findrail usage report
+description: Optional, privacy-preserving report about installation and remembered-word retrieval
+title: "[Voluntary usage] "
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Participation is optional. Do not include private documents, their text,
+        search/query logs, local paths, screenshots containing private content,
+        or credentials. This is manually submitted; Findrail does not upload
+        reports automatically.
+  - type: input
+    id: version
+    attributes:
+      label: App version and candidate provenance
+      description: Version and release tag, or candidate SHA (if applicable).
+    validations:
+      required: true
+  - type: dropdown
+    id: evidence_type
+    attributes:
+      label: Evidence type
+      options: [Manual, Automated]
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+    validations:
+      required: true
+  - type: textarea
+    id: install
+    attributes:
+      label: Install outcome
+      description: Installed / did not install; mention only the obstacle, not private paths.
+    validations:
+      required: true
+  - type: dropdown
+    id: retrieval_one
+    attributes:
+      label: Remembered-word task 1
+      description: Did you find the passage? Do not provide the query or document.
+      options: [Found, Not found, Not tried]
+    validations:
+      required: true
+  - type: dropdown
+    id: retrieval_two
+    attributes:
+      label: Remembered-word task 2
+      description: Did you find the passage? Do not provide the query or document.
+      options: [Found, Not found, Not tried]
+    validations:
+      required: true
+  - type: dropdown
+    id: collection_restart
+    attributes:
+      label: Collection after restart
+      options: [Restored, Not restored, Not tried]
+    validations:
+      required: true
+  - type: textarea
+    id: refresh
+    attributes:
+      label: Refresh or failure experience
+      description: Say whether refresh worked or failed; no logs or document content.
+    validations:
+      required: true
+  - type: dropdown
+    id: return_use
+    attributes:
+      label: Reused after several days
+      options: [Yes, No, Not yet]
+    validations:
+      required: true
+  - type: textarea
+    id: obstacle
+    attributes:
+      label: One main obstacle
+      description: Describe one usability or reliability obstacle without private content.
+    validations:
+      required: true

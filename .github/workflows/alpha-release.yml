@@ -423,6 +423,8 @@ jobs:
           python3 scripts/candidate_record.py summary --native-directory "$RUNNER_TEMP/native" \
             --assets "$RUNNER_TEMP/release-assets" --browser-report "$RUNNER_TEMP/browser-record/packaged-journey-report.json" \
             --candidate-sha "$CANDIDATE_SHA" --candidate-version "$VERSION" --report "$RUNNER_TEMP/verification-summary.json"
+          python3 scripts/readiness.py --candidate "$RUNNER_TEMP/verification-summary.json" \
+            --output "$RUNNER_TEMP/release-readiness.json"
       - uses: actions/upload-artifact@v7
         with:
           name: release-assets-${{ needs.validate-source.outputs.candidate_sha }}
@@ -434,6 +436,13 @@ jobs:
         with:
           name: release-verification-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/verification-summary.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-readiness-${{ needs.validate-source.outputs.candidate_sha }}
+          path: ${{ runner.temp }}/release-readiness.json
           if-no-files-found: error
           overwrite: true
           retention-days: 30
