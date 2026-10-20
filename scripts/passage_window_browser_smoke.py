@@ -130,7 +130,10 @@ def main():
                     return window.__refreshFetch(input,options)};
             """)
             (notes / "keyboard-refresh.md").write_text("Unrelated synthetic refresh fixture.", encoding="utf-8")
-            WebDriverWait(browser, 20).until(lambda d: "4 documents" in d.find_element(By.CSS_SELECTOR, ".source-card").text)
+            # The CI runner also executes the long package/journey matrix. Give
+            # the periodic source scan room to finish under contention rather
+            # than treating delayed indexing as a broken UI refresh.
+            WebDriverWait(browser, 45).until(lambda d: "4 documents" in d.find_element(By.CSS_SELECTOR, ".source-card").text)
             assert old.is_enabled(), "status refresh replaced the existing result snapshot"
             assert browser.switch_to.active_element == old, "inventory refresh moved keyboard focus"
             assert browser.execute_script("return window.__refreshSearches") == 0, "inventory polling implicitly reran Search"

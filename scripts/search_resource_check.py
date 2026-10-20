@@ -390,6 +390,7 @@ def main():
     p.add_argument("--seed", required=True, type=int)
     p.add_argument("--queries", type=int, default=5)
     p.add_argument("--report", required=True, type=Path)
+    p.add_argument("--samples-report", type=Path, help="optional content-free warm HTTP sample sidecar")
     p.add_argument("--compare", type=Path, help="optional second prepared binary; rerun identical seed/workload on this host")
     p.add_argument("--source-cycle-boundaries", action="store_true", help="measure cursor pages and the JSON quote boundary on a source candidate")
     p.add_argument("--allow-large", action="store_true", help="required for 100000-document profile")
@@ -431,6 +432,7 @@ def main():
             rss_samples = []
             expected_counts = {"common": a.documents // 2, "rare": (a.documents - 1) // 97 + 1}
             per_query = {}
+            query_samples = {}
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]
             base_url = f"http://127.0.0.1:{port}"
@@ -449,6 +451,7 @@ def main():
                 report["metrics"]["server_startup_ms"] = round((time.perf_counter()-startup)*1000, 3)
                 for qid, query in QUERIES.items():
                     query_latencies = []
+                    warm_samples = []
                     # The first request for each query warms it; it is excluded
                     # from the subsequent --queries warm latency samples.
                     for n in range(a.queries + 1):
@@ -460,6 +463,7 @@ def main():
                         latency = (time.perf_counter()-t)*1000
                         if n > 0:
                             query_latencies.append(latency)
+                            warm_samples.append(round(latency, 3))
                             latencies.append(latency)
                         obj = json.loads(output)
                         count = int(obj.get("total", 0))
@@ -482,6 +486,7 @@ def main():
                             else:
                                 raise RuntimeError("synthetic common query produced no evidence")
                     per_query[qid] = {"repeats": len(query_latencies), "latency_ms": latency_summary(query_latencies)}
+                    query_samples[qid] = warm_samples
                 if a.source_cycle_boundaries:
                     report["metrics"]["paging_window"] = paging_profile(base_url, expected_counts["common"], deadline)
                     if a.documents >= 10000:
@@ -520,6 +525,18 @@ def main():
     finally:
         a.report.parent.mkdir(parents=True, exist_ok=True)
         a.report.write_text(json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        if a.samples_report:
+            a.samples_report.parent.mkdir(parents=True, exist_ok=True)
+            sample_status = "success" if not report.get("errors") and len(locals().get("query_samples", {})) == len(QUERIES) else "failed"
+            sidecar = {"schema": 1, "kind": "search_warm_samples", "status": sample_status,
+                       "binary": report.get("binary", {}), "fixture": report.get("fixture", {}),
+                       "units": "ms", "method": "nearest-rank percentile: sorted[ceil(p*n)-1]; first request per family excluded",
+                       "warmup": {"excluded": True, "count_per_family": 1},
+                       "families": {key: {"samples": values, "count": len(values),
+                                          "p50": latency_summary(values)["p50"] if values else None,
+                                          "p95": latency_summary(values)["p95"] if values else None}
+                                    for key, values in locals().get("query_samples", {}).items()}}
+            a.samples_report.write_text(json.dumps(sidecar, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 
 
 def digest_file_manifest(root):
