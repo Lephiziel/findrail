@@ -12,7 +12,8 @@ is from the repository; the demonstrated application is the public binary.
 
 `capture-alpha5.json` records release revision, schema, archive/binary and
 fixture hashes, date, OS, browser and tool versions. The verified Linux amd64
-archive SHA-256 is `78885728107e26be6db18e9b9e19a5a8f0` (see the release
+archive SHA-256 is
+`78885728107e26be6db18f93c0f94ee6af92b585f00aea21dd93ba9e19a5a8f0` (see the release
 verification record); binary SHA-256 is
 `6fc6fe384171a39d3c2809bdf8e923a089cee21516b04a5d3dfb419e0e011a96`.
 The combined new media is under 1 MiB (15 MiB maximum). Video editing is limited
@@ -20,13 +21,16 @@ to ordinary cuts between recorded steps; it is not a benchmark or native
 acceptance evidence.
 
 Reproduce after extracting and independently verifying the Linux amd64
-`v0.1.0-alpha.5` release archive. Create metadata with its published version,
-source revision `cb53ee9638f69b47b386921e41368f3b66ceddde`, schema 8, archive
-SHA-256 and extracted binary SHA-256, then run:
+`v0.1.0-alpha.5` release archive. The script hashes that archive against the
+published checksum pinned in the tool, checks its embedded `BUILD-INFO.json`,
+and verifies the supplied binary byte-for-byte against the archived executable.
+Metadata is compared only after those independent checks; it is not treated as
+an authenticity source. Write a JSON sidecar with version, source revision,
+schema, archive SHA-256 and binary SHA-256, then run:
 
 ```sh
 python3 -m pip install selenium==4.35.0
-python3 scripts/alpha5_media.py /path/to/extracted/findrail /path/to/verified-asset.json /path/to/output
+python3 scripts/alpha5_media.py /path/to/extracted/findrail /path/to/asset-metadata.json /path/to/downloaded-alpha5.tar.gz /path/to/output
 ```
 
 Chromium, matching ChromeDriver and ffmpeg are capture dependencies, not

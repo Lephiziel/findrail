@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Capture the published alpha.5 UI against a disposable synthetic source."""
-import argparse, base64, hashlib, json, os, pathlib, platform, shutil, socket, subprocess, tempfile, time, urllib.request
+import argparse, hashlib, json, os, pathlib, platform, shutil, socket, subprocess, tarfile, tempfile, time, urllib.request
 from datetime import date
 
 SOURCE = "cb53ee9638f69b47b386921e41368f3b66ceddde"
@@ -17,14 +17,34 @@ def sha(path):
     return h.hexdigest()
 
 
-def check_inputs(binary, metadata):
+def check_inputs(binary, metadata, archive):
     binary = pathlib.Path(binary).resolve(strict=True)
+    archive = pathlib.Path(archive).resolve(strict=True)
     meta_path = pathlib.Path(metadata).resolve(strict=True)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    if meta.get("version") != VERSION or meta.get("source_revision") != SOURCE or meta.get("schema") != 8:
-        raise ValueError("verified asset metadata must identify published alpha.5 source and schema 8")
-    if meta.get("archive_sha256") != ARCHIVE_SHA256 or meta.get("binary_sha256") != sha(binary):
-        raise ValueError("archive/binary SHA-256 mismatch")
+    archive_digest = sha(archive)
+    if archive_digest != ARCHIVE_SHA256:
+        raise ValueError("archive is not the pinned published alpha.5 Linux amd64 asset")
+    expected_root = "findrail_0.1.0-alpha.5_linux-amd64"
+    try:
+        with tarfile.open(archive, "r:gz") as package:
+            binary_member = package.getmember(expected_root + "/findrail")
+            info_member = package.getmember(expected_root + "/BUILD-INFO.json")
+            if not binary_member.isfile() or not info_member.isfile():
+                raise ValueError("published archive has invalid binary/build metadata entries")
+            packaged_binary = package.extractfile(binary_member).read()
+            build_info = json.load(package.extractfile(info_member))
+    except (KeyError, tarfile.TarError, OSError, AttributeError) as exc:
+        raise ValueError("could not verify the published alpha.5 archive contents") from exc
+    if build_info.get("version") != VERSION or build_info.get("revision") != SOURCE or build_info.get("schema_version") != 8 or build_info.get("target") != "linux-amd64" or build_info.get("dirty") is not False:
+        raise ValueError("published archive BUILD-INFO does not match alpha.5 provenance")
+    packaged_digest = hashlib.sha256(packaged_binary).hexdigest()
+    if sha(binary) != packaged_digest:
+        raise ValueError("explicit binary bytes do not match the verified archive binary")
+    if (meta.get("version") != VERSION or meta.get("source_revision") != SOURCE or
+            meta.get("schema") != 8 or meta.get("archive_sha256") != archive_digest or
+            meta.get("binary_sha256") != packaged_digest):
+        raise ValueError("metadata does not match independently verified archive and binary")
     actual = subprocess.run([str(binary), "version"], check=True, capture_output=True, text=True, timeout=10).stdout.strip()
     if actual != "findrail " + VERSION:
         raise ValueError("binary version mismatch")
@@ -55,10 +75,11 @@ def stop_process(process):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=pathlib.Path)
-    parser.add_argument("metadata", type=pathlib.Path, help="verified public archive metadata JSON")
+    parser.add_argument("metadata", type=pathlib.Path, help="metadata to compare against verified archive facts")
+    parser.add_argument("archive", type=pathlib.Path, help="downloaded public alpha.5 Linux amd64 archive")
     parser.add_argument("output", type=pathlib.Path)
     args = parser.parse_args()
-    binary, meta = check_inputs(args.binary, args.metadata)
+    binary, meta = check_inputs(args.binary, args.metadata, args.archive)
     # Imports that may install/use proxy handlers happen only after any external
     # download step (this capture performs no downloads and preserves env proxies).
     from selenium import webdriver
@@ -114,7 +135,6 @@ def main():
             browser.find_element(By.ID, "collection-open").click(); wait.until(lambda d: d.find_element(By.ID,"collection-count").text=="1")
             browser.find_element(By.ID,"collection-title").clear(); browser.find_element(By.ID,"collection-title").send_keys("Juniper field evidence")
             browser.find_element(By.ID,"collection-save").click(); wait.until(lambda d:"saved" in d.find_element(By.ID,"collection-status").text.lower())
-            snap("collection-alpha5.png")
             browser.quit(); browser = None; stop_process(server)
             server = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             deadline = time.monotonic()+20
@@ -126,6 +146,7 @@ def main():
             wait.until(lambda d:d.execute_script("return window.localEvidenceCollection.title==='Juniper field evidence'"))
             browser.find_element(By.ID,"collection-open").click(); wait.until(lambda d:d.find_element(By.ID,"collection-count").text=="1")
             if not browser.execute_script("return window.localEvidenceCollection.entries.some(e=>JSON.stringify(e).toLowerCase().includes('kestrel'))"): raise RuntimeError("saved collection evidence did not restore")
+            snap("collection-alpha5.png")
             # Show freshness in the actual UI by changing the synthetic indexed source and waiting for refresh.
             browser.find_element(By.ID,"collection-close").click()
             note=source/"field-notes.md"; note.write_text("Synthetic note: amber thimble at Juniper Observatory. Refresh marker: cobalt.\n",encoding="utf-8")

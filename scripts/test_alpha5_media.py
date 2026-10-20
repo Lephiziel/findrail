@@ -34,25 +34,30 @@ class Alpha5MediaTests(unittest.TestCase):
             binary = pathlib.Path(tmp) / "findrail"
             binary.write_bytes(b"not a real executable")
             meta = pathlib.Path(tmp) / "asset.json"
+            archive = pathlib.Path(tmp) / "asset.tar.gz"
+            archive.write_bytes(b"not the published archive")
             meta.write_text(json.dumps({"version": alpha5_media.VERSION,
                 "source_revision": alpha5_media.SOURCE, "schema": 8,
                 "archive_sha256": alpha5_media.ARCHIVE_SHA256,
                 "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}))
-            with mock.patch.object(alpha5_media.subprocess, "run", return_value=mock.Mock(stdout="findrail 0.1.0-alpha.4")):
+            with mock.patch.object(alpha5_media.subprocess, "run", return_value=mock.Mock(stdout="findrail 0.1.0-alpha.5")) as run:
                 with self.assertRaises(ValueError):
-                    alpha5_media.check_inputs(binary, meta)
+                    alpha5_media.check_inputs(binary, meta, archive)
+                run.assert_not_called()
 
     def test_metadata_requires_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:
             binary = pathlib.Path(tmp) / "findrail"
             binary.write_bytes(b"x")
             meta = pathlib.Path(tmp) / "asset.json"
+            archive = pathlib.Path(tmp) / "asset.tar.gz"
+            archive.write_bytes(b"forged archive")
             meta.write_text(json.dumps({"version": alpha5_media.VERSION,
                 "source_revision": alpha5_media.SOURCE, "schema": 8,
                 "archive_sha256": alpha5_media.ARCHIVE_SHA256,
                 "binary_sha256": "0" * 64}))
             with self.assertRaises(ValueError):
-                alpha5_media.check_inputs(binary, meta)
+                alpha5_media.check_inputs(binary, meta, archive)
 
 
 if __name__ == "__main__":
