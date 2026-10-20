@@ -10,9 +10,10 @@ not certify Finder/SmartScreen prompts, signing, notarization, assistive
 technology, or system menu-cache timing. Installer scripts refuse unrecognized
 resources rather than replacing or deleting them; see the archive instructions
 for alpha.4 ownership compatibility and manual resolution of ambiguous entries.
-The current public download is alpha.4 (schema 7). Alpha.5/schema 8 is a
-source-only candidate until a separate owner release decision; it is not a
-public installer or a claim of manual Gatekeeper/SmartScreen approval.
+The current public download is alpha.5 (schema 8); see its
+[public-download verification](release-alpha5-verification.md). The dated
+reports below retain the exact release or candidate that was actually tested.
+Publication is not a claim of manual Gatekeeper/SmartScreen approval.
 
 ## Apple Silicon: `0.1.0-alpha.2`
 

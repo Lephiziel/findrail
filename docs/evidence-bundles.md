@@ -1,12 +1,12 @@
-# Portable evidence bundles (source format)
+# Portable evidence bundles
 
-The source tree defines a strict, portable JSON v1 codec for moving selected
+Alpha.5 includes a strict, portable JSON v1 format for moving selected
 citations and notes. This is distinct from portable source snapshot ZIP v1, which
 transfers indexed sources. The codec itself has no storage, HTTP, file access, or
-network behavior. Source-cycle management endpoints export saved collections,
+network behavior. Writable management endpoints export saved collections,
 preview explicit source mappings, and atomically create new collections after
-matching current indexed data. These capabilities are not part of published
-alpha.4.
+matching current indexed data. They are available in alpha.5 `start`/desktop
+sessions; earlier alpha.4 archives do not include this workflow.
 
 ## JSON contract
 
@@ -93,8 +93,7 @@ Wrappers are capped at 5 MiB, raw bundle JSON at 4 MiB, preview output at 256 Ki
 and claims at 32 KiB. Claims expire after five minutes and are process-local;
 they do not authenticate bundle authors. `serve` and `demo` do not register these
 endpoints. The capability flag is true only for a writable management composition
-with a complete bundle backend. These source-cycle capabilities are not part of
-the published alpha.4 binary.
+with a complete bundle backend. Alpha.5 includes this capability.
 
 Only one HTTP bundle operation runs in the process at a time; `429 bundle_busy`
 means retry later. The five-second budget also covers receiving the request body;
@@ -117,8 +116,8 @@ export. To import, choose a JSON file and explicitly map every source alias to a
 source in the current inventory. The server preview checks all citations and
 quotas before enabling creation of a new collection. Historical missing evidence
 cannot be restored automatically; changed hashes, pages, or quotes require a new
-preview and never result in a partial import. This describes the source-tree UI;
-the workflow is not included in the published alpha.4 binary.
+preview and never result in a partial import. This workflow is included in the
+alpha.5 browser interface.
 
 Every new preview clears the previous confirmation. Import locks its inputs until
 that request finishes, preventing duplicate submissions. Cancel releases local

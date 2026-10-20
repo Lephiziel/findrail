@@ -88,8 +88,8 @@ for previous-page navigation. Empty results complete explicitly; a total of
 exactly 1,000 completes rather than reporting a truncated window. A cursor with a
 different well-formed public epoch is rejected as a changed session without
 trusting its claims; the previous process key is not persisted.
-The endpoint is source-build behavior, not part of the downloadable alpha.4.
-The source-build browser uses this capability for bounded First/Previous/Next
+The endpoint is included in alpha.5; historical alpha.4 retains its older API.
+The alpha.5 browser uses this capability for bounded First/Previous/Next
 navigation, keeps only the active query chain in memory, and clears stale pages
 after a cursor fence failure. Preset Apply invalidates pending search/preview
 work while retaining pinned evidence and unsaved collection notes.

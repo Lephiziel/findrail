@@ -4,10 +4,10 @@ PACKAGE IDENTITY
 Read BUILD-INFO.json for the exact application version, source revision, target
 and SQLite schema. A source-built or CI/rehearsal archive is not a published
 release; download public packages and checksums only from the actual GitHub
-release page. Published alpha.3 is pinned to schema 6 and published alpha.4 to
-schema 7. A source/CI alpha.5 candidate uses schema 8 and is not a published
-release; public download links still refer to alpha.4 until an owner publishes a
-new release. Alpha.4 binaries cannot open candidate schema 8.
+release page. Published alpha.5 uses schema 8; alpha.4 uses schema 7 and alpha.3
+uses schema 6. Alpha.4 binaries cannot open schema 8. The public release tag,
+manifest and checksums identify the published bytes; a later source/CI build is
+not a replacement for that immutable release.
 
 INSTALL A PUBLISHED STANDALONE ARCHIVE
 1. From the GitHub Releases page, download the archive for your OS/CPU and the
@@ -28,7 +28,7 @@ Published alpha.2 lacks the new Sources panel and evidence collections. With
 that archive, use ./findrail demo (Windows: .\findrail.exe demo), or start an
 explicit folder: ./findrail start "/absolute/path/to/notes" (Windows:
 .\findrail.exe start "C:\Users\YOU\Documents\Notes"). The following steps
-    describe alpha.3/alpha.4; published alpha.2 has fewer features.
+    describe alpha.3 and later; published alpha.2 has fewer features.
 
 FIRST RUN (AFTER VERIFYING THIS ARCHIVE)
 4. Start Findrail with no source selected yet, then add only the folder you choose.
@@ -43,13 +43,13 @@ FIRST RUN (AFTER VERIFYING THIS ARCHIVE)
    path on the machine running Findrail. A browser picker cannot select a
    server-side path. Keep the terminal process running; Ctrl+C stops it.
  5. Search for a remembered word in a technical note or text PDF. Open Preview;
-    confirm a PDF result's actual page. In alpha.4 start/desktop, select exact
+    confirm a PDF result's actual page. In alpha.4 and alpha.5 start/desktop, select exact
     passages, explicitly Save a named collection and notes/order, then restart
     using the same data directory and confirm restoration. Alpha.3 and read-only
     serve/demo use only a temporary in-tab collection.
 
-DESKTOP LAUNCHER (alpha.4 archives)
-The five alpha.4 archives include the ordinary `findrail` CLI and the
+DESKTOP LAUNCHER (alpha.4 and alpha.5 archives)
+The five platform archives include the ordinary `findrail` CLI and the
 separate `findrail-desktop` launcher. It acquires ownership of the chosen data
 directory before opening SQLite. Starting it again opens the verified existing
 loopback endpoint rather than creating a second server. Closing a browser tab does
@@ -60,7 +60,7 @@ Install for the current user from the extracted archive:
     launcher/linux/uninstall-user.sh.
   macOS: launcher/macos/install-user.sh copies Findrail.app to ~/Applications;
     launcher/macos/uninstall-user.sh removes that app.
-    The alpha.4 macOS app requires macOS 13 or newer, matching its Go 1.27 build.
+    The macOS app requires macOS 13 or newer, matching its Go 1.27 build.
   Windows: run launcher/windows/install-user.ps1 in PowerShell; remove its
     Start-menu shortcut with launcher/windows/uninstall-user.ps1.
 These scripts do not delete indexed data. On Linux and Windows, the desktop
@@ -103,12 +103,12 @@ alpha.4 uses schema 7 with forward migrations 1–7 (001_init,
 006_indexing_reports, 007_evidence_collections). Migrations run forward on the new binary's first write;
 there are no reverse migrations. Legacy schema-2 sources keep DOCX disabled by
 default; enable it explicitly per source before rescanning if desired.
-Source/CI alpha.5 candidates after migration 008 use schema 8, adding saved
+Alpha.5 adds migration 008 and uses schema 8, adding saved
 passage-window offsets to collections. Opening a schema-7 alpha.4 index with the
-candidate migrates it forward; the published alpha.4 binary must not be used on
+alpha.5 binary migrates it forward; the alpha.4 binary must not be used on
 that upgraded directory. The upgrade path is tested against a real alpha.4
-binary and a complete stopped backup, but alpha.5 remains unpublished until a
-separate owner decision.
+binary and a complete stopped backup. Restore that backup with its matching
+binary if rollback is needed.
 
 Before any upgrade, stop every Findrail process that could open this index. Stop
 the server with Ctrl+C; also close any other CLI/client process using that data
@@ -126,7 +126,7 @@ backup contains the database and any WAL/SHM files before opening the new binary
 
 Never point an older binary at a newer schema: alpha.2/schema 2 cannot open
 schema 6, published alpha.3/schema 6 cannot open schema 7, and published
-alpha.4/schema 7 cannot open candidate schema 8. For rollback, stop
+alpha.4/schema 7 cannot open schema 8. For rollback, stop
 every Findrail process, preserve the upgraded directory separately, and restore
 the WHOLE pre-upgrade backup to a different directory. Run the older compatible
 binary against that restored copy (set --data-dir to that copy if needed). Do not

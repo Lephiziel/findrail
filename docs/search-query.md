@@ -1,4 +1,4 @@
-# Search queries and filters (source builds)
+# Search queries and filters
 
 Literal mode remains the default and preserves the existing tokenizer: punctuation
 separates terms and terms are ANDed. Quotation marks, `OR`, `-`, and `*` have no
@@ -30,12 +30,12 @@ prefix, not arbitrary substring. Literal title filtering is case-sensitive.
 Unicode whitespace separates atoms. NUL and control characters are rejected;
 CR/LF inside a quoted phrase is rejected. Lower-case `or` is a normal term.
 
-In current schema-8 source builds, a long matching document can be browsed in
+In alpha.5 (schema 8), a long matching document can be browsed in
 bounded passage windows. Literal search remains unchanged; the user can move to
 the matching window, select an exact quote, and save its offset with a named
 collection. The window is an indexed snapshot, bounded to 65,536 Unicode code
 points and 256 KiB of UTF-8; it does not read an arbitrary source path. This
-candidate behavior is not in published alpha.4, whose schema is 7.
+window behavior is not in historical alpha.4, whose schema is 7.
 
 The server filters `--format all|text|pdf|docx`, `--path-prefix` (relative,
 forward-slash indexed path with segment boundary), and `--title-contains`
@@ -64,7 +64,7 @@ them remain Literal. The existing MCP `findrail_search` accepts optional fields
 with the same names (query remains named `query`); its required `source_id`
 continues to restrict each call to one allowlisted source.
 
-## HTTP cursor pages (source builds)
+## HTTP cursor pages
 
 When `/api/v1/capabilities` reports `search_pagination: true`, clients can use
 the optional, read-only `GET /api/v1/search/pages` endpoint. An absent flag on
@@ -128,7 +128,7 @@ Errors retain a human-readable `error` string and add a stable `code`:
 | 504 | `search_page_timeout`: the five-second request budget expired. A shorter caller deadline and client cancellation propagate to the pager. |
 
 `serve`/`demo` remain read-only; page search adds no management capability. In
-the source-build browser UI, the optional pager appears only when capabilities
+the alpha.5 browser UI, the optional pager appears only when capabilities
 reports `search_pagination: true`. It starts at 20 results per page; 50 and 100
 are also available. First, Previous, and Next navigate using opaque cursors,
 never a user-entered page number or calculated offset. The displayed range uses
@@ -138,7 +138,7 @@ query/filter/limit and is held only in memory. A changed or expired cursor asks
 you to restart from First; it never combines pages from different index
 snapshots. The 1,000-result window is a bound, not a claim that all matches were
 shown. Servers without the explicit capability retain the existing search UI.
-These source-build browser controls are not included in the alpha.4 download.
+These browser controls are included in alpha.5; alpha.4 retains its older UI.
 
 Advanced PDF matching treats each page as a separate field for phrases, so a
 phrase cannot cross a page boundary. Bare AND terms may occur on different
@@ -155,7 +155,7 @@ in the existing alpha.2 downloads.
 
 ## Portable search preset files
 
-Source-build search UI offers an explicit **Save preset JSON** action and a local
+Alpha.5 offers an explicit **Save preset JSON** action and a local
 file picker. A preset is a UTF-8 JSON object (`findrail-search-preset`, version
 1) capped at 16 KiB. The title is entered by the user; the file contains the
 query, Literal/Advanced mode, format/path/title filters, and either explicit

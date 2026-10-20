@@ -15,7 +15,7 @@ benchmark.
 
 ## Start
 
-Download and extract the `0.1.0-alpha.4` archive for your platform from
+Download and extract the `0.1.0-alpha.5` archive for your platform from
 [Releases](https://github.com/Lephiziel/findrail/releases). Inside the extracted
 folder, run:
 
@@ -77,10 +77,10 @@ Findrail version, whether installation succeeded, and what failed or helped.
 Use the [alpha feedback issue](https://github.com/Lephiziel/findrail/issues/3)
 or the bug-report template. Share only synthetic or redacted reproductions.
 
-Literal keyword search is the default. Alpha.3 and alpha.4 also support opt-in Advanced
+Literal keyword search is the default. Alpha.3 and later also support opt-in Advanced
 queries and filters. OCR and semantic retrieval are not included. The demo
 does not enable source-management writes or launch external document viewers.
-The alpha.4 desktop launcher and persistent collections are a separate
+The desktop launcher and persistent collections are a separate
 workflow in `start` / desktop; see the [desktop guide](desktop-launcher.md)
 and [saved collections](evidence-collections.md).
 

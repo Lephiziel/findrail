@@ -6,18 +6,18 @@ the full reusable CI, five native package jobs, a real packaged browser journey,
 installed VSIX checks, exact-set aggregation, reusable verification, and a
 read-only published-release state check. Only after every
 gate succeeds can the final job create a release. Pull requests rehearse the
-same gates with publication disabled and preview app version alpha.5 while
-`build/package/VERSION` remains alpha.4. Publication is
-restricted to the canonical repository's main push or explicit main dispatch;
+same gates with publication disabled. Both the candidate version and
+`build/package/VERSION` are now alpha.5; an existing complete release is a no-op.
+Publication is restricted to the canonical repository's main push or explicit main dispatch;
 PR and fork previews have read-only permissions. Alpha.4
 archives include native desktop launchers and target-specific install
 resources; these are archive members, not additional release assets.
-Current source schema is 8 after migration 008; the public alpha.4 remains
-schema 7 until the owner decides to publish another release.
+The current public alpha.5 uses schema 8 after migration 008; historical alpha.4
+remains schema 7. See the [published alpha.5 verification](release-alpha5-verification.md).
 
 ## Preview rehearsal
 
-For an unpublished alpha.5 candidate, use **Actions → Package rehearsal
+For a nonpublishing alpha.5 rehearsal, use **Actions → Package rehearsal
 (no release) → Run workflow** with `candidate_sha` set to the exact commit SHA and
 `candidate_version` explicitly set to `0.1.0-alpha.5`. A rehearsal never edits
 `build/package/VERSION`; its archive is not a published release.
@@ -193,32 +193,22 @@ SHA/schema contract remains unchanged.
 
 ## Intentional alpha.5 publication
 
-PR and main-source checks package alpha.5 while `VERSION` remains alpha.4. The
-alpha.5 contract requires schema 8; alpha.3 and alpha.4 retain their historical
-schemas 6 and 7. Archives with another schema are rejected. These alpha.5 checks do not publish: the
-publisher still requires the candidate version to equal `VERSION`, and the
-PR and main-push read-only release-state gate checks alpha.4 against its
-historical tag SHA and exact existing assets, returns `noop` even though source
-HEAD is newer. On a PR, preview publish is false and the publisher is skipped;
-on a main push, the candidate alpha.5 does not equal `VERSION` alpha.4 and the
-publisher is also skipped.
-Dispatch rehearsals require the exact current main SHA and `publish=false` for
-preparation. Alpha.5 remains an unpublished preview until the owner authorizes
-publication. Its complete published schema-8 contract is already supported by
-the existing-release verifier, so later main commits can validate the immutable
-release and return `noop`. The migration checks pin the
+Before publication, PR and main-source checks packaged alpha.5 while `VERSION`
+remained alpha.4. The publisher required matching versions, so those previews
+did not publish. The alpha.5 contract requires schema 8; alpha.3 and alpha.4
+retain their historical schemas 6 and 7. Archives with another schema are rejected.
+PR previews always disable publication. Dispatch rehearsals require the exact
+current main SHA and `publish=false` for preparation. The owner authorized
+[PR #90](https://github.com/Lephiziel/findrail/pull/90), which deliberately changed
+`VERSION` to alpha.5. All gates ran again on its actual main merge commit before
+publication. Later main commits validate the immutable public release and return
+`noop`; they must not replace its tag or assets. The migration checks pin the
 published alpha.4 Linux amd64 archive to SHA-256
 `41f91c62b618a64dc083f7a63403f7f4fcc6f8b13ffb613acfee6704927f6a1a`; mismatch
 fails closed rather than updating the reference silently.
 
-The owner-authorized release PR deliberately changes `build/package/VERSION` to
-`0.1.0-alpha.5`. Its PR run must pass with publication skipped. Merging that PR
-allows the canonical main-push publisher to run only after every required gate
-passes again on the actual main commit; PR-head artifacts are not reused as
-main-commit evidence. No VERSION change, tag, or publication is part of this
-preparation change.
-
-After the new release exists, [verify the public downloads](release-smoke-alpha5.md#publication-after-acceptance)
-before switching README download links and announcing it. A future source
-schema needs a new explicit candidate/version contract, not an edit to the
-immutable alpha.4 contract.
+The [alpha.5 publication record](release-alpha5-verification.md) records its
+release commit, workflow and downloaded asset bytes. The earlier
+[candidate acceptance procedure](release-smoke-alpha5.md#publication-after-acceptance)
+remains a historical preparation record. A future source schema needs a new
+explicit candidate/version contract, not an edit to an immutable release contract.

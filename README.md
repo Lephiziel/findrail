@@ -46,13 +46,12 @@ Python are only development tools.
 
 > [!NOTE]
 > **Early alpha — feedback welcome.** The current download is
-> [0.1.0-alpha.4](https://github.com/Lephiziel/findrail/releases/tag/v0.1.0-alpha.4),
-> with desktop launchers, optional original-file opening and saved collections.
-> [What's new](#new-in-alpha4) · [Verified release](docs/release-alpha4-verification.md).
+> [0.1.0-alpha.5](https://github.com/Lephiziel/findrail/releases/tag/v0.1.0-alpha.5),
+> with passage windows, paged results and explicit source/evidence transfer.
+> [What's new](#new-in-alpha5) · [Verified release](docs/release-alpha5-verification.md).
 > Upgrading an existing index? [Stop and back up the whole data directory first](build/package/INSTALL.txt).
-> Schema-8 passage windows are being verified in an unpublished alpha.5 source
-> candidate; they are not in the alpha.4 downloads. Do not expect alpha.4 to open
-> a data directory already migrated by a candidate.
+> Alpha.5 uses schema 8. Earlier binaries cannot open an index upgraded to
+> schema 8; rollback requires the complete stopped pre-upgrade backup.
 
 ## A path back to your documents
 
@@ -106,20 +105,20 @@ as independent frozen sources. [GitHub sources](docs/github.md) ·
 
 ### 1. Download
 
-Download **0.1.0-alpha.4** for your computer, verify the matching entry in
-[SHA256SUMS.txt](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.4/SHA256SUMS.txt),
+Download **0.1.0-alpha.5** for your computer, verify the matching entry in
+[SHA256SUMS.txt](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/SHA256SUMS.txt),
 then extract the archive into a folder you own.
 
 | Linux | macOS | Windows |
 |:---|:---|:---|
-| [x86-64 / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.4/findrail_0.1.0-alpha.4_linux-amd64.tar.gz) | [Apple Silicon / arm64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.4/findrail_0.1.0-alpha.4_darwin-arm64.tar.gz) | [x86-64 / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.4/findrail_0.1.0-alpha.4_windows-amd64.zip) |
-| [ARM64 / arm64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.4/findrail_0.1.0-alpha.4_linux-arm64.tar.gz) | [Intel / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.4/findrail_0.1.0-alpha.4_darwin-amd64.tar.gz) | |
+| [x86-64 / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_linux-amd64.tar.gz) | [Apple Silicon / arm64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_darwin-arm64.tar.gz) | [x86-64 / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_windows-amd64.zip) |
+| [ARM64 / arm64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_linux-arm64.tar.gz) | [Intel / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_darwin-amd64.tar.gz) | |
 
 No Go, Python, database server or Docker setup is required. **macOS 13+** is
 required for these macOS builds. The alpha binaries are unsigned; read the
 bundled `INSTALL.txt` for platform-specific first-run instructions. On macOS,
 an app-specific allowance may be needed in Privacy & Security. [Installation, upgrade and rollback](build/package/INSTALL.txt) ·
-[Release manifest](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.4/release-manifest.json)
+[Release manifest](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/release-manifest.json)
 
 ### 2. Start
 
@@ -206,8 +205,8 @@ headless machine. `demo` uses its own temporary index and does not accept
 
 > [!IMPORTANT]
 > Stop Findrail and back up the **whole data directory** before upgrading.
-> Alpha.4 uses schema **7**; alpha.3 uses schema **6**.
-> Upgrades are forward-only, so an alpha.3 binary cannot open a schema-7 index.
+> Alpha.5 uses schema **8**; alpha.4 uses **7** and alpha.3 uses **6**.
+> Upgrades are forward-only: alpha.4 cannot open a schema-8 index.
 > [Backup and rollback instructions](build/package/INSTALL.txt).
 
 Search is lexical. **OCR, semantic search, private GitHub, team authentication
@@ -216,20 +215,23 @@ do not reproduce Word layout or page numbers. Preview shows the indexed
 snapshot, which may differ from the current file.
 [Data handling](docs/data-handling.md) · [Extraction limits](docs/local-alpha.md)
 
-## New in alpha.4
+## New in alpha.5
 
-Find a passage, reopen its source, and return to a saved collection:
+Find a late passage, navigate more results, and transfer selected evidence:
 
 | Included in the current download | Details |
 |:---|:---|
-| Desktop launcher and per-user install resources | Launch from the OS menu; repeat launch reuses the existing instance. Closing the tab keeps it running; **Quit Findrail** stops it. [Desktop guide](docs/desktop-launcher.md) |
-| Open original / open containing folder | Explicitly enabled with `findrail-desktop --enable-originals` or `findrail start --enable-originals`; available only for eligible local files. External viewers may open at their default page. [Local workflow](docs/local-alpha.md) |
-| Named evidence collections | Explicitly save passages, notes and order; restore from the same data directory after restart. `serve` / `demo` remain temporary. [Collections guide](docs/evidence-collections.md) |
+| Passage windows | Browse matching text and surrounding indexed context, including late Markdown and DOCX passages. PDF citations keep their page numbers. [Search guide](docs/search-query.md) |
+| Paged results and presets | First/Previous/Next with page sizes 20/50/100 within a 1,000-result window. Apply a preset, then explicitly search. [Query behavior](docs/search-query.md) |
+| Evidence bundles | Export saved citations and notes as JSON; map sources and preview conflicts before importing a new collection. [Bundle guide](docs/evidence-bundles.md) |
+| Portable source transfer in Sources | Explicitly export, inspect and import indexed-text snapshots using paths on the Findrail computer. Imported sources stay frozen. [Snapshot guide](docs/portable-snapshots.md) |
+| Freshness and recovery guidance | Distinguish indexed evidence from current originals; failed refreshes preserve committed results. [Freshness guide](docs/index-freshness.md) |
 
-The release passed five native package jobs, browser, installed VSIX and
-upgrade checks. The owner also reported the supplied short desktop check
-working. [Release verification and coverage](docs/release-alpha4-verification.md) ·
-[Roadmap](docs/roadmap.md)
+Desktop launch, opt-in original-file opening and saved named collections remain
+available. The release passed five native package jobs, packaged browser,
+installed VSIX, upgrade/restore and recovery checks. The owner reported the
+supplied Linux candidate check working. [Release verification and coverage](docs/release-alpha5-verification.md) ·
+[Release notes](docs/release-notes-alpha5.md) · [Roadmap](docs/roadmap.md)
 
 The read-only `serve` and `demo` interfaces keep temporary in-tab collections;
 original-file opening is opt-in in `start` / desktop. Saved collections are
@@ -245,13 +247,13 @@ historical indexed passages, not live copies of the original files.
 | [DOCX support](docs/docx.md) | [Optional VS Code client](docs/vscode.md) |
 | [Indexing diagnostics](docs/indexing-diagnostics.md) | [Search evaluation](docs/search-evaluation.md) |
 | [Portable snapshots](docs/portable-snapshots.md) | [Experimental connector kit](docs/connectors.md) |
-| [Release checks](docs/release-alpha4-verification.md) | [Product direction](docs/product.md) |
+| [Release checks](docs/release-alpha5-verification.md) | [Product direction](docs/product.md) |
 | [Русский обзор](docs/ru/overview.md) | [Contributing](CONTRIBUTING.md) |
 
 ## Build from source
 
 Requires **Go 1.26+**. No CGO is required. Published packages and their exact
-source revision are listed in the [release verification](docs/release-alpha4-verification.md).
+source revision are listed in the [release verification](docs/release-alpha5-verification.md).
 
 ```bash
 git clone https://github.com/Lephiziel/findrail.git

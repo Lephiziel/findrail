@@ -1,5 +1,10 @@
 # Alpha.5 source candidate verification
 
+Historical preparation procedure. Alpha.5 has since been published; use the
+[published release verification](release-alpha5-verification.md) for its final
+tag, workflow and downloaded asset bytes. The candidate claims below retain
+their original scope and do not replace final release-commit evidence.
+
 This record is for an unpublished source candidate, not a release announcement.
 The public version remains `0.1.0-alpha.4`; the public alpha.4 tag, release and
 eight assets are unchanged. Candidate archives are named alpha.5, built from a

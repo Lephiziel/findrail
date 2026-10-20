@@ -1,7 +1,7 @@
 # Source management from the local web UI
 
-The browser source manager is included in source builds. Existing release
-archives do not include it yet. It is enabled by `findrail start` only; the
+The browser source manager is included in alpha.5. It is enabled by writable
+`findrail start` and the desktop launcher; the
 ordinary `serve` command and the isolated `demo` remain read-only.
 
 ## First run and folders
@@ -27,7 +27,7 @@ Examples:
 - Windows: `C:\Users\Alex\Documents\Notes`
 
 Folder defaults match the CLI: 1 MiB per text file, 16 MiB per PDF, and 8 MiB
-per DOCX in source builds. DOCX is disabled for existing folders until explicitly
+per DOCX. DOCX is disabled for legacy folders until explicitly
 re-indexed with a DOCX-enabled policy. DOCX is a bounded plain-text body snapshot;
 see [the supported subset](docx.md). Hidden entries, symlinks, credential-like
 filenames and the index directory remain excluded. Originals are read-only from
@@ -68,7 +68,8 @@ reading the committed snapshot while preparation is in progress.
 
 ## Imported archive snapshots
 
-Use the CLI-first transfer flow in [portable snapshots](portable-snapshots.md).
+Use **Inspect portable snapshot** and each source's **Export snapshot** action,
+or the CLI flow in [portable snapshots](portable-snapshots.md).
 An imported archive appears in a running `start` session's Sources and search
 selectors through the existing inventory. It is not scanned, watched, refreshed
 or configured. The panel displays its historical original location, original
