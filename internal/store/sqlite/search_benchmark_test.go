@@ -22,7 +22,7 @@ func BenchmarkSearch(b *testing.B) {
 	}
 	for _, count := range counts {
 		b.Run(fmt.Sprintf("documents_%d", count), func(b *testing.B) {
-			store, sourceID, setup := benchmarkStore(b, count, false)
+			store, _, setup := benchmarkStore(b, count, false)
 			cases := []struct {
 				name  string
 				query search.Request
@@ -30,10 +30,6 @@ func BenchmarkSearch(b *testing.B) {
 				{"common", search.Request{Query: "commonmark", Limit: 20}},
 				{"rare", search.Request{Query: "raretoken", Limit: 20}},
 				{"empty", search.Request{Query: "no_such_token", Limit: 20}},
-				{"title_filter", search.Request{Query: "commonmark", TitleContains: "Title 000", Limit: 20}},
-				{"path_filter", search.Request{Query: "commonmark", PathPrefix: "docs/group-0", Limit: 20}},
-				{"source_filter", search.Request{Query: "commonmark", SourceID: sourceID, Limit: 20}},
-				{"format_text", search.Request{Query: "commonmark", Format: "text", Limit: 20}},
 			}
 			for _, tc := range cases {
 				b.Run(tc.name, func(b *testing.B) {
@@ -61,21 +57,25 @@ func BenchmarkPageSearch(b *testing.B) {
 	}
 	for _, count := range counts {
 		b.Run(fmt.Sprintf("documents_%d", count), func(b *testing.B) {
-			store, _, setup := benchmarkStore(b, count, false)
+			store, sourceID, setup := benchmarkStore(b, count, false)
 			ctx := context.Background()
 			for _, tc := range []struct {
-				name   string
-				query  string
-				format string
-				cursor bool
+				name    string
+				request search.Request
+				cursor  bool
 			}{
-				{"first_common", "commonmark", "", false},
-				{"next_common", "commonmark", "", true},
-				{"empty", "no_such_token", "", false},
-				{"pdf_page_attribution", "pdfcommon", "pdf", false},
+				{"first_common", search.Request{Query: "commonmark", Limit: 20}, false},
+				{"next_common", search.Request{Query: "commonmark", Limit: 20}, true},
+				{"empty", search.Request{Query: "no_such_token", Limit: 20}, false},
+				{"title_filter", search.Request{Query: "commonmark", TitleContains: "Title 000", Limit: 20}, false},
+				{"path_filter", search.Request{Query: "commonmark", PathPrefix: "docs/group-0", Limit: 20}, false},
+				{"source_filter", search.Request{Query: "commonmark", SourceID: sourceID, Limit: 20}, false},
+				{"format_text", search.Request{Query: "commonmark", Format: "text", Limit: 20}, false},
+				{"format_docx", search.Request{Query: "commonmark", Format: "docx", Limit: 20}, false},
+				{"pdf_page_attribution", search.Request{Query: "pdfcommon", Format: "pdf", Limit: 20}, false},
 			} {
 				b.Run(tc.name, func(b *testing.B) {
-					req := search.PageRequest{Request: search.Request{Query: tc.query, Format: tc.format, Limit: 20}}
+					req := search.PageRequest{Request: tc.request}
 					if tc.cursor {
 						first, err := store.SearchPage(ctx, req)
 						if err != nil || first.NextCursor == nil {
