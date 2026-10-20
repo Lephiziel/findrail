@@ -102,8 +102,8 @@ An absent `portable_snapshots` capability on an older API v1 server means false.
 Archives remain plaintext and may contain absolute source provenance; the
 metadata preview hides original source name/location by default.
 
-These routes are source-build behaviour for the next unpublished source cycle;
-they do not describe the published alpha.4 binaries.
+These management routes are included in alpha.5. Earlier alpha.4 archives retain
+their original CLI-first transfer behavior.
 
 ## Sources UI
 
@@ -144,8 +144,7 @@ at a time; operation deadline is two minutes, and management-profile archive
 limits are 32 MiB compressed, 64 MiB expanded, 2000 documents and 20000 pages.
 Server validation remains authoritative. These controls require the
 `portable_snapshots` capability; its absence means unavailable, including on
-read-only `serve`/`demo`. This is unpublished source-cycle behaviour, not an
-alpha.4 feature.
+read-only `serve`/`demo`. These controls are included in alpha.5.
 
 ## CLI journey
 

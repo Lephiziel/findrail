@@ -1,8 +1,8 @@
-# Evidence collections (alpha.4)
+# Evidence collections
 
 Named evidence collections are available when Findrail runs through writable
 `start`. Collections are stored in the current data directory's SQLite database.
-They are included in schema-7 alpha.4 archives and current source builds,
+They are included in alpha.4 and alpha.5 archives,
 not in immutable published alpha.3 archives. `serve`, `demo`, MCP and
 read-only composition retain the temporary in-page collection and expose no
 collection persistence routes. The browser does not use localStorage, IndexedDB,
@@ -19,12 +19,14 @@ entry key and derives provenance from the current indexed document; the browser
 cannot submit a URI, hash, title, source identity or page as authoritative data.
 Exact source/document/content-hash/page/passage duplicates are rejected.
 
-Current schema-8 source candidates also retain the start offset for a selected
+Alpha.5 (schema 8) also retains the start offset for a selected
 window in a long indexed document. Existing schema-7 collections migrate with
 offset zero, preserving their saved prefix evidence, note and order. A new
 windowed citation remains bound to the same indexed document identity and full
 content hash; it is not an offset into the live original file. These offsets are
-not available in the published alpha.4 binary (schema 7).
+not available in the historical alpha.4 binary (schema 7). To transfer saved
+passages and notes between compatible indexes, use [evidence bundles](evidence-bundles.md)
+with explicit source mapping and conflict preview.
 
 Stored entries are immutable historical evidence snapshots. A rescan with changed
 content does not rewrite their passage/hash. **Open current indexed evidence** is a

@@ -1,13 +1,12 @@
 # Read-only MCP
 
-Published alpha.3 and alpha.4 packages include a local, read-only Model Context Protocol server. It runs
+Published alpha.3 and later packages include a local, read-only Model Context Protocol server. It runs
 over stdio as `findrail mcp`; it does not start the web
 server, watch folders, index files, open a browser, call a model, or contact a
 network service.
 
-The new `mcp-config` helper is available in source builds after alpha.4; it is
-not included in the published alpha.4 archives. Manual configuration below works
-with the published MCP command.
+The `mcp-config` helper is included in alpha.5. Earlier alpha.4 archives use the
+manual configuration below, which also works with the published MCP command.
 
 The MCP client receives indexed snapshots. A client may send that returned text
 to its own AI provider, according to the client's settings; local indexing does

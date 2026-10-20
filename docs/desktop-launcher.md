@@ -1,4 +1,4 @@
-# Desktop launcher (alpha.4)
+# Desktop launcher (alpha.4 and alpha.5)
 
 The separate `findrail-desktop` executable starts the local application and
 opens its UI. It uses the standard platform data directory unless `--data-dir`
@@ -36,7 +36,7 @@ normal extraction resources. For macOS app layout, place the launcher at
 `Findrail.app/Contents/MacOS/Findrail` and the desktop executable beside it as
 `Findrail.app/Contents/MacOS/findrail-desktop`; put `Info.plist` at
 `Findrail.app/Contents/Info.plist`. Integrations are per-user and must not
-remove the data directory. The alpha.4 packaging workflow includes these resources
+remove the data directory. The packaging workflow includes these resources
 and builds the Windows launcher with GUI-subsystem linking.
 
 Manual GUI acceptance remains necessary on Linux, macOS, and Windows: install
