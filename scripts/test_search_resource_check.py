@@ -173,6 +173,26 @@ class GeneratorTests(unittest.TestCase):
             (root / "nested").mkdir()
             self.assertEqual(resource_check.directory_file_bytes(root), 10)
 
+    def test_optional_samples_sidecar_is_content_free_on_failure(self):
+        script = Path(__file__).with_name("search_resource_check.py")
+        with tempfile.TemporaryDirectory(prefix="resource-sidecar-test-") as temp:
+            root = Path(temp)
+            binary = root / "failing-findrail"
+            binary.write_text("#!/usr/bin/env python3\nraise SystemExit(1)\n", encoding="utf-8")
+            binary.chmod(0o700)
+            report, samples = root / "report.json", root / "samples.json"
+            result = subprocess.run([sys.executable, str(script), "--binary", str(binary),
+                                     "--documents", "100", "--seed", "8", "--queries", "1",
+                                     "--report", str(report), "--samples-report", str(samples)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            data = json.loads(samples.read_text(encoding="utf-8"))
+            self.assertEqual(data["kind"], "search_warm_samples")
+            self.assertEqual(data["status"], "failed")
+            self.assertEqual(data["warmup"], {"excluded": True, "count_per_family": 1})
+            self.assertEqual(data["families"], {})
+            self.assertNotIn(str(root), samples.read_text(encoding="utf-8"))
+
     @unittest.skipUnless(os.name == "posix", "requires catchable POSIX SIGTERM")
     def test_cancel_stops_child_and_cleans_owned_directories(self):
         with tempfile.TemporaryDirectory() as temp:
