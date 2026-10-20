@@ -1,24 +1,37 @@
 # Contributing
 
-Findrail is an early open-source project. Start with the runnable demo, the
-product specification, architecture, and implementation plan. Work that improves
-the real retrieval workflow is welcome.
+Findrail is an open-source local-first search project. For current behaviour,
+start with the runnable demo and architecture; the roadmap distinguishes shipped
+work from planned work.
 
-Try the [three-document demo](docs/demo.md), then browse
+Try the [three-document demo](docs/demo.md), then choose a scoped item from
+[current contributor tasks](docs/contributor-tasks.md) or browse the live
 [good first issues](https://github.com/Lephiziel/findrail/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22)
-or [help wanted](https://github.com/Lephiziel/findrail/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22help%20wanted%22).
-For a small task, leave a comment before starting so contributors do not duplicate
-work. Installation feedback is welcome even if you do not write Go.
+and [help wanted](https://github.com/Lephiziel/findrail/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22help%20wanted%22).
+Check the issue for current status and recent discussion; a short comment with
+your intended scope helps avoid duplicate work, but no assignment or coordinator
+approval is required for a small contribution. Non-code feedback is welcome too.
 
 ## Development
 
-Use Go 1.26 or newer. Run `go mod download`, `go test ./...`, `go vet ./...`, and
-`go test -race ./...` on a supported race-detector platform. Format Go with
-`gofmt`. CI checks multiple operating systems and builds without CGO.
+The module requires Go 1.26 or newer. CI checks Go 1.27.x on Linux, macOS and
+Windows, builds without CGO, and runs the race detector on Go 1.26.x/Linux. After
+cloning, run the repository's existing check target:
+
+```sh
+make check
+```
+
+This runs `gofmt` validation, `go vet ./...` and `go test ./...`. For changes to
+concurrent or lifecycle-sensitive code, also run `make race` where the platform
+supports it. Run focused package tests while iterating, for example
+`go test ./internal/extract/docx`; see CI for the complete platform matrix. There
+is no need to download modules separately: Go resolves the declared module graph.
 
 ## Pull requests
 
-Describe the user-visible problem, resulting behaviour, and relevant validation.
+Describe the user-visible problem, resulting behaviour, and relevant validation
+(including which checks you ran).
 Keep source fixtures synthetic or public; never include private documents,
 tokens, database files, or real query logs. Include lifecycle or boundary tests
 for storage / connector changes and an upgrade plan for schema changes.
