@@ -116,24 +116,38 @@ def configure_parent_death():
 
 
 def stop(child):
-    if child.poll() is None:
-        if os.name == "posix":
+    if os.name == "posix":
+        # The session leader can exit before descendants. Its process group is
+        # still ours to reap, so signal the group independently of poll().
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        end = time.monotonic() + 3
+        while time.monotonic() < end:
             try:
-                os.killpg(child.pid, signal.SIGTERM)
+                os.killpg(child.pid, 0)
             except ProcessLookupError:
-                pass
-        else:
-            child.terminate()
+                break
+            if child.poll() is None:
+                try:
+                    child.wait(timeout=min(.05, max(0, end - time.monotonic())))
+                except subprocess.TimeoutExpired:
+                    pass
+            else:
+                time.sleep(.05)
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if child.poll() is None:
+            child.wait(timeout=3)
+    elif child.poll() is None:
+        child.terminate()
         try:
             child.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            if os.name == "posix":
-                try:
-                    os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            else:
-                child.kill()
+            child.kill()
             child.wait(timeout=3)
 
 

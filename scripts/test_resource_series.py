@@ -128,6 +128,30 @@ class SeriesTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "child_failed_7"):
             series.run_child([sys.executable, "-c", "raise SystemExit(7)"], __import__("time").monotonic() + 5)
 
+    @unittest.skipUnless(__import__("os").name == "posix", "requires POSIX process groups")
+    def test_failed_group_leader_exit_still_stops_descendant(self):
+        import os, sys, time
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "descendant.pid"
+            code = ("import pathlib,subprocess,sys,time; "
+                    f"p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+                    f"pathlib.Path({str(marker)!r}).write_text(str(p.pid)); "
+                    "time.sleep(.1); sys.exit(7)")
+            with self.assertRaisesRegex(RuntimeError, "child_failed_7"):
+                series.run_child([sys.executable, "-c", code], time.monotonic() + 10)
+            pid = int(marker.read_text())
+            deadline = time.monotonic() + 2
+            state = "unknown"
+            while time.monotonic() < deadline:
+                try:
+                    state = Path(f"/proc/{pid}/stat").read_text().split()[2]
+                    if state == "Z": break
+                except FileNotFoundError:
+                    state = None
+                    break
+                time.sleep(.02)
+            self.assertIn(state, (None, "Z"), "descendant survived its failed process-group leader")
+
     def test_timeout_cleans_process_group(self):
         import sys, time
         with self.assertRaises(TimeoutError):
