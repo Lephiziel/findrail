@@ -515,7 +515,7 @@ def main():
             if measured.get("status") != "success" or measured.get("fixture", {}).get("corpus_sha256") != report["fixture"]["corpus_sha256"]:
                 raise RuntimeError("comparison workload differs or second run was incomplete")
             report["comparison"] = {"same_host": True, "binary": measured["binary"], "metrics": measured["metrics"], "fixture_sha256_matches": True}
-            report["status"] = "success"
+        report["status"] = "success"
     except BaseException as exc:
         report["status"] = "failed"
         reason = str(exc)[:160] if isinstance(exc, (RuntimeError, ValueError, TimeoutError)) else "operation failed; command details are intentionally omitted"

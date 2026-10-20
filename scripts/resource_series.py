@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run a bounded, balanced repeated series using prepared Findrail binaries."""
 import argparse
+import ctypes
 import hashlib
 import json
 import math
@@ -14,8 +15,9 @@ import time
 from pathlib import Path
 
 MAX_OUTPUT = 16 << 20
-MAX_CHILDREN = 6
+MAX_CHILDREN = 1
 MAX_STDERR = 4096
+OUTPUT_RESERVE = 65536
 
 
 def digest(path):
@@ -64,6 +66,55 @@ def clean_json(path):
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs, parse_constant=constant)
 
 
+def validate_samples(sidecar, report, expected_sha, expected_count, expected_documents, expected_seed):
+    if sidecar.get("schema") != 1 or sidecar.get("kind") != "search_warm_samples" or sidecar.get("status") != "success":
+        raise ValueError("invalid_samples_status")
+    if sidecar.get("units") != "ms" or sidecar.get("warmup") != {"excluded": True, "count_per_family": 1}:
+        raise ValueError("invalid_samples_method")
+    if sidecar.get("binary", {}).get("sha256") != expected_sha or report.get("binary", {}).get("sha256") != expected_sha:
+        raise ValueError("binary_hash_mismatch")
+    fixture_hash = report.get("fixture", {}).get("corpus_sha256")
+    fixture = report.get("fixture", {})
+    if (not isinstance(fixture_hash, str) or len(fixture_hash) != 64 or
+            any(char not in "0123456789abcdef" for char in fixture_hash) or
+            (fixture.get("version"), fixture.get("seed"), fixture.get("documents_requested")) !=
+            (2, expected_seed, expected_documents) or
+            report.get("workload", {}).get("indexed_documents") != expected_documents or
+            sidecar.get("fixture", {}).get("corpus_sha256") != fixture_hash):
+        raise ValueError("samples_fixture_mismatch")
+    families = sidecar.get("families")
+    if not isinstance(families, dict) or set(families) != {"common", "rare"}:
+        raise ValueError("invalid_samples_families")
+    checked = {}
+    for family, data in families.items():
+        values = data.get("samples") if isinstance(data, dict) else None
+        if not isinstance(values, list) or len(values) != expected_count or data.get("count") != expected_count:
+            raise ValueError("incomplete_samples_" + family)
+        if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in values):
+            raise ValueError("invalid_sample_value_" + family)
+        stats = summary(values)
+        if data.get("p50") != stats["p50"] or data.get("p95") != stats["p95"]:
+            raise ValueError("sample_percentile_mismatch_" + family)
+        checked[family] = values
+    return checked
+
+
+def output_bytes(directory):
+    return sum(path.stat().st_size for path in directory.iterdir() if path.is_file())
+
+
+def configure_parent_death():
+    """Linux child exits on abrupt orchestrator death; its shared group cleans descendants."""
+    if platform.system() != "Linux":
+        return
+    parent = os.getppid()
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:  # PR_SET_PDEATHSIG
+        raise OSError(ctypes.get_errno(), "prctl parent-death signal failed")
+    if os.getppid() != parent:
+        os.kill(os.getpid(), signal.SIGTERM)
+
+
 def stop(child):
     if child.poll() is None:
         if os.name == "posix":
@@ -91,7 +142,8 @@ def run_child(command, deadline):
         raise TimeoutError("wall_deadline")
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout,
-                                 stderr=stderr, start_new_session=(os.name == "posix"))
+                                 stderr=stderr, start_new_session=(os.name == "posix"),
+                                 preexec_fn=configure_parent_death if platform.system() == "Linux" else None)
         try:
             child.wait(timeout=max(.01, deadline - time.monotonic()))
             if child.returncode:
@@ -145,7 +197,6 @@ def main(argv=None):
     if any(output.iterdir()):
         p.error("output directory must be empty")
     deadline = time.monotonic() + a.deadline_seconds
-    interrupted = False
     try:
         for size in a.documents:
             for repeat in range(a.repeats):
@@ -170,9 +221,11 @@ def main(argv=None):
                                                  "revision": observed.get("revision", "unavailable"),
                                                  "go_version": observed.get("go_version", "unavailable"),
                                                  "schema": observed.get("schema", "unavailable")})
-                        status, reason = ("success" if not report.get("errors") else "failed"), None
-                        if status != "success" or sidecar.get("status") != "success":
+                        status, reason = report.get("status"), None
+                        if status != "success" or report.get("errors") != []:
                             reason = "child_report_failed"
+                        checked_samples = validate_samples(sidecar, report, identities[role]["sha256"],
+                                                           a.samples_per_family, size, a.seed)
                         prior = next((r for r in records if r["size"] == size), None)
                         if prior and prior.get("corpus_sha256") != report.get("fixture", {}).get("corpus_sha256"):
                             reason = "corpus_mismatch"
@@ -186,6 +239,7 @@ def main(argv=None):
                         for key in ("report", "samples"):
                             if rec[key]: rec[key + "_sha256"] = digest(output / rec[key])
                         records.append(rec)
+                        rec["observed_samples"] = {key: len(values) for key, values in checked_samples.items()}
                     except (OSError, ValueError, RuntimeError, TimeoutError, RecursionError) as exc:
                         code = str(exc).split(":", 1)[0][:80] or "child_error"
                         errors.append(code)
@@ -202,10 +256,14 @@ def main(argv=None):
                     finally:
                         import shutil
                         shutil.rmtree(run_dir, ignore_errors=True)
-                    if sum(f.stat().st_size for f in output.iterdir() if f.is_file()) > MAX_OUTPUT:
+                    if output_bytes(output) > MAX_OUTPUT - OUTPUT_RESERVE:
+                        for path in (report_path, samples_path):
+                            path.unlink(missing_ok=True)
+                        if records and records[-1]["size"] == size and records[-1]["repeat"] == repeat + 1 and records[-1]["role"] == role:
+                            records.pop()
                         raise RuntimeError("output_budget_exceeded")
     except KeyboardInterrupt:
-        interrupted = True; errors.append("interrupted")
+        errors.append("interrupted")
     except (OSError, ValueError, RuntimeError, TimeoutError, RecursionError) as exc:
         errors.append(str(exc).split(":", 1)[0][:80])
     summaries = []
@@ -215,7 +273,7 @@ def main(argv=None):
                 runs = []
                 pooled = []
                 for record in records:
-                    if record["size"] != size or record["role"] != role or not record.get("samples"): continue
+                    if record["size"] != size or record["role"] != role or record.get("status") != "success" or not record.get("samples"): continue
                     try:
                         data = clean_json(output / record["samples"])
                         values = data["families"][family]["samples"]
@@ -247,17 +305,21 @@ def main(argv=None):
     obj = {"schema": 1, "kind": "performance_series", "status": "passed" if complete else "incomplete" if records else "failed",
            "identity": identities, "environment": env, "qualification": qualification(len(order) == 2, comparable),
            "measurement": {"method": "warm-process HTTP latency", "order": "AB,BA,AB" if a.baseline else "candidate only",
-                           "warmup": "first request per family excluded", "os_page_cache": "not reset; not cold-cache", "subprocess_limit": MAX_CHILDREN,
+                            "warmup": "first request per family excluded", "os_page_cache": "not reset; not cold-cache", "child_concurrency_limit": MAX_CHILDREN,
                            "wall_deadline_seconds": a.deadline_seconds, "output_budget_bytes": MAX_OUTPUT},
            "runs": records, "summary": summaries, "paired_ratios": pair_ratios,
            "errors": errors, "observed_runs": len(records), "expected_runs": len(a.documents) * a.repeats * len(order)}
     raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
-    if sum(f.stat().st_size for f in output.iterdir() if f.is_file()) + len(raw) > MAX_OUTPUT:
-        obj["status"] = "incomplete"; obj["errors"].append("output_budget_exceeded")
+    if output_bytes(output) + len(raw) > MAX_OUTPUT:
+        obj["status"] = "incomplete"
+        if "output_budget_exceeded" not in obj["errors"]: obj["errors"].append("output_budget_exceeded")
         raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
     (output / "series.json").write_bytes(raw)
-    return 0 if complete else 1
+    return 0 if complete and obj["status"] == "passed" and "output_budget_exceeded" not in obj["errors"] else 1
 
 
 if __name__ == "__main__":
+    def canceled(_signum, _frame):
+        raise KeyboardInterrupt("interrupted")
+    signal.signal(signal.SIGTERM, canceled)
     raise SystemExit(main())

@@ -52,6 +52,10 @@ timeout, failure, interruption, malformed child report, or budget overrun return
 nonzero and records bounded fixed diagnostics. Large samples are local evidence;
 do not commit raw profiles or logs.
 
+On Linux the direct harness child also uses `PR_SET_PDEATHSIG` so abrupt
+orchestrator death signals the harness; its signal cleanup stops its server and
+worker children in the inherited process group. This protection is Linux-specific.
+
 The series complements rather than replaces the existing individual scale record.
 `readiness.check_scale` continues to accept only its original schema-1 report and
 fixed fixture hashes; a series is not readiness evidence and does not imply
