@@ -46,14 +46,14 @@ go test ./internal/store/sqlite -run '^$' \
 
 | Property | Value |
 |---|---|
-| Benchmark source commit | `49dfd2e` (`Add reproducible search profiling benchmarks`) |
-| Profile binary SHA-256 | `2de79037dc28723426660d83814be78829da473d5bd67912e1f022a2d08ceb2c` (`sqlite.test`) |
-| CPU profile SHA-256 | `41d215df6cb5cae0ff192018d17831225a571c664025a1af36e3d0ecf019c2ed` |
-| Memory profile SHA-256 | `f0b17159b49d4ab88d62055f8707c64c747f91b18ad08ad1e7cfddc8532d11b6` |
+| Benchmark source commit | `c2a5bcb` (`Benchmark filters through the paged Store API`) |
+| Profile binary SHA-256 | `df611b6f7f71fd89f932c25a0884dabb9b3e89df8dc760f572217d2afcac04fc` (`sqlite.test`) |
+| CPU profile SHA-256 | `16fc4ffdd9dff0b8e0de55751e2a89eb8d317fca00a126198f33a13af5ccf40f` |
+| Memory profile SHA-256 | `f6ef2da2fe7a37419dc2ac7988b6e7d74733a5dc9ae20a54354d2e18f94d532e` |
 | Go | `go1.27.2-X:nodwarf5 linux/amd64` |
 | Host | Linux/amd64, Intel Core i7-10700KF @ 3.80 GHz, `GOMAXPROCS=16` |
 | Profile workload | 1,000 mixed synthetic documents; `SearchPage(commonmark, limit=20)`, first page; 3s benchmark duration |
-| Profile run | 2.042 ms/op, 141,837 B/op, 1,154 allocs/op |
+| Profile run | 1.993 ms/op, 141,861 B/op, 1,154 allocs/op |
 
 Raw profiles are intentionally outside the repository at
 `/tmp/opencode/task22-artifacts/`; no database/index or raw profile is committed.
@@ -65,45 +65,46 @@ Allocations are per operation. Results are host- and Go-version-specific.
 
 | API / workload | Documents | Time | B/op | allocs/op |
 |---|---:|---:|---:|---:|
-| `Search` common | 100 | 0.507 ms | 33,894 | 686 |
-| `Search` rare | 100 | 0.218 ms | 5,818 | 140 |
-| `Search` empty | 100 | 0.213 ms | 3,576 | 85 |
-| `Search` common | 1,000 | 1.803 ms | 33,873 | 687 |
-| `Search` rare | 1,000 | 0.405 ms | 20,620 | 436 |
-| `Search` empty | 1,000 | 0.263 ms | 3,576 | 85 |
-| `Search` title filter | 1,000 | 2.068 ms | 34,154 | 692 |
-| `Search` path filter | 1,000 | 1.165 ms | 34,631 | 696 |
-| `Search` source filter | 1,000 | 1.836 ms | 34,140 | 692 |
-| `Search` text format | 1,000 | 1.931 ms | 34,051 | 688 |
-| `SearchPage` first common | 1,000 | 1.999 ms | 141,645 | 1,153 |
-| `SearchPage` next common | 1,000 | 2.086 ms | 129,842 | 1,161 |
-| `SearchPage` empty | 1,000 | 0.310 ms | 8,224 | 175 |
-| `SearchPage` PDF page attribution | 1,000 | 4.016 ms | 162,899 | 1,754 |
-| `Search` PDF common (250 PDFs) | 250 | 5.252 ms | 54,135 | 1,227 |
-| `Search` PDF match on page 1 | 250 | 3.787 ms | 54,138 | 1,227 |
-| `Search` PDF match on page 3 | 250 | 3.786 ms | 54,139 | 1,227 |
-| `Search` PDF empty | 250 | 0.318 ms | 3,720 | 86 |
-| `Search` common (opt-in) | 10,000 | 16.209 ms | 41,176 | 693 |
-| `Search` common (opt-in) | 100,000 | 166.276 ms | 36,376 | 691 |
+| `Search` common | 100 | 0.499 ms | 33,909 | 686 |
+| `Search` rare | 100 | 0.214 ms | 5,814 | 140 |
+| `Search` empty | 100 | 0.213 ms | 3,577 | 85 |
+| `Search` common | 1,000 | 1.750 ms | 33,884 | 687 |
+| `Search` rare | 1,000 | 0.400 ms | 20,621 | 436 |
+| `Search` empty | 1,000 | 0.257 ms | 3,576 | 85 |
+| `SearchPage` first common | 1,000 | 1.953 ms | 141,677 | 1,154 |
+| `SearchPage` next common | 1,000 | 2.037 ms | 129,855 | 1,161 |
+| `SearchPage` empty | 1,000 | 0.304 ms | 8,225 | 175 |
+| `SearchPage` title filter | 1,000 | 2.144 ms | 141,863 | 1,158 |
+| `SearchPage` path filter | 1,000 | 1.303 ms | 129,509 | 1,162 |
+| `SearchPage` source filter | 1,000 | 1.916 ms | 141,848 | 1,158 |
+| `SearchPage` text format | 1,000 | 2.062 ms | 128,940 | 1,153 |
+| `SearchPage` DOCX format | 1,000 | 1.136 ms | 146,341 | 1,153 |
+| `SearchPage` PDF page attribution | 1,000 | 3.879 ms | 162,849 | 1,754 |
+| `Search` PDF common (250 PDFs) | 250 | 5.184 ms | 54,136 | 1,227 |
+| `Search` PDF match on page 1 | 250 | 3.807 ms | 54,142 | 1,227 |
+| `Search` PDF match on page 3 | 250 | 3.790 ms | 54,134 | 1,227 |
+| `Search` PDF empty | 250 | 0.318 ms | 3,719 | 86 |
+| `Search` common (opt-in) | 10,000 | 17.093 ms | 41,496 | 695 |
+| `Search` common (opt-in) | 100,000 | 162.196 ms | 41,672 | 697 |
 
 Setup was excluded from those `ns/op` values. Representative setup metrics were
-18.759 ms for 100 documents, 138.272 ms for 1,000 mixed documents, 67.762 ms for
-250 PDFs, about 1.426 s for 10k, and 15.911 s for 100k. Index preparation is
+18.810 ms for 100 documents, 138.579 ms for 1,000 mixed documents, 64.064 ms for
+250 PDFs, 1.453 s for 10k, and 15.712 s for 100k. Index preparation is
 therefore a material separate cost at larger sizes.
 
 ## Profile and query-plan observations
 
-The CPU profile sampled 4,000 ms total CPU. SQLite's VDBE accounts for 14.25%
-flat and 77.00% cumulative samples; B-tree movement is 16.50% cumulative and
-the FTS5 BM25 function is 40.00% cumulative. This indicates
+The CPU profile sampled 4,220 ms total CPU. SQLite's VDBE accounts for 9.72%
+flat and 75.12% cumulative samples; B-tree movement is 13.98% cumulative and
+the FTS5 BM25 function is 40.28% cumulative. This indicates
 that query execution/ranking, not Go request setup, dominates this workload.
 Profile sample totals are CPU samples, not wall-clock shares; they must not be
 added as exclusive percentages.
 
-The allocation profile aggregates the full 3-second run (261.78 MB allocated).
-`fitSearchPage` accounts for 69.82% cumulative allocated space, including JSON
+The allocation profile aggregates the full 3-second run (270.17 MB allocated).
+`fitSearchPage` accounts for 69.32% cumulative allocated space, including JSON
 size-candidate serialization and cursor construction; `searchPageTx` accounts
-for 23.32% cumulative. This locates allocation work but does not establish that
+for 24.82% cumulative. This locates allocation work but does not establish that
 a replacement can preserve the exact 512 KiB response budget more cheaply.
 Per-operation allocation figures in the table are the more direct steady-state
 comparison. No production optimization was made: there is no measured before /
