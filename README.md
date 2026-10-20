@@ -29,10 +29,12 @@
 </p>
 
 <p align="center">
-  <a href="docs/demo.md"><img src="docs/assets/overview-alpha3.png" width="1000" alt="Findrail alpha.3: the real app showing the idempotency passage in webhook-runbook.pdf on page 2 of 2"></a>
+  <a href="docs/demo.md"><img src="docs/assets/search-alpha5.png" width="1000" alt="Published Findrail alpha.5 showing a synthetic PDF passage match on page 2 with its original file location"></a>
   <br>
-  <sub>Actual alpha.3 interface · fictional documents · <a href="docs/assets/README.md">capture details</a></sub>
+  <sub>Published alpha.5 · synthetic documents · <a href="docs/assets/workflow-alpha5.mp4">watch the workflow</a> · <a href="docs/assets/README.md">capture details</a></sub>
 </p>
+
+See the [saved collection](docs/assets/collection-alpha5.png) and [freshness refresh](docs/assets/freshness-alpha5.png) in the same real alpha.5 capture. Historical alpha.3 screenshots and alpha.2 video remain documented separately.
 
 Findrail brings the **words inside your files** into one local search index.
 Choose the folders you want, search something you remember, and inspect the

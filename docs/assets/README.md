@@ -1,5 +1,40 @@
 # Findrail README assets
 
+## Published alpha.5 demonstration
+
+`search-alpha5.png`, `collection-alpha5.png` and `freshness-alpha5.png` are
+direct Chromium captures of the published Linux amd64 alpha.5 binary. The
+30-second `workflow-alpha5.mp4` is a short sequence of direct browser captures
+of actual UI states. It shows synthetic `kestrel` search and PDF page 2
+provenance, a persisted named collection after process restart, and a refreshed
+`cobalt` note. No personal profile or documents were used. The capture tooling
+is from the repository; the demonstrated application is the public binary.
+
+`capture-alpha5.json` records release revision, schema, archive/binary and
+fixture hashes, date, OS, browser and tool versions. The verified Linux amd64
+archive SHA-256 is `78885728107e26be6db18e9b9e19a5a8f0` (see the release
+verification record); binary SHA-256 is
+`6fc6fe384171a39d3c2809bdf8e923a089cee21516b04a5d3dfb419e0e011a96`.
+The combined new media is under 1 MiB (15 MiB maximum). Video editing is limited
+to selecting UI states and ordinary cuts; it is not a benchmark or native
+acceptance evidence.
+
+Reproduce after extracting and independently verifying the Linux amd64
+`v0.1.0-alpha.5` release archive. Create metadata with its published version,
+source revision `cb53ee9638f69b47b386921e41368f3b66ceddde`, schema 8, archive
+SHA-256 and extracted binary SHA-256, then run:
+
+```sh
+python3 -m pip install selenium==4.35.0
+python3 scripts/alpha5_media.py /path/to/extracted/findrail /path/to/verified-asset.json /path/to/output
+```
+
+Chromium, matching ChromeDriver and ffmpeg are capture dependencies, not
+application dependencies. The script never builds Findrail. Its temporary
+profile, fixture, index and server are cleaned up on success or failure.
+
+Contributor instructions: [CONTRIBUTING.md](../../CONTRIBUTING.md).
+
 ## Branding
 
 `findrail-mark.svg` and the light/dark wordmarks are original vector assets.

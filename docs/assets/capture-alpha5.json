@@ -1,0 +1,22 @@
+{
+  "product": "published binary; capture script is repository tooling",
+  "version": "0.1.0-alpha.5",
+  "source_revision": "cb53ee9638f69b47b386921e41368f3b66ceddde",
+  "schema": 8,
+  "archive_sha256": "78885728107e26be6db18f93c0f94ee6af92b585f00aea21dd93ba9e19a5a8f0",
+  "binary_sha256": "6fc6fe384171a39d3c2809bdf8e923a089cee21516b04a5d3dfb419e0e011a96",
+  "fixture_sha256": "f9da71cd740d34407f176f1fa21b141697a53ba1ad26140d75a6bb1eda42b0fe",
+  "captured": "2026-10-20",
+  "os": "Linux-7.2.9-arch1-1-x86_64-with-glibc2.44",
+  "browser": "154.0.8037.97",
+  "selenium": "4.35.0",
+  "ffmpeg": "ffmpeg version n9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+  "scenario": [
+    "search synthetic word kestrel",
+    "PDF page 2 provenance",
+    "save named collection",
+    "restart and reopen restored collection",
+    "edit fixture and search refreshed cobalt note"
+  ],
+  "editing_note": "Short UI-state selection cuts joined from direct Chromium screenshots; no synthetic UI, overlays, performance claim, or native acceptance claim."
+}
