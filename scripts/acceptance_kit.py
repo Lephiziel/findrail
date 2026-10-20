@@ -14,6 +14,8 @@ import release_assets
 
 RELEASE_VERSION = '0.1.0-alpha.5'
 RELEASE_SHA = 'cb53ee9638f69b47b386921e41368f3b66ceddde'
+PUBLISHED_MANIFEST_SHA256 = '28ed088d474117f9ce0614626b7d62b47ed27e6646e5670d52affeeeee9031b7'
+PUBLISHED_CHECKSUMS_SHA256 = 'f587ffc579c133f6f5f204b5bddd88fbc174aaa9341430fb701832dd5d781423'
 SCHEMA = 8
 API = 1
 TARGETS = ('windows-amd64', 'darwin-arm64')
@@ -73,8 +75,14 @@ def build(assets_dir, target, output, delivery_method=None):
     if archive_name != expected_name:
         raise ValueError('verified manifest has no exact target archive')
     archive = assets_dir / archive_name
+    published_bytes = (
+        manifest['source_revision'] == RELEASE_SHA and
+        manifest['app_version'] == RELEASE_VERSION and
+        sha256(assets_dir / 'release-manifest.json') == PUBLISHED_MANIFEST_SHA256 and
+        sha256(assets_dir / 'SHA256SUMS.txt') == PUBLISHED_CHECKSUMS_SHA256
+    )
     if delivery_method is None:
-        if (manifest.get('source_revision'), manifest.get('app_version')) == (RELEASE_SHA, RELEASE_VERSION):
+        if published_bytes:
             delivery_method = 'GitHub release browser download'
         else:
             raise ValueError('candidate kits require an explicit --delivery-method')
@@ -86,10 +94,9 @@ def build(assets_dir, target, output, delivery_method=None):
         fixture_hash.update(name.encode('utf-8') + b'\0')
         fixture_hash.update(content if isinstance(content, bytes) else content.encode('utf-8'))
         fixture_hash.update(b'\0')
-    kind = ('published_release' if (manifest['source_revision'], manifest['app_version']) ==
-            (RELEASE_SHA, RELEASE_VERSION) else 'source_candidate')
-    release_url = ('https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/'
-                   if kind == 'published_release' else None)
+    kind = 'published_release' if published_bytes else 'source_candidate'
+    release_url = (f'https://github.com/Lephiziel/findrail/releases/download/v{RELEASE_VERSION}/'
+                   if published_bytes else None)
     metadata = {
         'kind': kind, 'candidate_sha': manifest['source_revision'],
         'candidate_version': manifest['app_version'], 'schema_version': manifest['schema_version'],

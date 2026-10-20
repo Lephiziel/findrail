@@ -1,3 +1,4 @@
+import hashlib
 import json
 import pathlib
 import stat
@@ -46,6 +47,15 @@ class AcceptanceKitTests(unittest.TestCase):
             'app_version': acceptance_kit.RELEASE_VERSION,
         }))
         (self.assets / 'SHA256SUMS.txt').write_text('')
+        pin_patches = (
+            mock.patch.object(acceptance_kit, 'PUBLISHED_MANIFEST_SHA256',
+                              hashlib.sha256((self.assets / 'release-manifest.json').read_bytes()).hexdigest()),
+            mock.patch.object(acceptance_kit, 'PUBLISHED_CHECKSUMS_SHA256',
+                              hashlib.sha256((self.assets / 'SHA256SUMS.txt').read_bytes()).hexdigest()),
+        )
+        for patcher in pin_patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.output = self.root / 'kit.zip'
         self.manifest = {
             'source_revision': acceptance_kit.RELEASE_SHA,
@@ -98,6 +108,26 @@ class AcceptanceKitTests(unittest.TestCase):
         metadata = acceptance_kit.build(self.assets, self.target, self.output, 'private Actions artifact')
         self.assertEqual(metadata['kind'], 'source_candidate')
         self.assertIsNone(metadata['release_url'])
+
+    def test_repacked_archive_with_same_source_sha_is_not_published_release(self):
+        original_archive_hash = hashlib.sha256((self.assets / self.archive_name).read_bytes()).hexdigest()
+        (self.assets / self.archive_name).write_bytes(b'repacked archive from the same source SHA')
+        (self.assets / 'release-manifest.json').write_text(json.dumps({
+            'source_revision': acceptance_kit.RELEASE_SHA,
+            'app_version': acceptance_kit.RELEASE_VERSION,
+            'archive_sha256': hashlib.sha256((self.assets / self.archive_name).read_bytes()).hexdigest(),
+        }))
+        (self.assets / 'SHA256SUMS.txt').write_text('updated checksum for repacked archive\n')
+
+        with self.assertRaisesRegex(ValueError, 'explicit --delivery-method'):
+            acceptance_kit.build(self.assets, self.target, self.output)
+        metadata = acceptance_kit.build(
+            self.assets, self.target, self.output, 'candidate CI artifact')
+
+        self.assertEqual(metadata['candidate_sha'], acceptance_kit.RELEASE_SHA)
+        self.assertEqual(metadata['kind'], 'source_candidate')
+        self.assertIsNone(metadata['release_url'])
+        self.assertNotEqual(metadata['archive']['sha256'], original_archive_hash)
 
     def test_bad_checksum_or_source_identity_is_rejected_by_existing_validator(self):
         self.verify_mock.side_effect = ValueError('checksum mismatch')

@@ -27,12 +27,17 @@ python3 scripts/acceptance_kit.py --assets-dir /abs/verified-release \
 
 For the published alpha.5 set the builder requires version `0.1.0-alpha.5`,
 source SHA `cb53ee9638f69b47b386921e41368f3b66ceddde`, schema 8 and Client API 1.
-`candidate.json` records actual archive size/hash, release manifest/checksum
-hashes and fixture hash. A different, valid alpha.5 source candidate is labelled
-`source_candidate`; it is not given the published release URL and requires an
-explicit `--delivery-method` (for example, `Actions artifact`). The builder does
-not claim the current checkout SHA is the binary's source SHA. It does not
-change `build/package/VERSION`, release-readiness requirements or release assets.
+In addition, `published_release` requires exact matches for the published
+manifest SHA-256 (`28ed088d…9031b7`) and `SHA256SUMS.txt` SHA-256
+(`f587ffc5…d781423`). The existing strict validator then verifies the complete
+inventory and each archive against those published metadata bytes. Matching the
+source SHA alone is not sufficient: a rebuilt/repacked archive with that same
+SHA is `source_candidate`, has no published release URL, and requires an explicit
+`--delivery-method` (for example, `Actions artifact`). `candidate.json` records
+the actual archive size/hash, manifest/checksum hashes and fixture hash. The
+builder does not claim the current checkout SHA is the binary's source SHA. It
+does not change `build/package/VERSION`, release-readiness requirements or
+release assets.
 
 ## Kit contents and manual scope
 
