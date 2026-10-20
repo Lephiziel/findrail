@@ -27,7 +27,7 @@ class ManualEvidenceTests(unittest.TestCase):
     def manual(self):
         return {'kind': 'windows_first_run', 'reference': self.ref, 'candidate_sha': self.sha,
                 'candidate_version': self.version, 'target': 'windows-amd64', 'archive_sha256':
-                self.native['windows-amd64']['archive']['sha256'], 'evidence_type': 'manual',
+                self.native['windows-amd64']['archive']['sha256'], 'evidence_type': 'manual', 'status': 'passed',
                 'cases': [{'case': name, 'status': 'passed', 'elapsed_seconds': 0.0} for name in readiness.MANUAL_CASES]}
 
     def usage(self, **changes):
@@ -44,9 +44,9 @@ class ManualEvidenceTests(unittest.TestCase):
                     'status': 'passed', 'candidate_sha': self.sha, 'candidate_version': self.version,
                     'cases': [{'case': c['case'], 'status': c['status'], 'elapsed_seconds': c['elapsed_seconds']} for c in manual['cases']]}
         readiness.check_manual(exported, self.candidate, self.native)
-        self.assertTrue(complete)
+        self.assertEqual(complete, 'complete')
         usage = self.usage()
-        self.assertTrue(manual_evidence.validate(usage, self.candidate, self.native))
+        self.assertEqual(manual_evidence.validate(usage, self.candidate, self.native), 'complete')
         readiness.check_usage({'kind': 'voluntary_usage', 'candidate_sha': self.sha, 'candidate_version': self.version,
                                'reports': [{k: usage[k] for k in ('reference', 'evidence_type', 'return_use', 'retrieval_one', 'retrieval_two', 'collection_restart')}]}, self.candidate)
 
@@ -59,19 +59,55 @@ class ManualEvidenceTests(unittest.TestCase):
                 manual_evidence.validate(report, self.candidate, self.native)
         report = self.manual()
         report['cases'][0]['elapsed_seconds'] = None
-        self.assertFalse(manual_evidence.validate(report, self.candidate, self.native))
+        self.assertEqual(manual_evidence.validate(report, self.candidate, self.native), 'incomplete')
         report['cases'][0]['elapsed_seconds'] = 0
-        self.assertTrue(manual_evidence.validate(report, self.candidate, self.native))
+        self.assertEqual(manual_evidence.validate(report, self.candidate, self.native), 'complete')
         for status in ('failed', 'not_run'):
             report = self.manual()
             report['cases'][0]['status'] = status
-            self.assertFalse(manual_evidence.validate(report, self.candidate, self.native))
+            self.assertEqual(manual_evidence.validate(report, self.candidate, self.native), 'failed' if status == 'failed' else 'incomplete')
 
     def test_usage_keeps_misses_failures_and_requires_return(self):
         report = self.usage()
-        self.assertTrue(manual_evidence.validate(report, self.candidate, self.native))
-        self.assertFalse(manual_evidence.validate(self.usage(return_use=False), self.candidate, self.native))
-        self.assertFalse(manual_evidence.validate(self.usage(retrieval_two='not_tried'), self.candidate, self.native))
+        self.assertEqual(manual_evidence.validate(report, self.candidate, self.native), 'complete')
+        self.assertEqual(manual_evidence.validate(self.usage(return_use=False), self.candidate, self.native), 'incomplete')
+        self.assertEqual(manual_evidence.validate(self.usage(retrieval_two='not_tried'), self.candidate, self.native), 'incomplete')
+
+    def test_task24_acceptance_kit_report_shape_and_aggregate_status(self):
+        report = self.manual()
+        report.update(status='passed', observer='Private Name', date='today', notes='private notes',
+                      schema_version=self.candidate['schema_version'],
+                      client_api_version=self.candidate['client_api_version'])
+        report['cases'] = [{'id': case['case'], 'status': 'passed', 'elapsed_seconds': 0,
+                            'observation': 'private observation'} for case in report['cases']]
+        self.assertEqual(manual_evidence.validate(report, self.candidate, self.native), 'complete')
+        report['status'] = 'failed'
+        self.assertEqual(manual_evidence.validate(report, self.candidate, self.native), 'failed')
+        report['status'] = 'not_run'
+        self.assertEqual(manual_evidence.validate(report, self.candidate, self.native), 'incomplete')
+        report['status'] = 'passed'
+        report['manifest_sha256'] = '0' * 64
+        with self.assertRaises(ValueError):
+            manual_evidence.validate(report, self.candidate, self.native)
+
+    def test_task24_overall_failed_cannot_export_as_passed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            candidate, report_path, out = (root / n for n in ('candidate.json', 'report.json', 'out'))
+            candidate.write_text(json.dumps(self.candidate))
+            report = self.manual()
+            report.update(status='failed', observer='private observer', notes='private blocker')
+            report['cases'] = [{'id': case['case'], 'status': 'passed', 'elapsed_seconds': 0,
+                                'observation': 'private observation'} for case in report['cases']]
+            report_path.write_text(json.dumps(report))
+            result = subprocess.run([sys.executable, str(pathlib.Path(manual_evidence.__file__)),
+                                     '--candidate', str(candidate), '--report', str(report_path),
+                                     '--output', str(out)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            summary = json.loads((out/'intake.json').read_text())
+            self.assertEqual(summary['counts']['failed'], 1)
+            self.assertFalse((out/'supplemental.json').exists())
+            self.assertNotIn('private', result.stdout + result.stderr + (out/'intake.json').read_text())
 
     def test_duplicate_keys_nonfinite_and_unknown_fields_rejected(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -27,9 +27,16 @@ also requires `evidence_type: manual`, exact target (`windows-amd64` or
 `darwin-arm64`), the actual `archive_sha256`, and all eight cases: `install`,
 `launch`, `repeat-launch`, `retrieval`, `collection-restart`, `refresh`, `quit`,
 `uninstall-data-preserved`. Each case has status `passed`, `failed`, or `not_run`,
-nullable real `elapsed_seconds`, and optional short obstacle. Unknown time stays
-`null`, never zero. Failed, unrun, or unmeasured cases remain useful draft data
-but cannot become a passed record.
+nullable real `elapsed_seconds`, and optional short obstacle. TASK24 kit reports
+use `id` for the case name and may include `observation`; both that shape and
+the normalized `case` shape are accepted. The kit's top-level `status` is also
+checked: `failed` remains failed even if its individual case entries look
+passed, while `not_run` / `incomplete` remains incomplete. Optional kit identity
+fields (schema/API and manifest/checksum hashes) are checked against the strict
+candidate summary. Observer, date, notes, and observations are bounded input
+only and are never exported. Unknown time stays `null`, never zero. Failed,
+unrun, or unmeasured cases remain useful draft data but cannot become a passed
+record.
 
 Voluntary-use reports require `evidence_type: manual`, `return_use` boolean,
 `retrieval_one` and `retrieval_two` (`found`, `not_found`, or `not_tried`), and
