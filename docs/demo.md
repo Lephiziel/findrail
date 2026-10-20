@@ -1,6 +1,19 @@
-# Try Findrail with three fictional documents
+# Try Findrail with a fictional corpus
 
-The demo contains a Markdown note, a small Go example and a two-page text PDF.
+The [30-second alpha.5 workflow recording](assets/workflow-alpha5.mp4) and
+[search / PDF passage](assets/search-alpha5.png), [saved collection](assets/collection-alpha5.png),
+and [refreshed source](assets/freshness-alpha5.png) captures use the **published
+alpha.5 binary** with a separate synthetic TASK24-style fixture and isolated
+data directory. The fixture is generated for capture; it is not included in the
+published archive. The recording shows search for `kestrel`, PDF page 2
+provenance, saving and restoring a named collection after restart, then a
+synthetic file update and refreshed search. See [capture provenance and
+reproduction](assets/README.md). This is a Linux Chromium UI recording, not a
+benchmark or a manual cross-platform acceptance report.
+
+The older images below are historical alpha.3; the older video is alpha.2.
+
+The historical demo contains a Markdown note, a small Go example and a two-page text PDF.
 It uses no accounts, external services or private documents. The current README
 [search screenshot](assets/search-alpha3.png) shows the published alpha.3
 interface running this demo. [Capture details](assets/README.md).
