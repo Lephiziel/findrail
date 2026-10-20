@@ -18,5 +18,5 @@
     "restart and reopen restored collection",
     "edit fixture and search refreshed cobalt note"
   ],
-  "editing_note": "Short UI-state selection cuts joined from direct Chromium screenshots; no synthetic UI, overlays, performance claim, or native acceptance claim."
+  "editing_note": "Browser UI sampled directly at one-second intervals in each state and cut between steps; no composited UI, fake results, benchmark, or native acceptance claim."
 }

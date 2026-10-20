@@ -4,8 +4,8 @@
 
 `search-alpha5.png`, `collection-alpha5.png` and `freshness-alpha5.png` are
 direct Chromium captures of the published Linux amd64 alpha.5 binary. The
-30-second `workflow-alpha5.mp4` is a short sequence of direct browser captures
-of actual UI states. It shows synthetic `kestrel` search and PDF page 2
+`workflow-alpha5.mp4` is a 30–45 second browser-UI recording sampled directly
+while each actual state is displayed. It shows synthetic `kestrel` search and PDF page 2
 provenance, a persisted named collection after process restart, and a refreshed
 `cobalt` note. No personal profile or documents were used. The capture tooling
 is from the repository; the demonstrated application is the public binary.
@@ -16,7 +16,7 @@ archive SHA-256 is `78885728107e26be6db18e9b9e19a5a8f0` (see the release
 verification record); binary SHA-256 is
 `6fc6fe384171a39d3c2809bdf8e923a089cee21516b04a5d3dfb419e0e011a96`.
 The combined new media is under 1 MiB (15 MiB maximum). Video editing is limited
-to selecting UI states and ordinary cuts; it is not a benchmark or native
+to ordinary cuts between recorded steps; it is not a benchmark or native
 acceptance evidence.
 
 Reproduce after extracting and independently verifying the Linux amd64

@@ -92,7 +92,15 @@ def main():
             browser = webdriver.Chrome(service=Service(), options=options); wait = WebDriverWait(browser, 15); browser.get(url)
             wait.until(lambda d: d.find_element(By.ID, "query").is_enabled())
             def snap(name):
-                browser.save_screenshot(str(output / name)); frames.append(browser.get_screenshot_as_png())
+                image = browser.get_screenshot_as_png()
+                (output / name).write_bytes(image)
+                frames.append(image)
+                # Sample the live browser at one-second intervals while each
+                # meaningful state is on screen; the MP4 is UI footage, not a
+                # still-image mockup or a programmatically drawn interface.
+                for _ in range(8):
+                    time.sleep(1)
+                    frames.append(browser.get_screenshot_as_png())
             browser.find_element(By.ID, "query").send_keys("kestrel"); browser.find_element(By.ID, "submit").click()
             wait.until(lambda d: "1 matching" in d.find_element(By.ID, "status").text)
             pdfrow = next(x for x in browser.find_elements(By.CSS_SELECTOR, ".result") if "Observatory.pdf" in x.text)
@@ -137,9 +145,9 @@ def main():
             # Frames are direct browser screenshots of real UI states; encoded as a short UI capture.
             frame_dir=root/"frames"; frame_dir.mkdir()
             for i, frame in enumerate(frames): (frame_dir/f"frame-{i:03}.png").write_bytes(frame)
-            listing=root/"frames.txt"; listing.write_text("\n".join(f"file '{(frame_dir/f'frame-{i:03}.png').as_posix()}'\nduration 8" for i in range(len(frames)))+f"\nfile '{(frame_dir/f'frame-{len(frames)-1:03}.png').as_posix()}'\n",encoding="utf-8")
+            listing=root/"frames.txt"; listing.write_text("\n".join(f"file '{(frame_dir/f'frame-{i:03}.png').as_posix()}'\nduration 1.2" for i in range(len(frames)))+f"\nfile '{(frame_dir/f'frame-{len(frames)-1:03}.png').as_posix()}'\n",encoding="utf-8")
             subprocess.run(["ffmpeg","-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",str(listing),"-vf","scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=24","-c:v","libx264","-pix_fmt","yuv420p","-movflags","+faststart",str(output/"workflow-alpha5.mp4")],check=True,timeout=60)
-            meta_out={"product":"published binary; capture script is repository tooling","version":VERSION,"source_revision":SOURCE,"schema":8,"archive_sha256":meta["archive_sha256"],"binary_sha256":sha(binary),"fixture_sha256":fixture_hash,"captured":date.today().isoformat(),"os":platform.platform(),"browser":browser.capabilities.get("browserVersion"),"selenium":"4.35.0","ffmpeg":subprocess.run(["ffmpeg","-version"],capture_output=True,text=True).stdout.splitlines()[0],"scenario":["search synthetic word kestrel","PDF page 2 provenance","save named collection","restart and reopen restored collection","edit fixture and search refreshed cobalt note"],"editing_note":"Short UI-state selection cuts joined from direct Chromium screenshots; no synthetic UI, overlays, performance claim, or native acceptance claim."}
+            meta_out={"product":"published binary; capture script is repository tooling","version":VERSION,"source_revision":SOURCE,"schema":8,"archive_sha256":meta["archive_sha256"],"binary_sha256":sha(binary),"fixture_sha256":fixture_hash,"captured":date.today().isoformat(),"os":platform.platform(),"browser":browser.capabilities.get("browserVersion"),"selenium":"4.35.0","ffmpeg":subprocess.run(["ffmpeg","-version"],capture_output=True,text=True).stdout.splitlines()[0],"scenario":["search synthetic word kestrel","PDF page 2 provenance","save named collection","restart and reopen restored collection","edit fixture and search refreshed cobalt note"],"editing_note":"Browser UI sampled directly at one-second intervals in each state and cut between steps; no composited UI, fake results, benchmark, or native acceptance claim."}
             (output/"capture-alpha5.json").write_text(json.dumps(meta_out,indent=2)+"\n",encoding="utf-8")
             print("Captured published alpha.5 UI and restored named collection.")
         finally:
