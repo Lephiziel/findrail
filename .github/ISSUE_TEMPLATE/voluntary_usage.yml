@@ -6,17 +6,16 @@ body:
   - type: markdown
     attributes:
       value: >
-        Participation is optional. Do not include private documents, their text,
-        search/query logs, local paths, screenshots containing private content,
-        or credentials. This is manually submitted; Findrail does not upload
-        reports automatically.
+        Participation is optional. Report the version and (if known) release or
+        candidate SHA and download source. Do not include private documents,
+        their text, queries, local paths, screenshots containing private content,
+        device identifiers, or credentials. You may instead keep a report locally
+        and provide its SHA-256 reference. Reports are never uploaded automatically.
   - type: input
     id: version
     attributes:
-      label: App version and candidate provenance
-      description: Version and release tag, or candidate SHA (if applicable).
-    validations:
-      required: true
+      label: Version and optional provenance
+      description: Version, release/download source, and candidate SHA if known. Unknown SHA is okay; feedback remains useful.
   - type: dropdown
     id: evidence_type
     attributes:
@@ -34,14 +33,14 @@ body:
     id: install
     attributes:
       label: Install outcome
-      description: Installed / did not install; mention only the obstacle, not private paths.
+      description: Optional: installation outcome and obstacle, without private paths.
     validations:
       required: true
   - type: dropdown
     id: retrieval_one
     attributes:
       label: Remembered-word task 1
-      description: Did you find the passage? Do not provide the query or document.
+      description: Did you find the passage? Do not provide the query or document. Not tried is incomplete, not a success.
       options: [Found, Not found, Not tried]
     validations:
       required: true
@@ -49,7 +48,7 @@ body:
     id: retrieval_two
     attributes:
       label: Remembered-word task 2
-      description: Did you find the passage? Do not provide the query or document.
+      description: Did you find the passage? Do not provide the query or document. Not tried is incomplete, not a success.
       options: [Found, Not found, Not tried]
     validations:
       required: true
@@ -57,20 +56,19 @@ body:
     id: collection_restart
     attributes:
       label: Collection after restart
+      description: Did the saved collection return after restarting Findrail? Not tried is incomplete.
       options: [Restored, Not restored, Not tried]
     validations:
       required: true
   - type: textarea
     id: refresh
     attributes:
-      label: Refresh or failure experience
-      description: Say whether refresh worked or failed; no logs or document content.
-    validations:
-      required: true
+      label: Optional obstacle or failure
+      description: Qualitative feedback only; no logs, queries, paths, or document content.
   - type: dropdown
     id: return_use
     attributes:
-      label: Reused after several days
+      label: Did you return and use Findrail again later?
       options: ["Yes", "No", "Not yet"]
     validations:
       required: true
