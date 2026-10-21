@@ -95,6 +95,7 @@ class SeriesTests(unittest.TestCase):
                               "time.sleep(60)\n", encoding="utf-8")
             binary.chmod(0o700)
             output = root / "series"
+            child_pid = None
             proc = subprocess.Popen([sys.executable, str(Path(series.__file__)), "--binary", str(binary),
                                      "--documents", "100", "--repeats", "1", "--samples-per-family", "1",
                                      "--deadline-seconds", "90", "--output", str(output)],
@@ -104,14 +105,14 @@ class SeriesTests(unittest.TestCase):
                 while not marker.exists() and proc.poll() is None and time.monotonic() < until:
                     time.sleep(.02)
                 self.assertTrue(marker.exists(), "benchmark child did not start")
-                pid = int(marker.read_text())
+                child_pid = int(marker.read_text())
                 os.kill(proc.pid, signal.SIGKILL)
                 proc.wait(timeout=5)
                 until = time.monotonic() + 8
                 state = "unknown"
                 while time.monotonic() < until:
                     try:
-                        state = Path(f"/proc/{pid}/stat").read_text().split()[2]
+                        state = Path(f"/proc/{child_pid}/stat").read_text().split()[2]
                         if state == "Z":
                             break
                     except FileNotFoundError:
@@ -122,6 +123,13 @@ class SeriesTests(unittest.TestCase):
             finally:
                 if proc.poll() is None:
                     proc.kill(); proc.wait()
+                # Preserve the intended failure assertion while ensuring an
+                # orphaned child cannot race TemporaryDirectory cleanup.
+                if child_pid is not None:
+                    try:
+                        os.kill(child_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_child_error_is_fixed_and_cleanup(self):
         import sys
