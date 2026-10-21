@@ -377,7 +377,7 @@ jobs:
               env.write(f'ALPHA4_BINARY={root / "findrail"}\n')
           PY
       - name: Fetch pinned published alpha.5 for beta same-schema compatibility
-        if: matrix.target == 'linux-amd64' && needs.validate-source.outputs.version == '0.1.0-beta.1'
+        if: needs.validate-source.outputs.version == '0.1.0-beta.1'
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/findrail_0.1.0-alpha.5_linux-amd64.tar.gz"

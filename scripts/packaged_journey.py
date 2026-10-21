@@ -381,7 +381,10 @@ def main():
     parser.add_argument("--evidence-fixture", type=pathlib.Path,
                         help="explicit prebuilt offline fixture writer; required for full browser acceptance")
     parser.add_argument("--skip-browser", action="store_true", help="record browser cases as skipped; not full acceptance")
-    return execute(parser.parse_args())
+    args = parser.parse_args()
+    if args.candidate_version == "0.1.0-beta.1" and args.alpha5_binary is None:
+        parser.error("beta.1 requires the explicitly verified --alpha5-binary reference")
+    return execute(args)
 
 
 if __name__ == "__main__":
