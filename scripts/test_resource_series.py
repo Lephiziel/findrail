@@ -95,7 +95,7 @@ class SeriesTests(unittest.TestCase):
                               "time.sleep(60)\n", encoding="utf-8")
             binary.chmod(0o700)
             output = root / "series"
-            child_pid = None
+            child_pid = child_pgid = None
             proc = subprocess.Popen([sys.executable, str(Path(series.__file__)), "--binary", str(binary),
                                      "--documents", "100", "--repeats", "1", "--samples-per-family", "1",
                                      "--deadline-seconds", "90", "--output", str(output)],
@@ -106,6 +106,7 @@ class SeriesTests(unittest.TestCase):
                     time.sleep(.02)
                 self.assertTrue(marker.exists(), "benchmark child did not start")
                 child_pid = int(marker.read_text())
+                child_pgid = os.getpgid(child_pid)
                 os.kill(proc.pid, signal.SIGKILL)
                 proc.wait(timeout=5)
                 until = time.monotonic() + 8
@@ -125,9 +126,9 @@ class SeriesTests(unittest.TestCase):
                     proc.kill(); proc.wait()
                 # Reap the process tree before TemporaryDirectory removes the
                 # output directory. The harness child has its own process group.
-                if child_pid is not None:
+                if child_pid is not None and child_pgid is not None:
                     try:
-                        os.killpg(child_pid, signal.SIGKILL)
+                        os.killpg(child_pgid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
 
@@ -143,7 +144,7 @@ class SeriesTests(unittest.TestCase):
 
                     deadline = time.monotonic() + 8
                     while time.monotonic() < deadline:
-                        if not process_group_is_live(child_pid):
+                        if not process_group_is_live(child_pgid):
                             break
                         time.sleep(.05)
                     else:
