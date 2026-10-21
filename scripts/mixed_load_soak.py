@@ -228,7 +228,7 @@ def remaining_time(deadline, now=None):
 def profile_limits(profile, duration_seconds):
     if profile == "short":
         return 180, SHORT_HARD_SECONDS
-    if profile == "long" and 1 <= duration_seconds <= 3600-LONG_FINALIZE_BUDGET:
+    if profile == "long" and 1 <= duration_seconds <= 3600-FINAL_CLEANUP_BUDGET:
         return duration_seconds, min(3600, duration_seconds+FINAL_CLEANUP_BUDGET)
     raise SoakFailure("setup_failed")
 
@@ -707,7 +707,7 @@ def main():
     p.add_argument("--duration-seconds",type=int,default=1800); p.add_argument("--documents",type=int,choices=(100,1000))
     p.add_argument("--concurrency",type=int,default=4); p.add_argument("--output",required=True,type=Path)
     a=p.parse_args()
-    if not 1<=a.concurrency<=16 or (a.profile=="long" and not 1<=a.duration_seconds<=3600-LONG_FINALIZE_BUDGET): p.error("invalid bounded workload limits")
+    if not 1<=a.concurrency<=16 or (a.profile=="long" and not 1<=a.duration_seconds<=3600-FINAL_CLEANUP_BUDGET): p.error("invalid bounded workload limits")
     previous=signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM,lambda _signum,_frame: (_ for _ in ()).throw(KeyboardInterrupt()))
     try: return run(a)

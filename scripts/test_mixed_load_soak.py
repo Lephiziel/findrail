@@ -144,7 +144,7 @@ class MixedLoadSoakContracts(unittest.TestCase):
         self.assertEqual(soak.profile_limits("short", 1800), (180, 180))
         self.assertEqual(soak.profile_limits("long", 3540), (3540, 3600))
         with self.assertRaisesRegex(soak.SoakFailure, "setup_failed"):
-            soak.profile_limits("long", 3586)
+            soak.profile_limits("long", 3541)
         target_end = 1800
         self.assertTrue(soak.cycle_is_required("long", 13, 12, target_end, 1799.9))
         self.assertFalse(soak.cycle_is_required("long", 13, 12, target_end, 1800))
