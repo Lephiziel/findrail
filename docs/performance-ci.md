@@ -30,9 +30,26 @@ series host. The baseline default is source, not the published alpha.5 binary.
 The series uses TASK21's runner: 10,000 and 100,000 documents, seed 42, three
 repeats, 100 queries per family, AB/BA order, and a 2700-second measurement
 deadline. The separate soak job uses TASK23's long profile for 1800 seconds and
-requires at least 12 cycles. Job limits are 60 minutes each. Neither suite reduces
+requires at least 12 fully completed mixed-load cycles. It waits for successful
+startup scans of each known fixture source before paging after every server
+start/restart. A stable paging window may restart from page one up to three times,
+only when the API explicitly returns `cursor_stale`; discarded pages are never
+mixed with the accepted generation, and each restart is counted. Other 409 codes,
+malformed responses, and exhausted retries fail the run.
+
+Long soak continues real mixed-load cycles through the target window rather than
+padding fast cycles with idle time. Its hard deadline is the target plus at most
+60 seconds, capped at 3600 seconds; the final 15 seconds are reserved for cleanup,
+leaving bounded time to finish an in-flight cycle after the target. Short soak
+still ends after three cycles. Job limits are 60 minutes each. Neither suite reduces
 its sample count or workload to fit a runner. A timeout or capacity limit is an
-incomplete result, not a pass.
+incomplete/failed result, not a pass. Failure reports retain partial latency
+summaries and completed-operation counters, plus bounded cycle/generation/case,
+HTTP status, and allowlisted API-code diagnostics; they exclude request and
+document content.
+
+Both measurement jobs set `PYTHONDONTWRITEBYTECODE=1` before Python starts and
+recheck exact revisions and clean source status after packaging, before measuring.
 
 ### Reading results
 

@@ -33,6 +33,8 @@ jobs:
     if: inputs.suite == 'series' || inputs.suite == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Validate invocation identity and bounds
         env:
@@ -100,6 +102,16 @@ jobs:
           )
           echo "CANDIDATE_BINARY=$candidate_root/findrail" >> "$GITHUB_ENV"
           echo "BASELINE_BINARY=$baseline_root/findrail" >> "$GITHUB_ENV"
+      - name: Reverify source identity and clean checkouts before measurement
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git -C baseline rev-parse HEAD)" = "$BASELINE_SHA"
+          test -z "$(git -C candidate status --porcelain)"
+          test -z "$(git -C baseline status --porcelain)"
       - name: Record toolchain and artifact identity
         run: |
           set -euo pipefail
@@ -141,6 +153,8 @@ jobs:
     if: inputs.suite == 'soak' || inputs.suite == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Validate invocation identity and bounds
         env:
@@ -185,6 +199,13 @@ jobs:
           PY
           )
           echo "CANDIDATE_BINARY=$candidate_root/findrail" >> "$GITHUB_ENV"
+      - name: Reverify source identity and clean checkout before measurement
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git -C candidate status --porcelain)"
       - name: Record toolchain and binary identity
         run: |
           set -euo pipefail
