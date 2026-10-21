@@ -2,8 +2,9 @@ import json
 import math
 import os
 from pathlib import Path
-import signal
+import subprocess
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -54,16 +55,37 @@ class MixedLoadSoakContracts(unittest.TestCase):
             self.assertIsNone(soak.parse_rss_kb(value))
 
     def test_stop_process_tree_reaps_child(self):
+        if os.name != "posix": self.skipTest("process groups are POSIX-specific")
         with tempfile.TemporaryDirectory() as tmp:
             pidfile=Path(tmp)/"child.pid"
-            code="import subprocess,sys,time; c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); open(sys.argv[1],'w').write(str(c.pid)); time.sleep(30)"
-            process=__import__("subprocess").Popen([os.sys.executable,"-c",code,str(pidfile)],start_new_session=True)
-            for _ in range(100):
-                if pidfile.exists(): break
-                __import__("time").sleep(.01)
+            code="import subprocess,sys; c=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); open(sys.argv[1],'w').write(str(c.pid))"
+            try: soak.invoke([os.sys.executable,"-c",code,str(pidfile)],2)
+            except soak.SoakFailure as error: self.assertEqual(error.code,"process_failed")
             child=int(pidfile.read_text())
-            soak.stop_tree(process)
-            with self.assertRaises(ProcessLookupError): os.kill(child,0)
+            for _ in range(300):
+                try: os.kill(child,0)
+                except ProcessLookupError: break
+                stat=Path(f"/proc/{child}/stat")
+                if stat.exists() and stat.read_text().split()[2]=="Z": break
+                time.sleep(.01)
+            else: self.fail("orphan descendant survived invoke process-group cleanup")
+
+    def test_unclean_restart_cannot_be_reported_as_passed(self):
+        report={"status":"passed","clean_exit":True,"failure_codes":[],"counters":{"unexpected_errors":0}}
+        with mock.patch.object(soak,"stop_tree",return_value=False):
+            self.assertFalse(soak.record_stop(report,object()))
+        soak.fail_if_unclean(report)
+        self.assertFalse(report["clean_exit"])
+        self.assertEqual(report["status"],"failed")
+        self.assertEqual(report["failure_codes"],["process_failed"])
+        self.assertEqual(report["counters"]["unexpected_errors"],1)
+
+    def test_restart_stop_result_is_not_discarded(self):
+        report={"clean_exit":True}
+        with mock.patch.object(soak,"stop_tree",return_value=False):
+            clean=soak.record_stop(report,object())
+        self.assertFalse(clean)
+        self.assertFalse(report["clean_exit"])
 
     def test_profile_bounds_and_codes_are_stable(self):
         self.assertEqual(soak.FAILURES["paging"], "paging_invariant")

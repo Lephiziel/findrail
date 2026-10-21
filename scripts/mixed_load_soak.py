@@ -64,19 +64,22 @@ def invoke(argv, timeout, cwd=None):
     try:
         while p.poll() is None:
             if overflow.is_set():
-                stop_tree(p)
                 raise SoakFailure("process_failed")
             if time.monotonic()>=expires:
-                stop_tree(p)
                 raise SoakFailure("process_failed")
             time.sleep(.01)
         for reader in readers: reader.join(timeout=1)
         if overflow.is_set() or any(reader.is_alive() for reader in readers): raise SoakFailure("process_failed")
         return p.returncode, bytes(outputs[0])
     finally:
-        if p.poll() is None: stop_tree(p)
+        # The leader may already be gone while a descendant still holds either
+        # pipe or keeps working. Always clean the process group, not just a live
+        # direct child.
+        tree_clean=stop_tree(p)
         for pipe in (p.stdout,p.stderr):
             if pipe: pipe.close()
+        if p.returncode==0 and not tree_clean:
+            raise SoakFailure("process_failed")
 
 
 def stop_tree(p):
@@ -95,6 +98,19 @@ def stop_tree(p):
     try: p.wait(timeout=3)
     except subprocess.TimeoutExpired: forced = True
     return not forced and p.returncode == 0
+
+
+def record_stop(report, process):
+    clean=stop_tree(process)
+    report["clean_exit"]=report.get("clean_exit",True) and clean
+    return clean
+
+
+def fail_if_unclean(report):
+    if report.get("status")=="passed" and not report.get("clean_exit",False):
+        report["status"]="failed"
+        report["failure_codes"]=["process_failed"]
+        report["counters"]["unexpected_errors"]+=1
 
 
 def http(url, timeout, token=None, method="GET", body=None, allowed=()):
@@ -380,7 +396,9 @@ def run(args):
                     outcomes.append({"case":"refresh_cancel","status":"passed","generation":generation})
                     # Restart is an explicit lifecycle boundary. Keep source and data; re-open and validate saved provenance.
                     ACTIVE_CASE = "integrity"
-                    stop_tree(p); p=None; report["counters"]["restarts"]+=1
+                    stopped=p; p=None
+                    if not record_stop(report,stopped): raise SoakFailure("process_failed",cycle,generation)
+                    report["counters"]["restarts"]+=1
                     integrity_started=time.perf_counter()
                     rc,raw=invoke([str(binary),"doctor","--json","--integrity","--data-dir",str(data)],remaining())
                     latency_samples["restart_integrity"].append((time.perf_counter()-integrity_started)*1000)
@@ -420,8 +438,9 @@ def run(args):
                     retain_for_final_sample=(args.profile=="long" and cycle>=expected_cycles and
                                              time.monotonic()+1.0>=started+duration)
                     if p is not None and not retain_for_final_sample:
-                        clean=stop_tree(p); p=None
-                        report["clean_exit"] = report.get("clean_exit", True) and clean
+                        stopped=p; p=None
+                        if not record_stop(report,stopped):
+                            raise SoakFailure("process_failed",cycle,generation)
                 if args.profile=="short" and report["counters"]["completed_cycles"]>=3: break
                 cycle += 1
                 if args.profile=="long" and time.monotonic()<started+duration:
@@ -450,12 +469,9 @@ def run(args):
         report["cases"].append({"case":ACTIVE_CASE,"status":"failed","cycle":report["counters"]["completed_cycles"]+1,"generation":report["counters"]["completed_cycles"]+1,"failure_code":"setup_failed"})
     finally:
         if p is not None:
-            clean=stop_tree(p)
-            report["clean_exit"] = report.get("clean_exit", True) and clean
-        if report.get("status")=="passed" and not report.get("clean_exit",False):
-            report["status"]="failed"
-            report["failure_codes"]=["process_failed"]
-            report["counters"]["unexpected_errors"]+=1
+            stopped=p; p=None
+            record_stop(report,stopped)
+        fail_if_unclean(report)
         report["elapsed_seconds"]=round(time.monotonic()-started,3)
         report.setdefault("clean_exit", False)
     atomic_report(args.output,report)
