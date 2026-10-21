@@ -447,7 +447,8 @@ def published_alpha5_schema8_same_schema(candidate, published_alpha5, root):
         collection = request('/api/v1/collections', 'POST', {'title': 'Alpha5 same-schema fixture'}, session['token'])
         collection = request(f"/api/v1/collections/{collection['id']}/entries", 'POST', {
             'revision': collection['revision'], 'document_id': evidence['id'], 'page': 0,
-            'excerpt': evidence['excerpt'], 'whole_preview': True, 'original_identity': evidence['original_identity']}, session['token'])
+            'excerpt': 'published alpha5compatibility provenance marker', 'whole_preview': True,
+            'original_identity': evidence['original_identity']}, session['token'])
         collection_id = collection['id']
     finally:
         if server.poll() is None: server.terminate()
