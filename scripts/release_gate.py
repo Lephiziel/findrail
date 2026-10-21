@@ -20,9 +20,18 @@ def validate_upstream(repository, event, branch, source_sha, expected_repository
         raise ValueError('untrusted or malformed upstream event; publication denied')
 
 
+def validate_publication_version(candidate_version, release_version, requested):
+    """An explicit publish request must never silently downgrade to preview."""
+    if requested and candidate_version != release_version:
+        raise ValueError('publishing requires candidate version to match build/package/VERSION')
+    return bool(requested and candidate_version == release_version)
+
+
 def existing_release_decision(version, current_sha, tag_sha, release, assets, api_error=None):
     if api_error:
         raise ValueError('release API query failed: ' + str(api_error))
+    if version not in ('0.1.0-alpha.2', '0.1.0-alpha.3', '0.1.0-alpha.4', '0.1.0-alpha.5'):
+        raise ValueError('unknown published release contract')
     if tag_sha and not release:
         raise ValueError('tag exists without a release; refusing publication')
     if not release:
@@ -39,8 +48,6 @@ def existing_release_decision(version, current_sha, tag_sha, release, assets, ap
     expected = ALPHA2_ASSETS if version == '0.1.0-alpha.2' else None
     if expected is None:
         schemas = {'0.1.0-alpha.3': 6, '0.1.0-alpha.4': 7, '0.1.0-alpha.5': 8}
-        if version not in schemas:
-            raise ValueError('unknown published release contract')
         if version == '0.1.0-alpha.3' and tag_sha != ALPHA3_REVISION:
             raise ValueError('published alpha.3 tag does not match its historical revision')
         manifest = release.get('manifest')

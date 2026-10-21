@@ -13,7 +13,7 @@ on:
       candidate_version:
         description: Preview package version (ignored for main push; must match VERSION to publish)
         required: true
-        default: 0.1.0-alpha.5
+        default: 0.1.0-beta.1
         type: string
       publish:
         description: Publish only if every gate passes (normally leave false for preparation)
@@ -56,13 +56,18 @@ jobs:
           fi
           RELEASE_VERSION=$(cat build/package/VERSION)
           VERSION="$RELEASE_VERSION"
-          if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == push ]]; then VERSION=0.1.0-alpha.5; fi
+          if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == push ]]; then VERSION=$(cat build/package/CANDIDATE_VERSION); fi
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then VERSION="$INPUT_VERSION"; fi
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]
+          [[ "$VERSION" == 0.1.0-alpha.5 || "$VERSION" == 0.1.0-beta.1 ]]
           PUBLISH=false
           if [[ "$GITHUB_EVENT_NAME" == push || "$REQUEST_PUBLISH" == true ]]; then PUBLISH=true; fi
           if [[ "$REQUEST_PUBLISH" == true && "$VERSION" != "$RELEASE_VERSION" ]]; then
-            echo 'Publishing requires candidate_version to match build/package/VERSION.' >&2; exit 1
+            python3 - "$VERSION" "$RELEASE_VERSION" <<'PY'
+          import sys
+          sys.path.insert(0, 'scripts')
+          import release_gate
+          release_gate.validate_publication_version(sys.argv[1], sys.argv[2], True)
+          PY
           fi
           {
             echo "sha=$INPUT_SHA"
@@ -371,6 +376,27 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
               env.write(f'ALPHA4_BINARY={root / "findrail"}\n')
           PY
+      - name: Fetch pinned published alpha.5 for beta same-schema compatibility
+        if: matrix.target == 'linux-amd64' && needs.validate-source.outputs.version == '0.1.0-beta.1'
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/findrail_0.1.0-alpha.5_linux-amd64.tar.gz"
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error \
+            https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_linux-amd64.tar.gz -o "$archive"
+          echo '78885728107e26be6db18f93c0f94ee6af92b585f00aea21dd93ba9e19a5a8f0  '"$archive" | sha256sum --check --status
+          python3 - "$archive" "$RUNNER_TEMP/alpha5-reference" <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import package
+          archive, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          package.verify_archive(archive, 'linux-amd64', '0.1.0-alpha.5', 8)
+          root = package.extract_verified(archive, out)
+          info = __import__('json').loads((root / 'BUILD-INFO.json').read_text(encoding='utf-8'))
+          if (info.get('revision'), info.get('version'), info.get('schema_version'), info.get('dirty')) != ('cb53ee9638f69b47b386921e41368f3b66ceddde', '0.1.0-alpha.5', 8, False):
+              raise SystemExit('published alpha.5 reference provenance mismatch')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'ALPHA5_BINARY={root / "findrail"}\n')
+          PY
       - name: Install pinned matched Chromium and driver
         run: |
           python3 -m pip install --disable-pip-version-check 'selenium==4.35.0'
@@ -383,7 +409,10 @@ jobs:
         env:
           FINDRAIL_CHROME: ${{ runner.temp }}/chrome-for-testing/chrome/linux-139.0.7258.66/chrome-linux64/chrome
           FINDRAIL_CHROMEDRIVER: ${{ runner.temp }}/chrome-for-testing/chromedriver/linux-139.0.7258.66/chromedriver-linux64/chromedriver
-        run: python3 scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" --alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY" --evidence-fixture "$RUNNER_TEMP/evidence-collection-fixture" --report "$RUNNER_TEMP/packaged-journey-report.json"
+        run: |
+          args=(--alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY")
+          if [[ "$CANDIDATE_VERSION" == 0.1.0-beta.1 ]]; then args+=(--alpha5-binary "$ALPHA5_BINARY"); fi
+          python3 scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" "${args[@]}" --evidence-fixture "$RUNNER_TEMP/evidence-collection-fixture" --report "$RUNNER_TEMP/packaged-journey-report.json"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -461,7 +490,7 @@ jobs:
     needs: [validate-source, reusable-final-verification]
     # Run the existing-release no-op check on previews too. Its token is
     # read-only; PR publication remains false and the publisher stays skipped.
-    if: needs.validate-source.outputs.publish == 'true' || github.event_name == 'pull_request'
+    if: needs.validate-source.outputs.publish == 'true' || github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read

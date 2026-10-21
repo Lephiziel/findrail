@@ -85,8 +85,8 @@ def db_fingerprint(path):
 def validate_candidate(binary, revision, version):
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("candidate SHA must be a full commit SHA")
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+", version):
-        raise ValueError("candidate version must be an exact alpha version")
+    if version not in ("0.1.0-alpha.5", "0.1.0-beta.1"):
+        raise ValueError("candidate version is not an explicitly supported rehearsal version")
     expected_schema = release_assets.contract_schema(version)
     if expected_schema != package.schema_version():
         raise ValueError("candidate contract must match the checked-out source schema")
@@ -305,7 +305,11 @@ def execute(args):
             cases.run("schema2_schema6_published_alpha4_schema7_upgrade_restore_rollback", lambda: command(
                 [sys.executable, str(ROOT / "scripts/upgrade_smoke.py"), str(binary),
                  "--alpha3-binary", str(args.alpha3_binary.resolve(strict=True)),
-                 "--alpha4-binary", str(args.alpha4_binary.resolve(strict=True))], timeout=300))
+                  "--alpha4-binary", str(args.alpha4_binary.resolve(strict=True))], timeout=300))
+            if args.candidate_version == "0.1.0-beta.1":
+                cases.run("published_alpha5_schema8_same_schema_compatibility", lambda: command(
+                    [sys.executable, str(ROOT / "scripts/upgrade_smoke.py"), str(binary),
+                     "--alpha5-binary", str(args.alpha5_binary.resolve(strict=True)), "--alpha5-only"], timeout=300))
             cases.run("desktop_launch_smoke.py", lambda: command(
                 [sys.executable, str(ROOT / "scripts/desktop_launch_smoke.py"), str(binary)], timeout=90))
             for smoke in BROWSER_SMOKES:
@@ -371,6 +375,8 @@ def main():
                         help="extracted published alpha.3 binary used to verify stopped-backup restore")
     parser.add_argument("--alpha4-binary", type=pathlib.Path, required=True,
                         help="extracted published alpha.4 binary used to verify schema-7 backup restore")
+    parser.add_argument("--alpha5-binary", type=pathlib.Path,
+                        help="extracted published alpha.5 binary used for beta same-schema compatibility")
     parser.add_argument("--report", type=pathlib.Path, help="write per-case JSON report, also on failure")
     parser.add_argument("--evidence-fixture", type=pathlib.Path,
                         help="explicit prebuilt offline fixture writer; required for full browser acceptance")

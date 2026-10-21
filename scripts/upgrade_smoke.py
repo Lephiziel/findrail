@@ -411,15 +411,91 @@ def upgrade_alpha4_schema7(candidate, published_alpha4, root):
     print(f'Published alpha.4 schema-7 index migrated to candidate schema 8: source/search/report and two saved ordered notes preserved with legacy start=0; full stopped backup restored and read by real alpha.4; real alpha.4 rejected schema 8 without mutation; induced migration failure rolled back atomically. Collection {collection_id!r}.')
 
 
+def published_alpha5_schema8_same_schema(candidate, published_alpha5, root):
+    """Prove beta opens and preserves an actual published alpha.5 schema-8 index."""
+    if published_alpha5 is None:
+        raise SystemExit('published alpha.5 binary required for beta same-schema compatibility')
+    import socket, urllib.error, urllib.request
+    data, originals = root / 'alpha5-schema8-data', root / 'alpha5 synthetic originals'
+    originals.mkdir()
+    (originals / 'alpha5-compat.md').write_text('published alpha5compatibility provenance marker', encoding='utf-8')
+    indexed = json.loads(invoke(published_alpha5, ['index', '--data-dir', str(data), '--report', '--json', str(originals)]).stdout)
+    source_id = indexed['source']['id']
+    if indexed.get('report', {}).get('committed') is not True:
+        raise SystemExit('published alpha.5 did not commit its source index')
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]
+    base = f'http://127.0.0.1:{port}'
+    server = subprocess.Popen([str(published_alpha5), 'start', '--data-dir', str(data), '--no-open', '--addr', f'127.0.0.1:{port}'],
+                              cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    def request(path, method='GET', payload=None, token=None):
+        headers = {'Origin': base}; body = None
+        if payload is not None:
+            body = json.dumps(payload).encode(); headers['Content-Type'] = 'application/json'
+        if token: headers.update({'X-Findrail-Token': token, 'Sec-Fetch-Site': 'same-origin'})
+        req = urllib.request.Request(base + path, data=body, method=method, headers=headers)
+        with urllib.request.urlopen(req, timeout=4) as response: return json.load(response)
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if server.poll() is not None: raise RuntimeError('published alpha.5 server exited')
+            try: session = request('/api/v1/session'); break
+            except (OSError, urllib.error.URLError): time.sleep(.05)
+        else: raise RuntimeError('published alpha.5 did not start')
+        result = json.loads(invoke(published_alpha5, ['search', '--data-dir', str(data), '--source', source_id, '--json', 'alpha5compatibility']).stdout)
+        evidence = result['results'][0]
+        collection = request('/api/v1/collections', 'POST', {'title': 'Alpha5 same-schema fixture'}, session['token'])
+        collection = request(f"/api/v1/collections/{collection['id']}/entries", 'POST', {
+            'revision': collection['revision'], 'document_id': evidence['id'], 'page': 0,
+            'excerpt': evidence['excerpt'], 'whole_preview': True, 'original_identity': evidence['original_identity']}, session['token'])
+        collection_id = collection['id']
+    finally:
+        if server.poll() is None: server.terminate()
+        try: server.communicate(timeout=8)
+        except subprocess.TimeoutExpired: server.kill(); server.communicate(timeout=3)
+    db = sqlite3.connect(data / 'findrail.db')
+    before = {'schema': db.execute('PRAGMA user_version').fetchone()[0],
+              'sources': db.execute('SELECT id,kind,name,root FROM sources ORDER BY id').fetchall(),
+              'documents': db.execute('SELECT id,source_id,title,uri,path,content_hash FROM documents ORDER BY id').fetchall(),
+              'collections': db.execute('SELECT id,title,revision FROM evidence_collections ORDER BY id').fetchall(),
+              'entries': db.execute('SELECT collection_id,ordinal,source_id,document_id,snapshot_json FROM evidence_collection_entries ORDER BY collection_id,ordinal').fetchall()}
+    db.close()
+    if before['schema'] != 8 or not before['entries']:
+        raise SystemExit('published alpha.5 fixture lacks schema-8 collection content')
+    if json.loads(invoke(candidate, ['sources', '--data-dir', str(data), '--json']).stdout)['sources'][0]['id'] != source_id:
+        raise SystemExit('beta candidate lost alpha.5 source provenance')
+    if json.loads(invoke(candidate, ['search', '--data-dir', str(data), '--source', source_id, '--json', 'alpha5compatibility']).stdout)['total'] != 1:
+        raise SystemExit('beta candidate lost alpha.5 indexed content')
+    db = sqlite3.connect(data / 'findrail.db')
+    after = {'schema': db.execute('PRAGMA user_version').fetchone()[0],
+             'sources': db.execute('SELECT id,kind,name,root FROM sources ORDER BY id').fetchall(),
+             'documents': db.execute('SELECT id,source_id,title,uri,path,content_hash FROM documents ORDER BY id').fetchall(),
+             'collections': db.execute('SELECT id,title,revision FROM evidence_collections ORDER BY id').fetchall(),
+             'entries': db.execute('SELECT collection_id,ordinal,source_id,document_id,snapshot_json FROM evidence_collection_entries ORDER BY collection_id,ordinal').fetchall()}
+    db.close()
+    if before != after: raise SystemExit('beta candidate migrated or changed same-schema alpha.5 data')
+    stopped_backup = root / 'stopped-alpha5-schema8-backup'; shutil.copytree(data, stopped_backup)
+    invoke(candidate, ['sources', '--data-dir', str(data), '--json'])
+    restored = root / 'restored-alpha5-schema8-backup'; shutil.copytree(stopped_backup, restored)
+    if json.loads(invoke(candidate, ['search', '--data-dir', str(restored), '--source', source_id, '--json', 'alpha5compatibility']).stdout)['total'] != 1:
+        raise SystemExit('beta candidate could not reopen stopped alpha.5 backup')
+    print(f'Published alpha.5 schema-8 index opened by beta without migration; content, source provenance and collection {collection_id!r} preserved across reopen and stopped-backup restore. Same-schema compatibility only.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary', type=pathlib.Path)
     parser.add_argument('--alpha3-binary', type=pathlib.Path)
     parser.add_argument('--alpha4-binary', type=pathlib.Path)
+    parser.add_argument('--alpha5-binary', type=pathlib.Path)
+    parser.add_argument('--alpha5-only', action='store_true', help='run only the beta same-schema alpha.5 compatibility case')
     args = parser.parse_args()
     binary = args.binary.resolve()
     with tempfile.TemporaryDirectory(prefix='findrail-upgrade-') as temp:
         root = pathlib.Path(temp); data = root / 'legacy data'; data.mkdir()
+        if args.alpha5_only:
+            published_alpha5_schema8_same_schema(binary, args.alpha5_binary.resolve() if args.alpha5_binary else None, root)
+            return
         source_root = root / 'synthetic originals'; source_root.mkdir()
         from smoke import docx_fixture
         (source_root / 'legacy.docx').write_bytes(docx_fixture('legacydocxconfiguredphrase preserved original'))
@@ -481,6 +557,8 @@ def main():
         print(f'Synthetic schema-2 upgrade passed: source inventory, FTS/PDF page, schema-{expected_schema} disabled DOCX default, unavailable pre-scan diagnostics, Configure/index/restart, stopped full-directory rollback including sidecars; restored schema remains 2. This is not an actual alpha.2 binary restore. No reverse migration was attempted.')
         upgrade_alpha3_schema6(binary, args.alpha3_binary.resolve() if args.alpha3_binary else None, root)
         upgrade_alpha4_schema7(binary, args.alpha4_binary.resolve() if args.alpha4_binary else None, root)
+        if args.alpha5_binary:
+            published_alpha5_schema8_same_schema(binary, args.alpha5_binary.resolve(), root)
 
 
 if __name__ == '__main__': main()

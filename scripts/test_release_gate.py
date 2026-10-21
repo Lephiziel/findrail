@@ -16,6 +16,14 @@ import test_release_assets
 
 
 class ReleaseGateTests(unittest.TestCase):
+    def test_publish_version_mismatch_is_rejected_not_downgraded(self):
+        self.assertFalse(release_gate.validate_publication_version('0.1.0-beta.1', '0.1.0-alpha.5', False))
+        with self.assertRaisesRegex(ValueError, 'match'):
+            release_gate.validate_publication_version('0.1.0-beta.1', '0.1.0-alpha.5', True)
+        self.assertTrue(release_gate.validate_publication_version('0.1.0-alpha.5', '0.1.0-alpha.5', True))
+        with self.assertRaisesRegex(ValueError, 'unknown published'):
+            release_gate.existing_release_decision('0.1.0-beta.1', 'a' * 40, None, None, [])
+
     def test_only_expected_push_context_is_trusted(self):
         sha = 'a' * 40
         release_gate.validate_upstream('Lephiziel/findrail', 'push', 'main', sha, 'Lephiziel/findrail')

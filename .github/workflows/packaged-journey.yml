@@ -31,12 +31,18 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha }}
-      CANDIDATE_VERSION: ${{ github.event_name == 'pull_request' && '0.1.0-alpha.5' || inputs.candidate_version }}
+      CANDIDATE_VERSION: ${{ github.event_name == 'pull_request' && '0.1.0-beta.1' || inputs.candidate_version }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
+      - name: Read the repository's preparation candidate selector
+        if: github.event_name == 'pull_request'
+        run: |
+          version=$(cat build/package/CANDIDATE_VERSION)
+          test "$version" = 0.1.0-beta.1
+          echo "CANDIDATE_VERSION=$version" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -58,7 +64,7 @@ jobs:
           [[ "$ARCHIVE_URL" == https://* ]]
           [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$CANDIDATE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]
+          [[ "$CANDIDATE_VERSION" == 0.1.0-alpha.5 || "$CANDIDATE_VERSION" == 0.1.0-beta.1 ]]
           mkdir -p "$RUNNER_TEMP/candidate"
           ARCHIVE="findrail_${CANDIDATE_VERSION}_linux-amd64.tar.gz"
           curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error "$ARCHIVE_URL" -o "$RUNNER_TEMP/candidate/$ARCHIVE"
@@ -112,6 +118,28 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
               env.write(f'ALPHA4_BINARY={root / "findrail"}\n')
           PY
+      - name: Fetch pinned published alpha.5 for beta same-schema compatibility
+        if: env.CANDIDATE_VERSION == '0.1.0-beta.1'
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/findrail_0.1.0-alpha.5_linux-amd64.tar.gz"
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error \
+            https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_linux-amd64.tar.gz -o "$archive"
+          echo '78885728107e26be6db18f93c0f94ee6af92b585f00aea21dd93ba9e19a5a8f0  '"$archive" | sha256sum --check --status
+          python - "$archive" "$RUNNER_TEMP/alpha5-reference" <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import package
+          archive, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          package.verify_archive(archive, 'linux-amd64', '0.1.0-alpha.5', 8)
+          root = package.extract_verified(archive, out)
+          import json
+          info = json.loads((root / 'BUILD-INFO.json').read_text(encoding='utf-8'))
+          if (info.get('revision'), info.get('version'), info.get('schema_version'), info.get('dirty')) != ('cb53ee9638f69b47b386921e41368f3b66ceddde', '0.1.0-alpha.5', 8, False):
+              raise SystemExit('published alpha.5 reference provenance mismatch')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'ALPHA5_BINARY={root / "findrail"}\n')
+          PY
       - name: Install pinned matched Chromium and driver
         run: |
           python -m pip install --disable-pip-version-check 'selenium==4.35.0'
@@ -125,7 +153,9 @@ jobs:
           FINDRAIL_CHROME: ${{ runner.temp }}/chrome-for-testing/chrome/linux-139.0.7258.66/chrome-linux64/chrome
           FINDRAIL_CHROMEDRIVER: ${{ runner.temp }}/chrome-for-testing/chromedriver/linux-139.0.7258.66/chromedriver-linux64/chromedriver
         run: |
-          python scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" --alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY" --evidence-fixture "$RUNNER_TEMP/evidence-collection-fixture" --report "$RUNNER_TEMP/packaged-journey-report.json"
+          args=(--alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY")
+          if [[ "$CANDIDATE_VERSION" == 0.1.0-beta.1 ]]; then args+=(--alpha5-binary "$ALPHA5_BINARY"); fi
+          python scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" "${args[@]}" --evidence-fixture "$RUNNER_TEMP/evidence-collection-fixture" --report "$RUNNER_TEMP/packaged-journey-report.json"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

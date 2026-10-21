@@ -45,9 +45,20 @@ class CandidateIdentityTests(unittest.TestCase):
     def test_unsupported_or_historical_version_cannot_claim_current_schema(self):
         with tempfile.TemporaryDirectory() as temp:
             binary = pathlib.Path(temp) / "findrail"
-            for version in ("0.1.0-alpha.99", "0.1.0-alpha.3", "0.1.0-alpha.4"):
+        for version in ("0.1.0-alpha.99", "0.1.0-alpha.3", "0.1.0-alpha.4", "0.1.0-beta.2", "0.1.0"):
                 with self.subTest(version=version), self.assertRaises(ValueError):
                     journey.validate_candidate(binary, "a" * 40, version)
+
+    def test_beta1_is_accepted_with_schema8_and_alpha5_compatibility_required_by_orchestrator(self):
+        sha, version = 'a' * 40, '0.1.0-beta.1'
+        good = {'revision': sha, 'version': version, 'dirty': False, 'target': 'linux-amd64', 'schema_version': 8}
+        with tempfile.TemporaryDirectory() as temp:
+            binary = pathlib.Path(temp) / 'findrail'
+            (binary.parent / 'BUILD-INFO.json').write_text(json.dumps(good))
+            with patch.object(journey.platform, 'system', return_value='Linux'), \
+                 patch.object(journey.platform, 'machine', return_value='x86_64'), \
+                 patch.object(journey, 'command', return_value=SimpleNamespace(stdout='findrail ' + version)):
+                self.assertEqual(journey.validate_candidate(binary, sha, version), good)
 
 
 class ReportTests(unittest.TestCase):

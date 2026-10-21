@@ -6,8 +6,11 @@ the full reusable CI, five native package jobs, a real packaged browser journey,
 installed VSIX checks, exact-set aggregation, reusable verification, and a
 read-only published-release state check. Only after every
 gate succeeds can the final job create a release. Pull requests rehearse the
-same gates with publication disabled. Both the candidate version and
-`build/package/VERSION` are now alpha.5; an existing complete release is a no-op.
+same gates with publication disabled. `build/package/VERSION` remains alpha.5;
+the explicitly allowed preparation candidate is beta.1. On main, the preview
+can differ from the immutable release version: publishing stays skipped, while
+the read-only release-state gate checks alpha.5 from VERSION and returns no-op.
+See the [beta candidate contract](beta-candidate.md).
 Publication is restricted to the canonical repository's main push or explicit main dispatch;
 PR and fork previews have read-only permissions. Alpha.4
 archives include native desktop launchers and target-specific install
@@ -17,12 +20,12 @@ remains schema 7. See the [published alpha.5 verification](release-alpha5-verifi
 
 ## Preview rehearsal
 
-For a nonpublishing alpha.5 rehearsal, use **Actions → Package rehearsal
+For a nonpublishing beta.1 rehearsal, use **Actions → Package rehearsal
 (no release) → Run workflow** with `candidate_sha` set to the exact commit SHA and
-`candidate_version` explicitly set to `0.1.0-alpha.5`. A rehearsal never edits
+`candidate_version` explicitly set to `0.1.0-beta.1`. A rehearsal never edits
 `build/package/VERSION`; its archive is not a published release.
 The workflow checks out that SHA (not a PR merge ref), builds through
-`scripts/package.py --version 0.1.0-alpha.5 --require-clean`, and executes each
+`scripts/package.py --version 0.1.0-beta.1 --require-clean`, and executes each
 extracted CLI and desktop binaries from a temporary path containing spaces and
 Unicode. All five native targets exercise first/second desktop launch and PDF
 child extraction through the packaged launcher using a
@@ -49,7 +52,7 @@ It cannot
 create or move tags, edit VERSION, or publish a release. The five artifacts are
 named `candidate-<sha>-<target>` and retained for 14 days. A full asset rehearsal
 uses **Alpha release candidate → Run workflow** with that SHA and `publish=false`;
-set `candidate_version=0.1.0-alpha.5`; its `release-assets-<sha>` aggregate is
+set `candidate_version=0.1.0-beta.1`; its `release-assets-<sha>` aggregate is
 retained for 30 days. This path accepts only the exact head SHA of `main`, does
 not edit VERSION, and cannot publish when `publish=false`.
 
@@ -144,7 +147,9 @@ The published manifest is pinned to the historical alpha.3 tag SHA
 `d5dc1bec50efcb3c26d09e9b24b14cf3c0b2f4cb`, schema 6, API 1 and extension 0.1.0.
 The alpha.4 contract is pinned to schema 7, API 1 and extension 0.1.0. The
 prepared alpha.5 contract is explicitly pinned to schema 8, API 1 and extension
-0.1.0, independent of later source migrations.
+0.1.0, independent of later source migrations. Preparation-only beta.1 also has
+an exact schema-8/API-1/extension-0.1.0 contract, not a version range or a
+published-release contract.
 Each manifest revision must match its actual immutable tag; all archives'
 BUILD-INFO records must match that revision, version and schema. Packaging
 derives the built schema from source and checks the contiguous migration
@@ -190,6 +195,16 @@ checksum bytes, embedded archive
 provenance and the VSIX identity against the release's tag revision, rather
 than today's main revision or a later source schema. The historical alpha.3
 SHA/schema contract remains unchanged.
+
+The beta.1 preparation candidate uses the same eight staging assets and five
+targets, but does not widen `release-state`: its read-only query is keyed from
+`VERSION` (alpha.5). On a main push with beta.1 preview and alpha.5 VERSION, the
+existing release is verified as a no-op and the publisher is skipped. An
+explicit publish request with a mismatched version fails validation. The
+published alpha.5 Linux archive is separately pinned for the beta-only
+same-schema compatibility case; it is not mixed into beta manifests. Historical
+alpha.5 journey summaries retain 19 root cases; beta.1 requires those 19 plus
+the same-schema case (20). See [beta candidate](beta-candidate.md).
 
 ## Intentional alpha.5 publication
 
