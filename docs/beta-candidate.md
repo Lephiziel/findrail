@@ -22,6 +22,13 @@ stopped backup/restore. This is not a promise of downgrade support. The
 candidate acceptance scripts consume extracted binaries; they do not silently
 build a replacement application.
 
+The explicit performance workflow must be dispatched with the same full source
+SHA and `candidate_version=0.1.0-beta.1`. It packages the candidate with that
+version through the production packager and validates the repository's
+`CANDIDATE_VERSION`; the alpha.5 comparison binary is built separately from the
+pinned baseline source. Do not use a TASK21 series or TASK23 soak whose candidate
+binary hash/version differs from the beta native Linux artifact.
+
 Product scope is unchanged: local-first search, existing extraction and query
 limits, read-only loopback/API boundaries, existing provenance and rollback
 semantics. No OCR, semantic retrieval, new connectors, cloud/team/auth,

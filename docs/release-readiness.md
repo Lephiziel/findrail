@@ -90,6 +90,14 @@ Additional records are passed with repeated `--evidence FILE` arguments:
   `not_restored`). Misses remain visible for owner review; no private query is
   required. Automated reports and placeholders cannot satisfy this evidence.
 
+For a beta.1 candidate, both performance workflow inputs and classifier
+provenance must name `0.1.0-beta.1`. The workflow builds its candidate binary
+through `scripts/package.py --version 0.1.0-beta.1` and compares it with the
+separately packaged pinned alpha.5 baseline. Confirm that the series/soak
+candidate binary SHA-256 equals the Linux archive's recorded executable hash
+before passing scale measurements to readiness. Older alpha.5-only performance
+runs are historical, not beta evidence.
+
 ## Next decision
 
 Freeze a candidate after software checks, perform fresh 10k/100k runs on its
