@@ -116,7 +116,7 @@ class SeriesTests(unittest.TestCase):
                         state = Path(f"/proc/{child_pid}/stat").read_text().split()[2]
                         if state == "Z":
                             break
-                    except FileNotFoundError:
+                    except OSError:
                         state = None
                         break
                     time.sleep(.05)
@@ -138,7 +138,7 @@ class SeriesTests(unittest.TestCase):
                                 fields = stat_path.read_text().rsplit(")", 1)[1].split()
                                 if int(fields[2]) == pgid and fields[0] != "Z":
                                     return True
-                            except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
+                            except (OSError, ValueError, IndexError):
                                 continue
                         return False
 
