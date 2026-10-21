@@ -52,6 +52,23 @@ provided evidence blocks readiness. TASK21 resource-series and TASK23 soak
 reports are supplemental technical evidence, not synthetic substitutes for
 manual use. `final_release` remains false.
 
+Build the two manual first-run kits from the actual, byte-verified beta release
+asset bundle, not from an edited alpha.5 manifest. For example, after downloading
+the `release-assets-<full-sha>` Actions artifact into `/abs/evidence/assets`:
+
+```bash
+python3 scripts/acceptance_kit.py --assets-dir /abs/evidence/assets \
+  --target windows-amd64 --delivery-method 'Actions artifact <run URL>' \
+  --output /abs/evidence/windows-beta-kit.zip
+python3 scripts/acceptance_kit.py --assets-dir /abs/evidence/assets \
+  --target darwin-arm64 --delivery-method 'Actions artifact <run URL>' \
+  --output /abs/evidence/apple-silicon-beta-kit.zip
+```
+
+The generated reports start at `not_run`; they do not constitute OS or usage
+evidence. Share kits only through the candidate's actual artifact channel and
+collect voluntary matching reports separately.
+
 After a successful rehearsal, the owner must separately decide whether to change
 the shipped version and authorize a future release workflow. This document does
 not authorize that action. Any planning target around mid-December for 1.0 is a

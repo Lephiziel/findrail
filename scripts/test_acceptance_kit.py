@@ -109,6 +109,49 @@ class AcceptanceKitTests(unittest.TestCase):
         self.assertEqual(metadata['kind'], 'source_candidate')
         self.assertIsNone(metadata['release_url'])
 
+    def test_beta_candidate_kit_uses_verified_beta_artifact_identity(self):
+        version = acceptance_kit.CANDIDATE_VERSION
+        source_sha = '2' * 40
+        archive_name = f'findrail_{version}_{self.target}.zip'
+        (self.assets / self.archive_name).unlink()
+        (self.assets / archive_name).write_bytes(b'beta candidate archive bytes')
+        (self.assets / 'release-manifest.json').write_text(json.dumps({
+            'source_revision': source_sha, 'app_version': version,
+        }))
+        self.manifest = {
+            'source_revision': source_sha,
+            'app_version': version,
+            'schema_version': acceptance_kit.SCHEMA,
+            'client_api_version': acceptance_kit.API,
+            'assets': [{'basename': archive_name, 'target': self.target}],
+        }
+        self.verify_mock.return_value = self.manifest
+
+        metadata = acceptance_kit.build(self.assets, self.target, self.output, 'Actions artifact 39646624201')
+
+        self.verify_mock.assert_called_once_with(self.assets, version, source_sha)
+        self.assertEqual(metadata['kind'], 'source_candidate')
+        self.assertEqual(metadata['candidate_sha'], source_sha)
+        self.assertEqual(metadata['candidate_version'], version)
+        self.assertEqual(metadata['archive']['basename'], archive_name)
+        self.assertIsNone(metadata['release_url'])
+        with zipfile.ZipFile(self.output) as kit:
+            report = json.loads(kit.read('report.json'))
+            self.assertEqual(report['candidate_sha'], source_sha)
+            self.assertEqual(report['candidate_version'], version)
+            self.assertEqual(report['archive_sha256'], metadata['archive']['sha256'])
+            self.assertEqual(report['status'], 'not_run')
+            self.assertTrue(all(case['status'] == 'not_run' for case in report['cases']))
+
+    def test_acceptance_kit_rejects_unknown_candidate_version(self):
+        (self.assets / 'release-manifest.json').write_text(json.dumps({
+            'source_revision': acceptance_kit.RELEASE_SHA,
+            'app_version': '0.1.0-beta.2',
+        }))
+        with self.assertRaisesRegex(ValueError, 'only published alpha.5 or preparation beta.1'):
+            acceptance_kit.build(self.assets, self.target, self.output, 'Actions artifact')
+        self.verify_mock.assert_not_called()
+
     def test_repacked_archive_with_same_source_sha_is_not_published_release(self):
         original_archive_hash = hashlib.sha256((self.assets / self.archive_name).read_bytes()).hexdigest()
         (self.assets / self.archive_name).write_bytes(b'repacked archive from the same source SHA')
