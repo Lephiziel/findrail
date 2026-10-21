@@ -123,13 +123,31 @@ class SeriesTests(unittest.TestCase):
             finally:
                 if proc.poll() is None:
                     proc.kill(); proc.wait()
-                # Preserve the intended failure assertion while ensuring an
-                # orphaned child cannot race TemporaryDirectory cleanup.
+                # Reap the process tree before TemporaryDirectory removes the
+                # output directory. The harness child has its own process group.
                 if child_pid is not None:
                     try:
-                        os.kill(child_pid, signal.SIGKILL)
+                        os.killpg(child_pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+
+                    def process_group_is_live(pgid):
+                        for stat_path in Path("/proc").glob("[0-9]*/stat"):
+                            try:
+                                fields = stat_path.read_text().rsplit(")", 1)[1].split()
+                                if int(fields[2]) == pgid and fields[0] != "Z":
+                                    return True
+                            except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
+                                continue
+                        return False
+
+                    deadline = time.monotonic() + 8
+                    while time.monotonic() < deadline:
+                        if not process_group_is_live(child_pid):
+                            break
+                        time.sleep(.05)
+                    else:
+                        self.fail("harness process tree did not stop before temporary directory cleanup")
 
     def test_child_error_is_fixed_and_cleanup(self):
         import sys

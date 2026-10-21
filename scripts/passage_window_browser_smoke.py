@@ -103,7 +103,7 @@ def main():
                 active = browser.switch_to.active_element
                 if predicate(active):
                     return active
-                active.send_keys(Keys.TAB)
+                ActionChains(browser).send_keys(Keys.TAB).perform()
             raise AssertionError("Tab order did not reach " + label)
 
         def shift_tab_until(predicate, label, limit=50):
@@ -111,7 +111,7 @@ def main():
                 active = browser.switch_to.active_element
                 if predicate(active):
                     return active
-                active.send_keys(Keys.SHIFT, Keys.TAB)
+                ActionChains(browser).key_down(Keys.SHIFT).send_keys(Keys.TAB).key_up(Keys.SHIFT).perform()
             raise AssertionError("Shift+Tab order did not reach " + label)
 
         def focused_result(document_id):
