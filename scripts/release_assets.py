@@ -25,6 +25,9 @@ def contract_schema(version):
     if version == '0.1.0-alpha.5':
         # Explicit release contract; later source migrations do not rewrite it.
         return 8
+    if version == '0.1.0-beta.1':
+        # Preparation-only same-schema candidate; deliberately not a range.
+        return 8
     raise ValueError('unsupported release/candidate version contract')
 
 

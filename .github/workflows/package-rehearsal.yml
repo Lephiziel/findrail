@@ -11,14 +11,14 @@ on:
       candidate_version:
         description: Explicit unpublished candidate version
         required: true
-        default: 0.1.0-alpha.5
+        default: 0.1.0-beta.1
         type: string
 permissions:
   contents: read
 jobs:
   packaged-native:
     env:
-      CANDIDATE_VERSION: ${{ github.event_name == 'pull_request' && '0.1.0-alpha.5' || inputs.candidate_version }}
+      CANDIDATE_VERSION: ${{ github.event_name == 'pull_request' && '0.1.0-beta.1' || inputs.candidate_version }}
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +39,14 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
           persist-credentials: false
+      - name: Read the repository's preparation candidate selector
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cat build/package/CANDIDATE_VERSION)
+          test "$version" = 0.1.0-beta.1
+          echo "CANDIDATE_VERSION=$version" >> "$GITHUB_ENV"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.x'
@@ -53,11 +61,11 @@ jobs:
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           VERSION="$CANDIDATE_VERSION"
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
-            test "$VERSION" = 0.1.0-alpha.5
+            test "$VERSION" = 0.1.0-alpha.5 -o "$VERSION" = 0.1.0-beta.1
             MAIN_SHA=$(git ls-remote https://github.com/Lephiziel/findrail.git refs/heads/main | cut -f1)
             test "$CANDIDATE_SHA" = "$MAIN_SHA"
           fi
-          test "$VERSION" = 0.1.0-alpha.5
+          [[ "$VERSION" == 0.1.0-alpha.5 || "$VERSION" == 0.1.0-beta.1 ]]
           "$PYTHON" scripts/package.py --version "$VERSION" --require-clean --target '${{ matrix.target }}' --output "$RUNNER_TEMP/findrail-candidate"
       - name: Verify candidate checksum manifest
         shell: bash
@@ -115,13 +123,37 @@ jobs:
             https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.3/findrail_0.1.0-alpha.3_linux-amd64.tar.gz -o "$archive"
           echo 'b8e9d606e6487745a9f96d4453114e7ef6ec74fcde242a7da20a059462b3b9e9  '"$archive" | sha256sum --check --status
           python3 - "$archive" "$RUNNER_TEMP/alpha3-reference" <<'PY'
-          import pathlib, sys
+          import os, pathlib, sys
           sys.path.insert(0, 'scripts')
           import package
           archive, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
           package.verify_archive(archive, 'linux-amd64', '0.1.0-alpha.3', 6)
           package.extract_verified(archive, out)
           PY
+      - name: Download and verify published alpha.5 same-schema reference
+        if: matrix.target == 'linux-amd64' && env.CANDIDATE_VERSION == '0.1.0-beta.1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/findrail_0.1.0-alpha.5_linux-amd64.tar.gz"
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error \
+            https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_linux-amd64.tar.gz -o "$archive"
+          echo '78885728107e26be6db18f93c0f94ee6af92b585f00aea21dd93ba9e19a5a8f0  '"$archive" | sha256sum --check --status
+          python3 - "$archive" "$RUNNER_TEMP/alpha5-reference" <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import package
+          archive, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          package.verify_archive(archive, 'linux-amd64', '0.1.0-alpha.5', 8)
+          root = package.extract_verified(archive, out)
+          import json
+          info = json.loads((root / 'BUILD-INFO.json').read_text(encoding='utf-8'))
+          if (info.get('revision'), info.get('version'), info.get('schema_version'), info.get('dirty')) != ('cb53ee9638f69b47b386921e41368f3b66ceddde', '0.1.0-alpha.5', 8, False):
+              raise SystemExit('published alpha.5 reference provenance mismatch')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'ALPHA5_BINARY={root / "findrail"}\n')
+          PY
+          python3 scripts/upgrade_smoke.py "$RUNNER_TEMP/install 📦/findrail_${CANDIDATE_VERSION}_linux-amd64/findrail" --alpha5-binary "$RUNNER_TEMP/alpha5-reference/findrail_0.1.0-alpha.5_linux-amd64/findrail" --alpha5-only
       - name: Rehearse alpha.2 and published alpha.3 upgrades and stopped-backup restores
         if: matrix.target == 'linux-amd64'
         shell: bash
@@ -161,7 +193,9 @@ jobs:
           import package
           p=pathlib.Path(os.environ['RUNNER_TEMP'])/'release-evidence'/'verification.json'
           checks=['archive_checksum','archive_contents','exact_build_info','executable_version','cli','search','browser_api','mcp','portable_snapshot','diagnostics','desktop_single_owner','launcher_pdf_child']
-          if '${{ matrix.target }}' == 'linux-amd64': checks.extend(['alpha2_schema2_upgrade_restore','alpha3_schema6_upgrade_restore','published_alpha4_schema7_to_schema8_saved_collection_restore_rollback'])
+          if '${{ matrix.target }}' == 'linux-amd64':
+            checks.extend(['alpha2_schema2_upgrade_restore','alpha3_schema6_upgrade_restore','published_alpha4_schema7_to_schema8_saved_collection_restore_rollback'])
+            if os.environ['CANDIDATE_VERSION'] == '0.1.0-beta.1': checks.append('published_alpha5_schema8_same_schema_compatibility')
           p.write_text(json.dumps({'candidate_sha': os.environ['CANDIDATE_SHA'], 'candidate_version':os.environ['CANDIDATE_VERSION'], 'schema_version':package.schema_version(), 'target':'${{ matrix.target }}', 'source_clean':os.environ['JOB_STATUS']=='success', 'status':os.environ['JOB_STATUS'],'checks':checks if os.environ['JOB_STATUS']=='success' else []}, sort_keys=True, indent=2)+'\n')
           PY
       - uses: actions/upload-artifact@v7

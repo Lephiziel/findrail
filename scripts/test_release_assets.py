@@ -260,6 +260,51 @@ class ReleaseAssetTests(unittest.TestCase):
                 self.assertEqual(release.assemble(source, output, '0.1.0-alpha.5', revision)['schema_version'], 8)
                 self.assertEqual(release.verify(output, '0.1.0-alpha.5', revision)['schema_version'], 8)
 
+    def test_beta1_is_exact_preparation_contract_schema8_and_same_assets(self):
+        self.assertEqual(release.contract_schema('0.1.0-beta.1'), 8)
+        self.assertEqual(len(release.expected_archives('0.1.0-beta.1')), 5)
+        self.assertEqual(set(release.expected_archives('0.1.0-beta.1').values()), set(release.TARGETS))
+        for version in ('0.1.0-beta.2', '0.1.0', '0.2.0-beta.1'):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                release.contract_schema(version)
+
+    def test_beta_wrong_schema_and_mixed_version_manifest_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            source, revision = self.candidate(root, version='0.1.0-beta.1', schema=7)
+            with self.assertRaises(ValueError):
+                release.assemble(source, root / 'wrong-schema', '0.1.0-beta.1', revision)
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            source, revision = self.candidate(root, version='0.1.0-beta.1', schema=8)
+            output = root / 'mixed'
+            release.assemble(source, output, '0.1.0-beta.1', revision)
+            manifest_path = output / 'release-manifest.json'
+            manifest = json.loads(manifest_path.read_text())
+            manifest['assets'][0]['basename'] = manifest['assets'][0]['basename'].replace('beta.1', 'alpha.5')
+            manifest_path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, 'manifest'):
+                release.verify(output, '0.1.0-beta.1', revision)
+
+    def test_version_aware_journey_preserves_alpha5_history_and_requires_beta_case(self):
+        sha, binary = 'a' * 40, 'b' * 64
+        make = lambda cases, version='0.1.0-alpha.5': {'candidate_sha': sha, 'candidate_version': version,
+            'status': 'passed', 'browser_skipped': False, 'source_clean': True, 'schema_version': 8,
+            'target': 'linux-amd64', 'binary_sha256': binary, 'offline_fixture_sha256': 'c' * 64,
+            'cases': [{'case': name, 'status': 'passed', 'duration_seconds': 0} for name in cases]}
+        with patch.object(candidate_record, 'require_transfer'), patch.object(candidate_record, 'require_common'):
+            candidate_record.require_journey(make(candidate_record.ALPHA5_JOURNEY_CASES), sha, '0.1.0-alpha.5', binary)
+            missing = make(candidate_record.ALPHA5_JOURNEY_CASES, '0.1.0-beta.1')
+            with self.assertRaises(ValueError):
+                candidate_record.require_journey(missing, sha, '0.1.0-beta.1', binary)
+            beta_cases = candidate_record.BETA1_JOURNEY_CASES
+            candidate_record.require_journey(make(beta_cases, '0.1.0-beta.1'), sha, '0.1.0-beta.1', binary)
+            for status in ('failed', 'skipped'):
+                bad = make(beta_cases, '0.1.0-beta.1')
+                bad['cases'][-1]['status'] = status
+                with self.subTest(status=status), self.assertRaises(ValueError):
+                    candidate_record.require_journey(bad, sha, '0.1.0-beta.1', binary)
+
     def test_alpha3_and_alpha4_contracts_do_not_follow_alpha5_source_schema(self):
         with patch.object(release.package, 'schema_version', return_value=8):
             self.assertEqual(release.contract_schema('0.1.0-alpha.3'), 6)

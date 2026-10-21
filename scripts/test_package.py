@@ -18,6 +18,11 @@ import package
 
 
 class PackageSafetyTests(unittest.TestCase):
+    def test_preparation_candidate_does_not_change_shipped_version(self):
+        root = pathlib.Path(package.__file__).resolve().parents[1]
+        self.assertEqual((root / 'build/package/VERSION').read_text().strip(), '0.1.0-alpha.5')
+        self.assertEqual((root / 'build/package/CANDIDATE_VERSION').read_text().strip(), '0.1.0-beta.1')
+
     def test_platform_launcher_allowlists_are_explicit_and_present(self):
         self.assertEqual(set(package.RESOURCE_FILES), {'linux', 'darwin', 'windows'})
         for platform, members in package.RESOURCE_FILES.items():

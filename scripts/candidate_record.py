@@ -36,6 +36,8 @@ JOURNEY_CASES = (
     'search_preset_browser_smoke.py',
     'evidence_bundle_browser_smoke.py',
 )
+ALPHA5_JOURNEY_CASES = JOURNEY_CASES
+BETA1_JOURNEY_CASES = JOURNEY_CASES + ('published_alpha5_schema8_same_schema_compatibility',)
 
 TRANSFER_CASES = (
     'candidate_identity',
@@ -264,7 +266,8 @@ def require_journey(browser, revision, version, binary_sha):
     fixture = browser.get("offline_fixture_sha256", "")
     if not isinstance(fixture, str) or len(fixture) != 64 or any(char not in "0123456789abcdef" for char in fixture):
         raise ValueError("offline fixture provenance is missing")
-    require_cases(browser.get("cases"), JOURNEY_CASES, "candidate journey")
+    required = BETA1_JOURNEY_CASES if version == "0.1.0-beta.1" else ALPHA5_JOURNEY_CASES
+    require_cases(browser.get("cases"), required, "candidate journey")
     require_transfer(browser.get("portable_transfer", {}), revision, version, binary_sha)
     common = next(case for case in browser["cases"] if case["case"] == "packaged_browser_journey.py").get("details", {})
     require_common(common, revision, binary_sha)
