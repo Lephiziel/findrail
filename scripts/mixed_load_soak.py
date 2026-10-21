@@ -33,7 +33,6 @@ KNOWN_API_CODES = frozenset({"cursor_stale", "cursor_expired", "cursor_session_c
 MAX_PAGING_WINDOW_ATTEMPTS = 3
 PAGING_WINDOW_TIMEOUT = 60
 SYNC_POLL_INTERVAL = .1
-LONG_HARD_SECONDS = 3600
 SHORT_HARD_SECONDS = 180
 FINAL_CLEANUP_BUDGET = 60
 SHORT_CLEANUP_BUDGET = 10
@@ -161,9 +160,11 @@ def http(url, timeout, token=None, method="GET", body=None, allowed=()):
     try:
         with HTTP_OPENER.open(req, timeout=timeout) as r:
             raw = r.read(MAX_OUTPUT + 1)
-            if len(raw) > MAX_OUTPUT: raise SoakFailure("http_unexpected", cycle, generation, case)
+            if len(raw) > MAX_OUTPUT:
+                raise SoakFailure("http_unexpected", cycle, generation, case, http_status=r.status)
             try: obj=json.loads(raw) if raw else None
-            except (ValueError, UnicodeDecodeError): raise SoakFailure("http_unexpected", cycle, generation, case)
+            except (ValueError, UnicodeDecodeError):
+                raise SoakFailure("http_unexpected", cycle, generation, case, http_status=r.status)
             return r.status, obj
     except urllib.error.HTTPError as e:
         raw = e.read(MAX_OUTPUT + 1)
