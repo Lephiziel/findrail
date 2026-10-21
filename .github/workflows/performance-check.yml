@@ -1,0 +1,211 @@
+name: Explicit performance check
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact full commit SHA to measure
+        required: true
+        type: string
+      baseline_sha:
+        description: Exact baseline SHA (defaults to published alpha.5 source)
+        required: false
+        default: cb53ee9638f69b47b386921e41368f3b66ceddde
+        type: string
+      suite:
+        description: Measurement suite
+        required: true
+        default: all
+        type: choice
+        options: [series, soak, all]
+      duration_seconds:
+        description: Declared bounded duration; series 2700s, soak 1800s, all 4500s total
+        required: true
+        default: '4500'
+        type: choice
+        options: ['1800', '2700', '4500']
+permissions:
+  contents: read
+concurrency:
+  group: performance-${{ inputs.candidate_sha }}-${{ inputs.suite }}
+  cancel-in-progress: false
+jobs:
+  series:
+    if: inputs.suite == 'series' || inputs.suite == 'all'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Validate invocation identity and bounds
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+          DURATION: ${{ inputs.duration_seconds }}
+          SUITE: ${{ inputs.suite }}
+        run: |
+          set -euo pipefail
+          [[ "$REPOSITORY" == "Lephiziel/findrail" && "$REF" == "refs/heads/main" ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$BASELINE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SUITE" == series || "$SUITE" == all ]]
+          if [[ "$SUITE" == all ]]; then [[ "$DURATION" == 4500 ]]; else [[ "$DURATION" == 2700 ]]; fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.baseline_sha }}
+          path: baseline
+          persist-credentials: false
+      - name: Verify checkout identity and source cleanliness
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git -C baseline rev-parse HEAD)" = "$BASELINE_SHA"
+          test -z "$(git -C candidate status --porcelain)"
+          test -z "$(git -C baseline status --porcelain)"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Package candidate and baseline through production path
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+        run: |
+          set -euo pipefail
+          version=$(cat candidate/build/package/VERSION)
+          test "$version" = "$(cat baseline/build/package/VERSION)"
+          python3 candidate/scripts/package.py --version "$version" --require-clean --target linux-amd64 --output "$RUNNER_TEMP/candidate-package"
+          python3 baseline/scripts/package.py --version "$version" --require-clean --target linux-amd64 --output "$RUNNER_TEMP/baseline-package"
+          python3 - "$RUNNER_TEMP/candidate-package" "$RUNNER_TEMP/candidate-bin" <<'PY'
+          import pathlib, sys
+          sys.path.insert(0, 'candidate/scripts')
+          import package
+          package.verify_manifest(pathlib.Path(sys.argv[1]))
+          package.extract_verified(next(pathlib.Path(sys.argv[1]).glob('*.tar.gz')), pathlib.Path(sys.argv[2]))
+          PY
+          python3 - "$RUNNER_TEMP/baseline-package" "$RUNNER_TEMP/baseline-bin" <<'PY'
+          import pathlib, sys
+          sys.path.insert(0, 'baseline/scripts')
+          import package
+          package.verify_manifest(pathlib.Path(sys.argv[1]))
+          package.extract_verified(next(pathlib.Path(sys.argv[1]).glob('*.tar.gz')), pathlib.Path(sys.argv[2]))
+          PY
+      - name: Record toolchain and artifact identity
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/performance-series"
+          {
+            echo "candidate_sha=${{ inputs.candidate_sha }}"
+            echo "baseline_sha=${{ inputs.baseline_sha }}"
+            version=$(cat candidate/build/package/VERSION)
+            echo "packager=production scripts/package.py; target=linux-amd64"
+            echo "findrail_flags=go build -trimpath -ldflags '-s -w -buildid= -X main.version=$version'"
+            go version
+            go env GOOS GOARCH CGO_ENABLED GOFLAGS
+            python3 --version
+            uname -a
+            lscpu
+            sha256sum "$RUNNER_TEMP/candidate-bin/findrail" "$RUNNER_TEMP/baseline-bin/findrail"
+            sha256sum "$RUNNER_TEMP/candidate-package"/*.tar.gz "$RUNNER_TEMP/baseline-package"/*.tar.gz
+            "$RUNNER_TEMP/candidate-bin/findrail" version
+            "$RUNNER_TEMP/baseline-bin/findrail" version
+          } > "$RUNNER_TEMP/performance-series/provenance.txt"
+      - name: Run fixed 10k/100k series (seed 42, 3 repeats, 100/family, 2700s)
+        run: |
+          python3 candidate/scripts/resource_series.py \
+            --binary "$RUNNER_TEMP/candidate-bin/findrail" --baseline "$RUNNER_TEMP/baseline-bin/findrail" \
+            --output "$RUNNER_TEMP/performance-series/results" --documents 10000 100000 \
+            --seed 42 --repeats 3 --samples-per-family 100 --allow-large --deadline-seconds 2700
+      - name: Upload bounded series reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: performance-series-${{ inputs.candidate_sha }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/performance-series
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 6
+
+  soak:
+    if: inputs.suite == 'soak' || inputs.suite == 'all'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Validate invocation identity and bounds
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          DURATION: ${{ inputs.duration_seconds }}
+          SUITE: ${{ inputs.suite }}
+        run: |
+          set -euo pipefail
+          [[ "$REPOSITORY" == "Lephiziel/findrail" && "$REF" == "refs/heads/main" ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SUITE" == soak || "$SUITE" == all ]]
+          if [[ "$SUITE" == all ]]; then [[ "$DURATION" == 4500 ]]; else [[ "$DURATION" == 1800 ]]; fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Verify checkout identity and source cleanliness
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git -C candidate status --porcelain)"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Package candidate through production path
+        run: |
+          set -euo pipefail
+          version=$(cat candidate/build/package/VERSION)
+          python3 candidate/scripts/package.py --version "$version" --require-clean --target linux-amd64 --output "$RUNNER_TEMP/candidate-package"
+          python3 - "$RUNNER_TEMP/candidate-package" "$RUNNER_TEMP/candidate-bin" <<'PY'
+          import pathlib, sys
+          sys.path.insert(0, 'candidate/scripts')
+          import package
+          package.verify_manifest(pathlib.Path(sys.argv[1]))
+          package.extract_verified(next(pathlib.Path(sys.argv[1]).glob('*.tar.gz')), pathlib.Path(sys.argv[2]))
+          PY
+      - name: Record toolchain and binary identity
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/performance-soak"
+          {
+            echo "candidate_sha=${{ inputs.candidate_sha }}"
+            version=$(cat candidate/build/package/VERSION)
+            echo "packager=production scripts/package.py; target=linux-amd64"
+            echo "findrail_flags=go build -trimpath -ldflags '-s -w -buildid= -X main.version=$version'"
+            go version
+            go env GOOS GOARCH CGO_ENABLED GOFLAGS
+            python3 --version
+            uname -a
+            lscpu
+            sha256sum "$RUNNER_TEMP/candidate-bin/findrail" "$RUNNER_TEMP/candidate-package"/*.tar.gz
+            "$RUNNER_TEMP/candidate-bin/findrail" version
+          } > "$RUNNER_TEMP/performance-soak/provenance.txt"
+      - name: Run 1800s long soak (minimum 12 cycles)
+        run: |
+          python3 candidate/scripts/mixed_load_soak.py --binary "$RUNNER_TEMP/candidate-bin/findrail" \
+            --profile long --duration-seconds 1800 --seed 42 --output "$RUNNER_TEMP/performance-soak/report.json"
+      - name: Upload bounded soak report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: performance-soak-${{ inputs.candidate_sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/performance-soak
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 6
