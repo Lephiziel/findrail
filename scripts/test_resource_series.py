@@ -95,6 +95,7 @@ class SeriesTests(unittest.TestCase):
                               "time.sleep(60)\n", encoding="utf-8")
             binary.chmod(0o700)
             output = root / "series"
+            child_pid = child_pgid = None
             proc = subprocess.Popen([sys.executable, str(Path(series.__file__)), "--binary", str(binary),
                                      "--documents", "100", "--repeats", "1", "--samples-per-family", "1",
                                      "--deadline-seconds", "90", "--output", str(output)],
@@ -104,14 +105,15 @@ class SeriesTests(unittest.TestCase):
                 while not marker.exists() and proc.poll() is None and time.monotonic() < until:
                     time.sleep(.02)
                 self.assertTrue(marker.exists(), "benchmark child did not start")
-                pid = int(marker.read_text())
+                child_pid = int(marker.read_text())
+                child_pgid = os.getpgid(child_pid)
                 os.kill(proc.pid, signal.SIGKILL)
                 proc.wait(timeout=5)
                 until = time.monotonic() + 8
                 state = "unknown"
                 while time.monotonic() < until:
                     try:
-                        state = Path(f"/proc/{pid}/stat").read_text().split()[2]
+                        state = Path(f"/proc/{child_pid}/stat").read_text().split()[2]
                         if state == "Z":
                             break
                     except FileNotFoundError:
@@ -122,6 +124,31 @@ class SeriesTests(unittest.TestCase):
             finally:
                 if proc.poll() is None:
                     proc.kill(); proc.wait()
+                # Reap the process tree before TemporaryDirectory removes the
+                # output directory. The harness child has its own process group.
+                if child_pid is not None and child_pgid is not None:
+                    try:
+                        os.killpg(child_pgid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+                    def process_group_is_live(pgid):
+                        for stat_path in Path("/proc").glob("[0-9]*/stat"):
+                            try:
+                                fields = stat_path.read_text().rsplit(")", 1)[1].split()
+                                if int(fields[2]) == pgid and fields[0] != "Z":
+                                    return True
+                            except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
+                                continue
+                        return False
+
+                    deadline = time.monotonic() + 8
+                    while time.monotonic() < deadline:
+                        if not process_group_is_live(child_pgid):
+                            break
+                        time.sleep(.05)
+                    else:
+                        self.fail("harness process tree did not stop before temporary directory cleanup")
 
     def test_child_error_is_fixed_and_cleanup(self):
         import sys

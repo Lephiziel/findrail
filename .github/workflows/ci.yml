@@ -29,6 +29,8 @@ jobs:
         run: python3 scripts/test_package.py
       - name: Release asset contract tests
         run: python3 -m unittest scripts/test_release_assets.py scripts/test_release_gate.py scripts/test_packaged_journey.py scripts/test_smoke.py scripts/test_readiness.py
+      - name: Performance and acceptance contract tests
+        run: python3 -m unittest scripts/test_resource_series.py scripts/test_search_resource_check.py scripts/test_mixed_load_soak.py scripts/test_acceptance_kit.py scripts/test_manual_evidence.py scripts/test_alpha5_media.py
   check:
     strategy:
       fail-fast: false
