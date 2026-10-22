@@ -22,6 +22,13 @@ stopped backup/restore. This is not a promise of downgrade support. The
 candidate acceptance scripts consume extracted binaries; they do not silently
 build a replacement application.
 
+The explicit performance workflow must be dispatched with the same full source
+SHA and `candidate_version=0.1.0-beta.1`. It packages the candidate with that
+version through the production packager and validates the repository's
+`CANDIDATE_VERSION`; the alpha.5 comparison binary is built separately from the
+pinned baseline source. Do not use a TASK21 series or TASK23 soak whose candidate
+binary hash/version differs from the beta native Linux artifact.
+
 Product scope is unchanged: local-first search, existing extraction and query
 limits, read-only loopback/API boundaries, existing provenance and rollback
 semantics. No OCR, semantic retrieval, new connectors, cloud/team/auth,
@@ -44,6 +51,23 @@ CI is not a substitute. Missing reports remain pending; malformed or failed
 provided evidence blocks readiness. TASK21 resource-series and TASK23 soak
 reports are supplemental technical evidence, not synthetic substitutes for
 manual use. `final_release` remains false.
+
+Build the two manual first-run kits from the actual, byte-verified beta release
+asset bundle, not from an edited alpha.5 manifest. For example, after downloading
+the `release-assets-<full-sha>` Actions artifact into `/abs/evidence/assets`:
+
+```bash
+python3 scripts/acceptance_kit.py --assets-dir /abs/evidence/assets \
+  --target windows-amd64 --delivery-method 'Actions artifact <run URL>' \
+  --output /abs/evidence/windows-beta-kit.zip
+python3 scripts/acceptance_kit.py --assets-dir /abs/evidence/assets \
+  --target darwin-arm64 --delivery-method 'Actions artifact <run URL>' \
+  --output /abs/evidence/apple-silicon-beta-kit.zip
+```
+
+The generated reports start at `not_run`; they do not constitute OS or usage
+evidence. Share kits only through the candidate's actual artifact channel and
+collect voluntary matching reports separately.
 
 After a successful rehearsal, the owner must separately decide whether to change
 the shipped version and authorize a future release workflow. This document does

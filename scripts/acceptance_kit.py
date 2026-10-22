@@ -14,6 +14,7 @@ import release_assets
 
 RELEASE_VERSION = '0.1.0-alpha.5'
 RELEASE_SHA = 'cb53ee9638f69b47b386921e41368f3b66ceddde'
+CANDIDATE_VERSION = '0.1.0-beta.1'
 PUBLISHED_MANIFEST_SHA256 = '28ed088d474117f9ce0614626b7d62b47ed27e6646e5670d52affeeeee9031b7'
 PUBLISHED_CHECKSUMS_SHA256 = 'f587ffc579c133f6f5f204b5bddd88fbc174aaa9341430fb701832dd5d781423'
 SCHEMA = 8
@@ -66,18 +67,22 @@ def build(assets_dir, target, output, delivery_method=None):
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError('cannot read verified release manifest') from error
     source_sha = input_manifest.get('source_revision')
-    manifest = release_assets.verify(assets_dir, RELEASE_VERSION, source_sha)
-    if manifest.get('schema_version') != SCHEMA or manifest.get('client_api_version') != API:
+    version = input_manifest.get('app_version')
+    if version not in (RELEASE_VERSION, CANDIDATE_VERSION):
+        raise ValueError('acceptance kits support only published alpha.5 or preparation beta.1 assets')
+    manifest = release_assets.verify(assets_dir, version, source_sha)
+    expected_schema = release_assets.contract_schema(version)
+    if manifest.get('schema_version') != expected_schema or manifest.get('client_api_version') != API:
         raise ValueError('verified release contract has unexpected schema or Client API')
     archive_name = next((entry['basename'] for entry in manifest['assets']
                          if entry.get('target') == target), None)
-    expected_name = f'findrail_{RELEASE_VERSION}_{target}' + ('.zip' if target.startswith('windows-') else '.tar.gz')
+    expected_name = f'findrail_{version}_{target}' + ('.zip' if target.startswith('windows-') else '.tar.gz')
     if archive_name != expected_name:
         raise ValueError('verified manifest has no exact target archive')
     archive = assets_dir / archive_name
     published_bytes = (
         manifest['source_revision'] == RELEASE_SHA and
-        manifest['app_version'] == RELEASE_VERSION and
+        version == RELEASE_VERSION and manifest['app_version'] == RELEASE_VERSION and
         sha256(assets_dir / 'release-manifest.json') == PUBLISHED_MANIFEST_SHA256 and
         sha256(assets_dir / 'SHA256SUMS.txt') == PUBLISHED_CHECKSUMS_SHA256
     )
