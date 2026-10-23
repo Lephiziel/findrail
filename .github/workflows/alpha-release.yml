@@ -229,7 +229,7 @@ jobs:
           "$PY" scripts/candidate_record.py native --native-directory "$RUNNER_TEMP/release-evidence" \
             --candidate-sha "$CANDIDATE_SHA" --candidate-version "$VERSION" --target "$TARGET" \
             --status "$JOB_STATUS" --report "$RUNNER_TEMP/release-evidence/verification.json"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: release-package-${{ needs.validate-source.outputs.candidate_sha }}-${{ matrix.target }}
@@ -301,7 +301,7 @@ jobs:
           unzip -Z1 extensions/vscode/findrail-readonly-0.1.0.vsix | grep -qx 'extension/package.json'
           mkdir -p "$RUNNER_TEMP/vsix"
           cp extensions/vscode/findrail-readonly-0.1.0.vsix "$RUNNER_TEMP/vsix/"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: release-vsix-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/vsix/findrail-readonly-0.1.0.vsix
@@ -413,7 +413,7 @@ jobs:
           args=(--alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY")
           if [[ "$CANDIDATE_VERSION" == 0.1.0-beta.1 ]]; then args+=(--alpha5-binary "$ALPHA5_BINARY"); fi
           python3 scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" "${args[@]}" --evidence-fixture "$RUNNER_TEMP/evidence-collection-fixture" --report "$RUNNER_TEMP/packaged-journey-report.json"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: release-browser-journey-${{ env.CANDIDATE_SHA }}
@@ -459,21 +459,21 @@ jobs:
             --candidate-sha "$CANDIDATE_SHA" --candidate-version "$VERSION" \
             --recovery "$RUNNER_TEMP/native/release-package-${CANDIDATE_SHA}-linux-amd64/recovery-candidate.json" \
             --output "$RUNNER_TEMP/release-readiness.json"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: release-assets-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/release-assets/
           if-no-files-found: error
           overwrite: true
           retention-days: 30
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: release-verification-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/verification-summary.json
           if-no-files-found: error
           overwrite: true
           retention-days: 30
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: release-readiness-${{ needs.validate-source.outputs.candidate_sha }}
           path: ${{ runner.temp }}/release-readiness.json
