@@ -156,7 +156,7 @@ jobs:
             --seed 42 --repeats 3 --samples-per-family 100 --allow-large --deadline-seconds 2700
       - name: Upload bounded series reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: performance-series-${{ inputs.candidate_sha }}-${{ github.run_id }}
           path: |
@@ -255,7 +255,7 @@ jobs:
             --profile long --duration-seconds 1800 --seed 42 --output "$RUNNER_TEMP/performance-soak/report.json"
       - name: Upload bounded soak report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: performance-soak-${{ inputs.candidate_sha }}-${{ github.run_id }}
           path: ${{ runner.temp }}/performance-soak

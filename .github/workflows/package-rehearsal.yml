@@ -198,7 +198,7 @@ jobs:
             if os.environ['CANDIDATE_VERSION'] == '0.1.0-beta.1': checks.append('published_alpha5_schema8_same_schema_compatibility')
           p.write_text(json.dumps({'candidate_sha': os.environ['CANDIDATE_SHA'], 'candidate_version':os.environ['CANDIDATE_VERSION'], 'schema_version':package.schema_version(), 'target':'${{ matrix.target }}', 'source_clean':os.environ['JOB_STATUS']=='success', 'status':os.environ['JOB_STATUS'],'checks':checks if os.environ['JOB_STATUS']=='success' else []}, sort_keys=True, indent=2)+'\n')
           PY
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: candidate-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}-${{ matrix.target }}

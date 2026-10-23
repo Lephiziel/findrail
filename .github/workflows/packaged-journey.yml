@@ -156,7 +156,7 @@ jobs:
           args=(--alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY")
           if [[ "$CANDIDATE_VERSION" == 0.1.0-beta.1 ]]; then args+=(--alpha5-binary "$ALPHA5_BINARY"); fi
           python scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" "${args[@]}" --evidence-fixture "$RUNNER_TEMP/evidence-collection-fixture" --report "$RUNNER_TEMP/packaged-journey-report.json"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: packaged-journey-${{ env.CANDIDATE_SHA }}
