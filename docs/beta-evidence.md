@@ -2,10 +2,11 @@
 
 This is the offline consumer contract for TASK 33 and the publisher contract
 used by TASK 34. It reuses existing producers and validators; it does not define
-a second readiness engine or make any GitHub request itself. The read-only
-workflow is responsible for trusted GitHub run/artifact metadata and downloads.
-The helper verifies local bytes and their internal consistency, not the
-authenticity of a hand-written run URL or JSON file.
+a second readiness engine. `scripts/beta_evidence.py` is offline. The separate
+`scripts/beta_evidence_github.py` is used only by the explicitly dispatched,
+read-only workflow to verify GitHub API metadata and retrieve exact artifact IDs.
+The offline helper verifies local bytes and internal consistency; it cannot
+authenticate hand-written run metadata supplied outside that workflow.
 
 ## Immutable identity and trusted provenance
 
@@ -32,15 +33,24 @@ Every handoff is for one exact candidate and records:
 - the technical outcome list and the original post-scale readiness JSON,
   including each human category still pending.
 
-The workflow must verify GitHub metadata before trusting downloads: canonical
-repository, allowed workflow identity, exact head SHA, main event/branch,
-successful conclusion and current run attempt, and required jobs/artifacts.
-Resolve artifacts by the explicit run and artifact IDs, not by “latest
-successful” name matching. Record both the GitHub artifact digest and local
-payload-file hashes. A PR/fork artifact, expired/missing artifact, failed
-attempt, ambiguous name, or record for another SHA/version is not a candidate
-proof. Artifact IDs and run IDs should be represented as decimal strings in
-JSON to avoid numeric precision loss.
+The workflow verifies GitHub metadata before downloading: canonical repository,
+the exact workflow file identity, requested run ID, exact head SHA, main branch,
+allowed event, successful conclusion and current run attempt, and the complete
+required job set. It rejects skipped jobs except the candidate publisher. The
+GitHub Actions API does not expose `workflow_dispatch` inputs on a run record;
+the performance run is therefore bound by its same-SHA dispatch event, both
+successful series/soak jobs and exact artifacts, and the full artifact contents:
+beta.1 candidate identity, pinned baseline, 2700-second series configuration,
+and a clean soak of at least 1800 seconds. In the pinned performance workflow,
+both jobs can run together only with `suite=all` and `duration_seconds=4500`.
+
+Artifacts are resolved by the explicit run and artifact IDs, never by “latest
+successful” name matching. The API digest is checked against the downloaded
+artifact ZIP before safe extraction. Both GitHub artifact digests and local
+payload-file hashes are retained. A PR/fork artifact, expired/missing artifact,
+failed or stale attempt, ambiguous name, or record for another SHA/version is
+not candidate proof. Artifact IDs and run IDs are decimal strings in JSON to
+avoid numeric precision loss.
 
 The canonical eight-file set is the one verified by
 `scripts/release_assets.py`; the five application archives are obtained from
@@ -49,11 +59,20 @@ reports handoff. Do not put app archives in the reports ZIP or turn the ZIP into
 a ninth release asset. `SHA256SUMS.txt` covers the seven other release assets,
 not itself; its own digest is recorded in the inventory.
 
-## Offline helper interface
+## Workflow and helper interface
 
-TASK 33 implements `scripts/beta_evidence.py` with the following stable
-subcommands and option names. Paths are explicit; the helper does not discover
-an application binary or fetch trusted metadata on its own.
+Run `.github/workflows/beta-evidence.yml` only from canonical `main`, with
+`candidate_sha` equal to the workflow's own source SHA and explicit candidate
+and performance run IDs. The workflow grants only `contents: read` and
+`actions: read`; the token is present only in the metadata/download step. It
+does not build or release the app, create tags, write repository contents, or
+modify `VERSION`. It downloads by artifact ID, extracts the checked Linux
+amd64 archive, and measures only that binary. Pull requests receive the
+synthetic CI tests, not a path to submit evidence to this workflow.
+
+The offline `scripts/beta_evidence.py` commands have stable subcommands and
+option names. Paths are explicit; the helper does not discover or build an
+application binary and does not fetch trusted metadata. For example:
 
 ```sh
 python3 scripts/beta_evidence.py assemble \
@@ -79,16 +98,31 @@ python3 scripts/beta_evidence.py verify \
   --reports-zip /abs/evidence/beta-evidence-reports.zip
 ```
 
-The options above are the TASK 33 interface, not commands available in this
-documentation-only change. `--run-metadata` is a bounded JSON file produced by
-the read-only workflow after GitHub API checks; it carries candidate and
-performance workflow/run-attempt identities and the consumed artifact
-IDs/digests. `assemble` verifies the exact assets with
+`--run-metadata` is a bounded JSON file produced by the workflow after GitHub
+API checks; it carries candidate and performance workflow/run-attempt
+identities and the consumed artifact IDs/digests. The online preflight can also
+be run directly in an authenticated, read-only environment:
+
+```sh
+python3 scripts/beta_evidence_github.py preflight \
+  --candidate-sha "$CANDIDATE_SHA" --candidate-version 0.1.0-beta.1 \
+  --candidate-run-id "$CANDIDATE_RUN_ID" \
+  --performance-run-id "$PERFORMANCE_RUN_ID" \
+  --download-dir /abs/evidence/downloads \
+  --metadata /abs/evidence/trusted-run-metadata.json
+```
+
+The preflight requires a read-only `GITHUB_TOKEN`, validates all requested run
+and job metadata before transfer, bounds artifact downloads/extraction, and
+downloads the five required artifact payloads by their verified IDs. It does
+not query “latest” runs. `assemble` verifies the exact assets with
 `scripts/release_assets.py verify --directory DIR --version 0.1.0-beta.1
 --revision SHA`, reuses `scripts/candidate_record.py` and `scripts/readiness.py`
 contracts, and records but does not rewrite producer reports. It extracts the
 Linux CLI only through the existing safe package extractor; it never substitutes
-a local rebuild.
+a local rebuild. The workflow then runs `search_resource_check.py` against that
+extracted CLI for 10k and 100k documents and performs an independent offline
+`verify` before upload.
 
 `verify` prints one fixed JSON result shape to stdout on both success and
 failure: `{"result_version":1,"status":"passed|failed","candidate_sha":"…","candidate_version":"0.1.0-beta.1","report_zip_sha256":"…|null"}`.
@@ -99,7 +133,14 @@ after ZIP finalization and is emitted in this result and the trusted workflow's
 artifact metadata/job summary, never embedded in the ZIP itself.
 `--reports-zip` is a sibling output/input, never inside `--output-dir`; it must
 also be outside `--assets-dir`. The ZIP contains the handoff payload and is
-verified against its manifest.
+verified against its manifest. `assemble` refuses to overwrite either output;
+use new paths to preserve existing evidence until the replacement is verified.
+The workflow uploads a bounded result/diagnostic
+artifact even on job failure; successful artifacts have 30-day retention. The
+job summary records the handoff artifact link/digest, report ZIP digest,
+PACKAGE-MANIFEST digest, source run/artifact IDs, candidate binary hash, and
+human gaps. Preserve the report ZIP and both inner hashes before the retention
+period expires.
 
 ## Handoff layout
 
@@ -197,21 +238,30 @@ update human intake.
 ## Optional human-report refresh
 
 The explicit TASK 33 workflow may accept optional sanitized Windows and Linux
-report JSON inputs after real observations. The helper option names are
-`--windows-report FILE` and `--linux-report FILE`; each file is capped at 8 KiB
+report JSON inputs after real observations. Its input names are
+`windows_report_json` and `linux_report_json`; the local helper options are
+`--windows-report FILE` and `--linux-report FILE`. Each is capped at 8 KiB
 before parsing and rejects duplicate JSON keys, non-finite values, and unknown
-or unsafe content. Use the existing `windows_first_run` kind and the existing
-readiness/manual-evidence validator. Store VM/build/browser/download details in
-the already bounded `REPORT.md`/notes fields; do not introduce a new Windows
-readiness kind. Linux first-run is the separate TASK 32 observation kind and
-does not become a new required readiness gate or a substitute for any current
-human category.
+or unsafe content. The Windows report uses the existing `windows_first_run`
+kind and readiness/manual-evidence validator. The Linux report is the separate
+TASK 32 observation kind and does not become a new readiness gate or substitute
+for a current human category. No measurement is repeated when a report is
+accepted.
 
-If workflow-dispatch inputs are used, pass bounded sanitized JSON as a
-structured input or file and have a dedicated parser write/read it as data.
-Do not interpolate JSON into shell source, log it, or upload the original
-private report without the observer's consent. A JSON record does not establish
-identity: the operator confirms that it came from a real voluntary observation.
+Workflow-dispatch inputs are visible to repository maintainers in the run
+record. Submit only sanitized data; do not include personal identifiers,
+private paths, document text, query terms, credentials, raw logs, or confidential
+free-form notes. The helper never prints or uploads the original report JSON.
+The handoff keeps only candidate/archive identity, a validated public reference,
+ordered case outcomes and elapsed times. It does not retain free-form observer,
+environment or obstacle prose. If that evidence scope is insufficient, do not
+submit the report through this workflow.
+
+The workflow passes each bounded JSON field through the environment to a
+dedicated parser, which writes a temporary data file; it is not interpolated
+into shell source or logs. It does not upload the original input report. A JSON
+record does not establish identity: the operator confirms that it came from a
+real voluntary observation.
 With no new technical run, matching reports update intake/readiness only;
 technical bundle/source run IDs and hashes stay identical. The updated outer
 manifest/ZIP fingerprint changes and must be reviewed again. A matching passed
