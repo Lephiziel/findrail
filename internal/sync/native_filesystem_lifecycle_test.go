@@ -70,7 +70,7 @@ func verifyNativeEvidence(t *testing.T, store *sqlite.Store, query, sourceID, re
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evidence.ID != hit.ID || evidence.SourceID != sourceID || evidence.Path != relativePath || evidence.URI != wantURI || evidence.Text != content {
+	if evidence.ID != hit.ID || evidence.SourceID != sourceID || evidence.Path != relativePath || evidence.URI != hit.URI || evidence.Text != content {
 		t.Fatalf("preview did not preserve indexed snapshot provenance/content: %+v", evidence)
 	}
 	return hit.ID
