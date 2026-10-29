@@ -60,11 +60,13 @@ jobs:
       CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
       PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
       REFRESH_RUN_ID: ${{ inputs.refresh_run_id }}
-      WORK_ROOT: ${{ runner.temp }}/beta-evidence-work
-      OUTPUT_ROOT: ${{ runner.temp }}/beta-evidence-output
     steps:
       - name: Create an isolated reports-only output directory
-        run: mkdir -p "$OUTPUT_ROOT"
+        run: |
+          set -euo pipefail
+          printf 'WORK_ROOT=%s\n' "$RUNNER_TEMP/beta-evidence-work" >> "$GITHUB_ENV"
+          printf 'OUTPUT_ROOT=%s\n' "$RUNNER_TEMP/beta-evidence-output" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/beta-evidence-output"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
