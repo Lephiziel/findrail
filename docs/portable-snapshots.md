@@ -108,11 +108,20 @@ their original CLI-first transfer behavior.
 ## Sources UI
 
 In the writable `start`/desktop Sources panel, **Inspect portable snapshot** asks
-for an absolute archive path on the computer running Findrail. It is a text path,
-not a browser file picker or upload. Inspection validates the entire archive in a
-bounded job; the UI displays only format, kind, document/page counts, compressed
-bytes and semantic fingerprint. It never displays document text or origin paths.
-The fingerprint detects archive consistency and is not an author signature.
+for an absolute archive path on the machine running Findrail, not the computer
+running the browser. It is a text path, not a browser file picker or upload; the
+UI does not guess the server OS from the browser. It sends the path as entered,
+without changing separators, letter case, spaces or Unicode. Do not add shell
+quotes to the field. Examples for an existing input archive:
+
+- Windows: `C:\Users\Alex\Archives\notes archive.zip`
+- macOS: `/Users/alex/Archives/notes archive.zip`
+- Linux: `/home/alex/Archives/notes archive.zip`
+
+Inspection validates the entire archive in a bounded job; the UI displays only
+format, kind, document/page counts, compressed bytes and semantic fingerprint.
+It never displays document text or origin paths. The fingerprint detects archive
+consistency and is not an author signature.
 Import requires a separate name (1–512 UTF-8 bytes) and confirmation. The
 resulting source is frozen; it is not watched, refreshed, or automatically added
 to an MCP allowlist. Re-importing an identical fingerprint identifies the
@@ -120,14 +129,28 @@ existing source without changing its name. An expired claim or changed archive
 requires a fresh inspection.
 
 Each source card offers **Export snapshot**. Enter a new absolute output path on
-the Findrail host and explicitly submit. Export writes an archive locally; it is
-not a browser download, does not overwrite or open a file, and refuses existing
+the machine running Findrail and explicitly submit. Examples for a new output
+archive:
+
+- Windows: `C:\Users\Alex\Archives\new snapshot.zip`
+- macOS: `/Users/alex/Archives/new snapshot.zip`
+- Linux: `/home/alex/Archives/new snapshot.zip`
+
+Export writes an archive on the Findrail machine; it is not a browser download.
+Browser downloads for Markdown citations and evidence bundles are separate
+actions. Export does not overwrite or open a file, and refuses existing
 files/symlinks and paths inside the index or registered filesystem roots. The
 archive includes indexed plaintext and provenance, not original PDF/DOCX files.
 After the export job succeeds, the Sources UI validates the new archive and
 shows its bounded byte count and fingerprint.
 Source snapshots do not contain evidence collections or notes; use the separate
 evidence-bundle JSON workflow for selected citations and notes.
+
+These controls are included in alpha.5. A beta candidate before publication is
+delivered through the exact GitHub Actions artifact described in the
+[candidate guide](beta-candidate.md), not a public release URL. Version-specific
+public download URLs belong only to an actually published and byte-verified
+release; see the [beta publication policy](beta-support.md#preparation-freeze-decision-and-publication).
 
 The path is locked while an operation is submitted or monitored. Changing it
 after a successful inspection discards the import claim and requires a new
