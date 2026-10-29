@@ -135,10 +135,45 @@ test('a hidden tab pauses polling and explicit status check resumes without a se
 test('export completion verifies the new path once and returns focus to Close',async()=>{
   const h=await harness();h.route('/api/v1/sources/source-a/snapshot-export',()=>response({job:{id:'export-1'}},202));
   h.setJobs([{id:'export-1',type:'snapshot-export',status:'succeeded',result:'exported'}]);inspection(h);
-  await h.open('export',source);await h.input('snapshot-path','/synthetic/new snapshot.zip');await h.submit();await flush();
+  const outputPath=String.raw`C:\Users\Alex\Archives\new snapshot résumé 雪.zip`;
+  await h.open('export',source);
+  assert.equal(h.element('snapshot-transfer-form').dataset.mode,'export');
+  assert.equal(h.element('snapshot-path').placeholder,'New output archive path on the Findrail computer');
+  assert.ok(h.element('snapshot-transfer-help').textContent.includes('Browser downloads for Markdown citations and evidence bundles are separate actions.'));
+  for(const example of ['Windows: C:\\Users\\Alex\\Archives\\new snapshot.zip','macOS: /Users/alex/Archives/new snapshot.zip','Linux: /home/alex/Archives/new snapshot.zip'])assert.ok(h.element('snapshot-transfer-help').textContent.includes(example));
+  await h.input('snapshot-path',outputPath);await h.submit();await flush();
   assert.match(h.element('snapshot-summary').textContent,/Snapshot exported and verified.*1234.*fingerprint/);
   assert.equal(h.document.activeElement.id,'snapshot-close');assert.equal(h.element('snapshot-submit').hidden,true);
-  assert.equal(h.calls.find(c=>c.url==='/api/v1/snapshots/inspect').body.path,'/synthetic/new snapshot.zip');
+  assert.deepEqual(h.calls.find(c=>c.url.endsWith('/snapshot-export')).body,{output_path:outputPath});
+  assert.equal(h.calls.find(c=>c.url==='/api/v1/snapshots/inspect').body.path,outputPath);
+});
+
+test('inspect and import modes keep the literal host path and retain it with an honest failed result',async()=>{
+  const h=await harness(),archivePath=String.raw`C:\Users\Alex\Archives\Team Notes résumé 雪.zip`;
+  inspection(h);await h.open();
+  assert.equal(h.element('snapshot-transfer-form').dataset.mode,'inspect');
+  assert.equal(h.element('snapshot-path').placeholder,'Existing archive path on the Findrail computer');
+  assert.equal(h.element('snapshot-path-label').textContent,'Absolute path to an existing archive on the machine running Findrail');
+  for(const example of ['Windows: C:\\Users\\Alex\\Archives\\notes archive.zip','macOS: /Users/alex/Archives/notes archive.zip','Linux: /home/alex/Archives/notes archive.zip'])assert.ok(h.element('snapshot-transfer-help').textContent.includes(example));
+  await h.input('snapshot-path',archivePath);await h.submit();await flush();
+  assert.deepEqual(h.calls.find(c=>c.url==='/api/v1/snapshots/inspect').body,{path:archivePath});
+  assert.equal(h.element('snapshot-path').value,archivePath,'inspection must not rewrite or clear the entered path');
+  assert.equal(h.element('snapshot-transfer-form').dataset.mode,'import');
+  assert.equal(h.element('snapshot-path').placeholder,'Path to the inspected archive');
+  assert.equal(h.element('snapshot-submit').textContent,'Import frozen source');
+  assert.match(h.element('snapshot-transfer-help').textContent,/exact inspected archive path/);
+
+  const hostileError='Archive content changed after inspection; no source was imported. <img src=x onerror=alert(1)>';
+  h.setJobs([{id:'import-1',type:'snapshot-import',status:'failed',error:hostileError}]);
+  h.route('/api/v1/snapshots/import',()=>response({job:{id:'import-1'}},202));
+  await h.input('snapshot-name','Team Notes');await h.submit();await flush();
+  assert.equal(h.element('snapshot-path').value,archivePath,'a failed import must retain the user path');
+  assert.equal(h.element('snapshot-name').value,'Team Notes','a failed import must retain the entered source name');
+  assert.equal(h.element('snapshot-transfer-form').dataset.mode,'inspect');
+  assert.equal(h.element('snapshot-submit').textContent,'Inspect snapshot');
+  assert.match(h.element('snapshot-summary').textContent,/Archive content changed/);
+  assert.ok(h.element('snapshot-summary').textContent.includes('<img src=x onerror=alert(1)>'));
+  assert.equal(h.element('snapshot-summary').children.length,0,'server error text must not create markup');
 });
 
 test('closing before an export result prevents a late automatic metadata inspection',async()=>{
