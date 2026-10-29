@@ -11,11 +11,16 @@ body:
         their text, queries, local paths, screenshots containing private content,
         device identifiers, or credentials. You may instead keep a report locally
         and provide its SHA-256 reference. Reports are never uploaded automatically.
+        You do not need to find a Git SHA; unknown identity remains useful feedback,
+        but cannot match a candidate as release evidence. First use is not a return:
+        choose “Not yet” until you actually come back later. Leave skipped searches
+        or restarts as “Not tried”; found/not-found and restored/not-restored are
+        actual outcomes.
   - type: input
     id: version
     attributes:
-      label: Version and optional provenance
-      description: Version, release/download source, and candidate SHA if known. Unknown SHA is okay; feedback remains useful.
+      label: Version or release (optional)
+      description: Version or download source if already known. Do not look up a Git SHA; unknown identity is fine for qualitative feedback.
   - type: dropdown
     id: evidence_type
     attributes:
@@ -33,7 +38,7 @@ body:
     id: install
     attributes:
       label: Install outcome
-      description: Optional: installation outcome and obstacle, without private paths.
+      description: "Optional: installation outcome and obstacle, without private paths."
     validations:
       required: true
   - type: dropdown
@@ -69,7 +74,7 @@ body:
     id: return_use
     attributes:
       label: Did you return and use Findrail again later?
-      options: ["Yes", "No", "Not yet"]
+      options: ["Not yet", "No", "Yes"]
     validations:
       required: true
   - type: textarea

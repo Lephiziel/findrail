@@ -243,7 +243,7 @@ historical indexed passages, not live copies of the original files.
 
 | Start here | Go deeper |
 |:---|:---|
-| [Demo and first retrieval task](docs/demo.md) | [Architecture](docs/architecture.md) |
+| [Desktop first use and optional feedback](docs/beta-start-here.md) · [Demo](docs/demo.md) | [Architecture](docs/architecture.md) |
 | [Source management](docs/source-management.md) | [HTTP API](api/openapi.yaml) |
 | [Search queries and filters](docs/search-query.md) | [Read-only MCP setup](docs/mcp.md) |
 | [DOCX support](docs/docx.md) | [Optional VS Code client](docs/vscode.md) |

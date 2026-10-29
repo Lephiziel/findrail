@@ -37,6 +37,17 @@ class ManualEvidenceTests(unittest.TestCase):
         record.update(changes)
         return record
 
+    def linux_first_run(self, **changes):
+        report = {'kind': 'linux_first_run', 'reference': '', 'candidate_sha': self.sha,
+                  'candidate_version': self.version, 'target': 'linux-amd64',
+                  'archive_sha256': self.native['linux-amd64']['archive']['sha256'],
+                  'evidence_type': 'manual', 'status': 'not_run', 'schema_version': self.candidate['schema_version'],
+                  'client_api_version': self.candidate['client_api_version'], 'cases': [
+                      {'id': name, 'status': 'not_run', 'elapsed_seconds': None, 'observation': ''}
+                      for name in readiness.MANUAL_CASES]}
+        report.update(changes)
+        return report
+
     def test_full_readiness_records_validate_unchanged(self):
         manual = self.manual()
         complete = manual_evidence.validate(manual, self.candidate, self.native)
@@ -72,6 +83,122 @@ class ManualEvidenceTests(unittest.TestCase):
         self.assertEqual(manual_evidence.validate(report, self.candidate, self.native), 'complete')
         self.assertEqual(manual_evidence.validate(self.usage(return_use=False), self.candidate, self.native), 'incomplete')
         self.assertEqual(manual_evidence.validate(self.usage(retrieval_two='not_tried'), self.candidate, self.native), 'incomplete')
+
+    def test_linux_first_run_blank_is_incomplete_and_never_voluntary_return(self):
+        blank = self.linux_first_run()
+        self.assertEqual(manual_evidence.validate(blank, self.candidate, self.native), 'incomplete')
+        self.assertEqual(blank['kind'], 'linux_first_run')
+        self.assertFalse(self.usage(return_use=False)['return_use'])
+        self.assertEqual(manual_evidence.validate(self.usage(return_use=False), self.candidate, self.native), 'incomplete')
+        completed = self.linux_first_run(reference=self.ref, status='passed', cases=[
+            {'id': name, 'status': 'passed', 'elapsed_seconds': 0.0, 'observation': ''}
+            for name in readiness.MANUAL_CASES])
+        self.assertEqual(manual_evidence.validate(completed, self.candidate, self.native), 'complete')
+        with self.assertRaises(ValueError):
+            manual_evidence.validate({**completed, 'target': 'darwin-arm64'}, self.candidate, self.native)
+        self.assertNotIn('linux_first_run', readiness.KINDS)
+
+    def test_linux_intake_writes_separate_observations_and_clears_stale_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            candidate, report_path, out = (root / name for name in ('candidate.json', 'linux.json', 'out'))
+            candidate.write_text(json.dumps(self.candidate))
+            report_path.write_text(json.dumps(self.linux_first_run()))
+            command = [sys.executable, str(pathlib.Path(manual_evidence.__file__)), '--candidate', str(candidate),
+                       '--report', str(report_path), '--output', str(out)]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            summary = json.loads((out / 'intake.json').read_text())
+            self.assertEqual(summary['status'], 'incomplete')
+            self.assertEqual(summary['counts']['incomplete'], 1)
+            self.assertEqual(summary['outputs'], ['linux-observations.json'])
+            self.assertFalse((out / 'supplemental.json').exists())
+            observations = json.loads((out / 'linux-observations.json').read_text())
+            self.assertEqual(observations['format_version'], 1)
+            self.assertEqual(observations['kind'], 'linux_first_run')
+            self.assertEqual(observations['observations'][0]['status'], 'incomplete')
+            self.assertNotIn('"observation":', (out / 'linux-observations.json').read_text())
+
+            complete = self.linux_first_run(reference=self.ref, status='passed', cases=[
+                {'id': name, 'status': 'passed', 'elapsed_seconds': 0.0, 'observation': 'private detail'}
+                for name in readiness.MANUAL_CASES])
+            report_path.write_text(json.dumps(complete))
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((out / 'intake.json').read_text())
+            self.assertEqual(summary['status'], 'recorded')
+            self.assertEqual(summary['counts']['complete'], 1)
+            self.assertEqual(summary['outputs'], ['linux-observations.json'])
+            self.assertFalse((out / 'supplemental.json').exists())
+            self.assertNotIn('private detail', (out / 'linux-observations.json').read_text())
+
+            failed = self.linux_first_run(reference=self.ref, status='failed', cases=[
+                {'id': name, 'status': 'passed', 'elapsed_seconds': 0.0, 'observation': 'private failure detail'}
+                for name in readiness.MANUAL_CASES])
+            failed['cases'][3]['status'] = 'failed'
+            report_path.write_text(json.dumps(failed))
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            summary = json.loads((out / 'intake.json').read_text())
+            self.assertEqual(summary['status'], 'blocked')
+            self.assertEqual(summary['counts']['failed'], 1)
+            self.assertEqual(summary['outputs'], ['linux-observations.json'])
+            observations = json.loads((out / 'linux-observations.json').read_text())
+            self.assertEqual(observations['observations'][0]['status'], 'failed')
+            self.assertEqual(observations['observations'][0]['cases'][3]['status'], 'failed')
+            self.assertNotIn('private failure detail', (out / 'linux-observations.json').read_text())
+            self.assertFalse((out / 'supplemental.json').exists())
+
+            complete['archive_sha256'] = '0' * 64
+            report_path.write_text(json.dumps(complete))
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            summary = json.loads((out / 'intake.json').read_text())
+            self.assertEqual(summary['counts']['mismatch'], 1)
+            self.assertFalse((out / 'linux-observations.json').exists())
+            self.assertFalse((out / 'supplemental.json').exists())
+
+    def test_incomplete_usage_intake_retains_only_outcome_facts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            candidate, report, out = (root / name for name in ('candidate.json', 'usage.json', 'out'))
+            candidate.write_text(json.dumps(self.candidate))
+            report.write_text(json.dumps(self.usage(return_use=False, retrieval_one='not_found',
+                                                     retrieval_two='not_tried', collection_restart='restored',
+                                                     status='incomplete', obstacle='PRIVATE prose')))
+            result = subprocess.run([sys.executable, str(pathlib.Path(manual_evidence.__file__)),
+                                     '--candidate', str(candidate), '--report', str(report), '--output', str(out)],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            summary = json.loads((out / 'intake.json').read_text())
+            self.assertEqual(summary['counts']['incomplete'], 1)
+            self.assertEqual(summary['outputs'], ['usage-observations.json'])
+            observations = json.loads((out / 'usage-observations.json').read_text())['observations'][0]
+            self.assertEqual(observations['retrieval_one'], 'not_found')
+            self.assertEqual(observations['retrieval_two'], 'not_tried')
+            self.assertEqual(observations['collection_restart'], 'restored')
+            self.assertFalse(observations['return_use'])
+            self.assertNotIn('PRIVATE', (out / 'usage-observations.json').read_text())
+            self.assertFalse((out / 'supplemental.json').exists())
+
+            failed = self.usage(return_use=False, retrieval_one='not_found', retrieval_two='found',
+                                 collection_restart='not_restored', status='failed', obstacle='PRIVATE failure')
+            report.write_text(json.dumps(failed))
+            result = subprocess.run([sys.executable, str(pathlib.Path(manual_evidence.__file__)),
+                                     '--candidate', str(candidate), '--report', str(report), '--output', str(out)],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            summary = json.loads((out / 'intake.json').read_text())
+            self.assertEqual(summary['status'], 'blocked')
+            self.assertEqual(summary['counts']['failed'], 1)
+            self.assertEqual(summary['outputs'], ['usage-observations.json'])
+            observations = json.loads((out / 'usage-observations.json').read_text())['observations'][0]
+            self.assertEqual(observations['status'], 'failed')
+            self.assertEqual(observations['retrieval_one'], 'not_found')
+            self.assertEqual(observations['retrieval_two'], 'found')
+            self.assertEqual(observations['collection_restart'], 'not_restored')
+            self.assertNotIn('PRIVATE', (out / 'usage-observations.json').read_text())
+            self.assertFalse((out / 'supplemental.json').exists())
 
     def test_task24_acceptance_kit_report_shape_and_aggregate_status(self):
         report = self.manual()
