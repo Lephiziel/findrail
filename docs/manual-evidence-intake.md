@@ -22,9 +22,10 @@ deduplicated exactly; distinct references, hashes, signatures, and operator
 attestations do not establish distinct people. Do not collect names, email, or
 device identifiers.
 
-Manual first-run `kind` is `windows_first_run` or `apple_silicon_first_run` and
-also requires `evidence_type: manual`, exact target (`windows-amd64` or
-`darwin-arm64`), the actual `archive_sha256`, and all eight cases: `install`,
+Manual first-run `kind` is `windows_first_run`, `apple_silicon_first_run`, or
+`linux_first_run`; it also requires `evidence_type: manual`, exact target
+(`windows-amd64`, `darwin-arm64`, or `linux-amd64`), the actual `archive_sha256`,
+and all eight cases: `install`,
 `launch`, `repeat-launch`, `retrieval`, `collection-restart`, `refresh`, `quit`,
 `uninstall-data-preserved`. Each case has status `passed`, `failed`, or `not_run`,
 nullable real `elapsed_seconds`, and optional short obstacle. TASK24 kit reports
@@ -36,14 +37,60 @@ fields (schema/API and manifest/checksum hashes) are checked against the strict
 candidate summary. Observer, date, notes, and observations are bounded input
 only and are never exported. Unknown time stays `null`, never zero. Failed,
 unrun, or unmeasured cases remain useful draft data but cannot become a passed
-record.
+record. A blank Linux kit may leave `reference` empty and is classified
+`incomplete`; it cannot produce readiness evidence.
+
+Linux first-run intake is deliberately separate from readiness. A valid
+Linux-only invocation writes `linux-observations.json`, never `supplemental.json`.
+Its version-1 format contains the candidate identity and sanitized observations:
+
+```json
+{
+  "format_version": 1,
+  "kind": "linux_first_run",
+  "candidate_sha": "<verified candidate SHA>",
+  "candidate_version": "<verified candidate version>",
+  "observations": [{
+    "status": "incomplete",
+    "target": "linux-amd64",
+    "archive_sha256": "<matching archive hash>",
+    "reference": "",
+    "cases": [
+      {"case": "install", "status": "not_run", "elapsed_seconds": null},
+      {"case": "launch", "status": "not_run", "elapsed_seconds": null},
+      {"case": "repeat-launch", "status": "not_run", "elapsed_seconds": null},
+      {"case": "retrieval", "status": "not_run", "elapsed_seconds": null},
+      {"case": "collection-restart", "status": "not_run", "elapsed_seconds": null},
+      {"case": "refresh", "status": "not_run", "elapsed_seconds": null},
+      {"case": "quit", "status": "not_run", "elapsed_seconds": null},
+      {"case": "uninstall-data-preserved", "status": "not_run", "elapsed_seconds": null}
+    ]
+  }]
+}
+```
+
+The real output has all eight ordered cases. It contains no free-form
+observations. Complete and well-formed failed Linux reports are still standalone
+feedback, not a new readiness kind or gate. `intake.json` counts `complete`,
+`incomplete`, `failed`, and `mismatch`; a validated failure is retained with its
+failed status and case outcomes, but makes intake `blocked`. Malformed,
+mismatched, or duplicate-reference runs do not export report details and clear
+prior supplemental/observation outputs.
 
 Voluntary-use reports require `evidence_type: manual`, `return_use` boolean,
 `retrieval_one` and `retrieval_two` (`found`, `not_found`, or `not_tried`), and
 `collection_restart` (`restored`, `not_restored`, or `not_tried`). The report is
 complete only when the person returned, tried both searches, and tried the
 collection restart. `not_found` and `not_restored` are retained as real outcomes.
-No query, document, or local path is needed.
+First use does not set `return_use: true`; set it only after actually returning
+later. Skipped tasks stay `not_tried` and incomplete. No query, document, or
+local path is needed. `VOLUNTARY_USAGE_TEMPLATE.json` is a separate blank draft,
+not the first-run report. Valid incomplete voluntary reports produce a
+sanitized `usage-observations.json` retaining these outcome facts, including a
+well-formed report marked failed; such an intake remains blocked. A full matching
+report continues through the existing readiness `supplemental.json` contract.
+Unknown SHA feedback can still be qualitatively useful, but it cannot match a
+candidate or count as release evidence.
 
 Only allowlisted evidence fields go to `supplemental.json`; free-form obstacle
 text and local input paths do not. JSON is capped at 1 MiB per file, usage intake
@@ -63,12 +110,15 @@ python3 scripts/manual_evidence.py \
 
 Use a separate invocation and output directory for each kind. `intake.json`
 reports `recorded`, `incomplete`, or `blocked`, with received/complete/
-incomplete/failed/mismatch counts. It is not a beta or release decision. A
-`supplemental.json` is written only when every supplied report is complete,
-valid, unique, and for one kind and candidate. Any rerun removes a previous
-supplemental file before validation, so a failed rerun cannot leave stale
-evidence. Incomplete and invalid reports are counted, never silently filtered
-into an apparent complete set. Keep test fixtures out of actual readiness runs.
+incomplete/failed/mismatch counts and fixed output filenames. It is not a beta or
+release decision. A readiness `supplemental.json` is written only when every
+supplied Windows/Apple/voluntary report is complete, valid, unique, matching and
+for one kind/candidate. Linux first-run and non-complete voluntary observations
+use their separate sanitized outputs and are never readiness supplemental
+records. Any rerun removes prior success files before validation, so a failed
+rerun cannot leave stale evidence. Incomplete and invalid reports are counted,
+never silently filtered into an apparent complete set. Keep test fixtures out of
+actual readiness runs.
 
 An issue form is optional; a local private report is allowed. Publishing any
 report is a separate voluntary human action. Native automated tests are not
