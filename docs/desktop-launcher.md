@@ -44,3 +44,31 @@ from an extracted candidate, launch from the OS menu/shortcut, launch it a
 second time, close only the tab and confirm the server remains, Quit from the
 UI, then uninstall and confirm the data directory still exists. Cross-compiling
 does not count as native GUI or ARM runtime validation.
+
+## Windows startup errors
+
+An interactive Windows desktop launch that fails shows a short native error
+dialog. It does not include the underlying error details; for diagnostics, run
+`findrail desktop` with the same options from a terminal in the extracted
+folder. The original error remains on stderr and the process keeps its normal
+nonzero exit code. Version queries, the PDF extraction worker, help requests,
+cancellations, and invocations with `CI` set do not show a dialog. Linux and
+macOS retain their existing stderr-only behavior. No extra runtime component is
+required; if Windows cannot display the dialog, stderr remains the fallback.
+
+For the owner's Windows VM check on the final packaged bytes, use a normal
+PowerShell session (not elevated) and a fresh extracted package. This synthetic
+failure points the data directory at an existing Windows file, so Findrail
+fails before opening or changing an index:
+
+```powershell
+$readOnlyFile = Join-Path $env:WINDIR 'System32\drivers\etc\hosts'
+.\findrail-desktop.exe --data-dir $readOnlyFile
+```
+
+Expected: one **Findrail** error dialog says startup failed, suggests checking
+data-directory access and running the CLI for details, and does not display the
+path or raw error. Dismiss it with **OK**; the launcher exits nonzero. The
+Windows file and any personal Findrail data remain untouched. This is a safe
+automated/code-test scenario until the owner performs the matching human VM
+check; it is not manual Windows acceptance.

@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/Lephiziel/findrail/internal/cli"
+	"github.com/Lephiziel/findrail/internal/desktop"
 )
 
 var version = "dev"
@@ -23,7 +23,8 @@ func main() {
 		args = append([]string{"desktop"}, args...)
 	}
 	if err := cli.Run(ctx, args, os.Stdout, os.Stderr, version); err != nil {
-		fmt.Fprintln(os.Stderr, "findrail-desktop:", err)
+		machine := os.Getenv("CI") != ""
+		err = desktop.ReportStartupFailure(os.Args[1:], err, os.Stderr, desktop.NotifyStartupFailure, machine)
 		var exit interface{ ExitCode() int }
 		if errors.As(err, &exit) {
 			os.Exit(exit.ExitCode())

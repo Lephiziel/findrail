@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -115,4 +117,43 @@ func TestDesktopReopensOneInstanceAndAuthenticatedQuitReleasesOwnership(t *testi
 		t.Fatalf("ownership was not released: %v", err)
 	}
 	lock.Close()
+}
+
+func TestDesktopRejectsFileAsDataDirectory(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-directory")
+	want := []byte("synthetic test file")
+	if err := os.WriteFile(file, want, 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := runDesktop(context.Background(), []string{"--data-dir", file}, io.Discard, io.Discard, func(string) error {
+		t.Fatal("unexpected browser open")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("accepted a regular file as the data directory")
+	}
+	got, readErr := os.ReadFile(file)
+	if readErr != nil || !bytes.Equal(got, want) {
+		t.Fatalf("synthetic data path changed: %q, %v", got, readErr)
+	}
+}
+
+func TestDesktopCancellationReleasesOwnership(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dir := t.TempDir()
+	err := runDesktop(ctx, []string{"--data-dir", dir}, io.Discard, io.Discard, func(string) error {
+		t.Fatal("canceled desktop opened a browser")
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled startup error = %v", err)
+	}
+	lock, err := desktop.Acquire(dir)
+	if err != nil {
+		t.Fatalf("cancellation retained desktop ownership: %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
