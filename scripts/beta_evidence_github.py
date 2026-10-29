@@ -22,6 +22,7 @@ API_ROOT = "https://api.github.com/repos/" + REPOSITORY
 WORKFLOWS = {
     "candidate": ".github/workflows/alpha-release.yml",
     "performance": ".github/workflows/performance-check.yml",
+    "handoff": ".github/workflows/beta-evidence.yml",
 }
 RUN_ID_RE = beta_evidence.RUN_ID_RE
 MAX_API_JSON = 16 << 20
@@ -156,7 +157,7 @@ def _jobs(api, run_id):
     return normalized
 
 
-def _artifacts(api, run_id, run, candidate_sha):
+def _artifacts(api, run_id, run, candidate_sha, kind):
     page = api.json(f"/actions/runs/{run_id}/artifacts?per_page=100")
     require(type(page.get("total_count")) is int and type(page.get("artifacts")) is list and
             page["total_count"] == len(page["artifacts"]) and len(page["artifacts"]) < 100,
@@ -168,8 +169,9 @@ def _artifacts(api, run_id, run, candidate_sha):
         require(type(artifact) is dict and type(artifact.get("workflow_run")) is dict,
                 "artifact_identity_invalid")
         provenance = artifact["workflow_run"]
+        expected_head_sha = run["head_sha"] if kind == "handoff" else candidate_sha
         require(provenance.get("id") == int(run_id) and
-                provenance.get("head_sha") == candidate_sha and
+                provenance.get("head_sha") == expected_head_sha and
                 provenance.get("head_branch") == "main" and
                 provenance.get("repository_id") == repository_id and
                 provenance.get("head_repository_id") == repository_id,
@@ -195,11 +197,14 @@ def _normalize_run(api, run_id, kind, candidate_sha):
     workflow_id = _workflow(api, workflow_path)
     run = api.json(f"/actions/runs/{run_id}")
     expected_url = f"https://github.com/{REPOSITORY}/actions/runs/{run_id}"
+    expected_head = run.get("head_sha") if kind == "handoff" else candidate_sha
     require(str(run.get("id", "")) == str(run_id) and
             run.get("workflow_id") == workflow_id and
             run.get("repository", {}).get("full_name") == REPOSITORY and
             run.get("head_repository", {}).get("full_name") == REPOSITORY and
-            run.get("head_sha") == candidate_sha and run.get("head_branch") == "main" and
+            run.get("head_sha") == expected_head and
+            beta_evidence.SHA_RE.fullmatch(str(expected_head)) is not None and
+            run.get("head_branch") == "main" and
             run.get("status") == "completed" and run.get("conclusion") == "success" and
             run.get("event") == ("push" if kind == "candidate" else "workflow_dispatch") and
             run.get("html_url") == expected_url and
@@ -210,7 +215,7 @@ def _normalize_run(api, run_id, kind, candidate_sha):
         require(type(run_path) is str and run_path.split("@", 1)[0] == workflow_path,
                 f"{kind}_workflow_path_invalid")
     jobs = _jobs(api, str(run_id))
-    artifacts = _artifacts(api, str(run_id), run, candidate_sha)
+    artifacts = _artifacts(api, str(run_id), run, candidate_sha, kind)
     return {
         "run_id": str(run_id), "run_attempt": run["run_attempt"],
         "workflow_id": str(workflow_id), "workflow_path": workflow_path,
@@ -273,7 +278,8 @@ def _extract_zip(archive_path, destination):
 
 
 def preflight(candidate_sha, candidate_version, candidate_run_id,
-              performance_run_id, download_dir, metadata_path, token=None):
+              performance_run_id, download_dir, metadata_path, token=None,
+              previous_handoff_run_id=None):
     require(candidate_version == beta_evidence.VERSION and
             beta_evidence.SHA_RE.fullmatch(candidate_sha) is not None,
             "candidate_identity_mismatch")
@@ -283,6 +289,15 @@ def preflight(candidate_sha, candidate_version, candidate_run_id,
     api = GitHubAPI(token if token is not None else os.environ.get("GITHUB_TOKEN", ""))
     candidate = _normalize_run(api, str(candidate_run_id), "candidate", candidate_sha)
     performance = _normalize_run(api, str(performance_run_id), "performance", candidate_sha)
+    previous_handoff = previous_artifact = None
+    if previous_handoff_run_id is not None:
+        require(RUN_ID_RE.fullmatch(str(previous_handoff_run_id)) is not None,
+                "previous_handoff_run_id_invalid")
+        previous_handoff = _normalize_run(api, str(previous_handoff_run_id),
+                                          "handoff", candidate_sha)
+        previous_name = (f"beta-evidence-handoff-{previous_handoff['run_id']}-"
+                         f"{previous_handoff['run_attempt']}")
+        previous_artifact = beta_evidence._artifact_by_name(previous_handoff, previous_name)
     assets_artifact = beta_evidence._artifact_by_name(
         candidate, f"release-assets-{candidate_sha}")
     metadata = {
@@ -291,6 +306,9 @@ def preflight(candidate_sha, candidate_version, candidate_run_id,
         "candidate_run": candidate, "performance_run": performance,
         "candidate_delivery_url": assets_artifact["url"],
     }
+    if previous_handoff is not None:
+        metadata["previous_handoff_run"] = previous_handoff
+        metadata["previous_handoff_artifact"] = previous_artifact
     try:
         beta_evidence.validate_trusted_metadata(metadata, candidate_sha, candidate_version)
     except beta_evidence.EvidenceError as error:
@@ -309,6 +327,8 @@ def preflight(candidate_sha, candidate_version, candidate_run_id,
         (performance, f"performance-series-{candidate_sha}-{performance_run_id}", "performance-series"),
         (performance, f"performance-soak-{candidate_sha}-{performance_run_id}", "performance-soak"),
     )
+    if previous_handoff is not None:
+        selected += ((previous_handoff, previous_artifact["name"], "previous-handoff"),)
     downloaded_total = 0
     extracted_total = 0
     try:
@@ -334,7 +354,8 @@ def preflight(candidate_sha, candidate_version, candidate_run_id,
         metadata_path.unlink(missing_ok=True)
         raise
     return {"status": "preflight_passed", "candidate_run_id": str(candidate_run_id),
-            "performance_run_id": str(performance_run_id), "artifacts_downloaded": 5}
+            "performance_run_id": str(performance_run_id),
+            "artifacts_downloaded": len(selected)}
 
 
 def main(argv=None):
@@ -344,13 +365,15 @@ def main(argv=None):
     parser.add_argument("--candidate-version", required=True)
     parser.add_argument("--candidate-run-id", required=True)
     parser.add_argument("--performance-run-id", required=True)
+    parser.add_argument("--previous-handoff-run-id")
     parser.add_argument("--download-dir", required=True, type=pathlib.Path)
     parser.add_argument("--metadata", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
     try:
         result = preflight(args.candidate_sha, args.candidate_version,
                            args.candidate_run_id, args.performance_run_id,
-                           args.download_dir, args.metadata)
+                           args.download_dir, args.metadata,
+                           previous_handoff_run_id=args.previous_handoff_run_id)
         print(json.dumps(result, sort_keys=True))
         return 0
     except PreflightError as error:

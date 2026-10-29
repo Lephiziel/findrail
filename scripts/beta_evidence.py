@@ -46,6 +46,7 @@ RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
 # outputs while keeping untrusted JSON and archives finite.
 MAX_JSON = 16 << 20
 MAX_MANUAL_JSON = 8 << 10
+MAX_LINUX_OBSERVATIONS = 1 << 20
 MAX_INPUT_FILES = 256
 MAX_INPUT_TREE = 512 << 20
 MAX_REPORT_TREE = 64 << 20
@@ -56,6 +57,7 @@ MAX_ARCHIVE_TOTAL = 256 << 20
 MAX_ZIP_RATIO = 1000
 MAX_ZIP_MEMBERS = 512
 MAX_REPORTS_ZIP = 128 << 20
+MAX_SOAK_REPORT = 16 << 20
 MAX_SCALE_JSON = 4 << 20
 MAX_PROVENANCE = 128 << 10
 
@@ -354,6 +356,21 @@ def validate_trusted_metadata(metadata, candidate_sha, candidate_version):
                     f"{candidate['run_id']}/artifacts/{candidate_assets['id']}")
     require(metadata.get("candidate_delivery_url") == expected_url,
             "candidate_delivery_url_invalid")
+    previous_run = metadata.get("previous_handoff_run")
+    previous_artifact = metadata.get("previous_handoff_artifact")
+    require((previous_run is None) == (previous_artifact is None),
+            "previous_handoff_metadata_invalid")
+    if previous_run is not None:
+        _validate_normalized_run(previous_run, "handoff", candidate_sha)
+        expected_name = (f"beta-evidence-handoff-{previous_run['run_id']}-"
+                         f"{previous_run['run_attempt']}")
+        _validate_artifacts(previous_run, {expected_name})
+        require(previous_run["workflow_path"] == ".github/workflows/beta-evidence.yml" and
+                previous_run["event"] == "workflow_dispatch" and
+                type(previous_artifact) is dict and
+                previous_artifact.get("name") == expected_name and
+                previous_artifact == _artifact_by_name(previous_run, expected_name),
+                "previous_handoff_metadata_invalid")
     return metadata
 
 
@@ -364,12 +381,16 @@ def _validate_normalized_run(run, kind, candidate_sha):
             run.get("workflow_id") and str(run["workflow_id"]).isdigit(),
             f"{kind}_run_invalid")
     run_id = str(run["run_id"])
+    expected_head = (run.get("head_sha") if kind == "handoff" else candidate_sha)
     require((run.get("head_sha"), run.get("head_branch"), run.get("status"),
              run.get("conclusion"), run.get("url")) ==
-            (candidate_sha, "main", "completed", "success",
-             f"https://github.com/{REPOSITORY}/actions/runs/{run_id}"),
+            (expected_head, "main", "completed", "success",
+             f"https://github.com/{REPOSITORY}/actions/runs/{run_id}") and
+            (SHA_RE.fullmatch(str(expected_head)) is not None),
             f"{kind}_run_mismatch")
-    required_jobs = CANDIDATE_JOB_NAMES if kind == "candidate" else PERFORMANCE_JOB_NAMES
+    required_jobs = {"candidate": CANDIDATE_JOB_NAMES,
+                     "performance": PERFORMANCE_JOB_NAMES,
+                     "handoff": {"handoff"}}[kind]
     jobs = run.get("jobs")
     require(type(jobs) is list, f"{kind}_jobs_invalid")
     by_name = {}
@@ -436,7 +457,8 @@ def _validate_summary(summary, assets_dir, sha, version):
     except (ValueError, KeyError, TypeError, AttributeError, StopIteration):
         raise EvidenceError("strict_candidate_invalid") from None
     manifest = validate_assets(assets_dir, sha, version)
-    manifest_assets = {item["basename"]: item for item in manifest["assets"]}
+    manifest_assets = {item["basename"]: item
+                       for item in _full_asset_inventory(assets_dir, manifest)}
     summary_assets = summary.get("assets", [])
     require(type(summary_assets) is list and len(summary_assets) == len(manifest_assets),
             "summary_assets_invalid")
@@ -451,6 +473,28 @@ def _validate_summary(summary, assets_dir, sha, version):
                 (expected["size"], expected["sha256"]), "summary_asset_mismatch")
     require(seen == set(manifest_assets), "summary_assets_invalid")
     return native, manifest
+
+
+def _full_asset_inventory(assets_dir, manifest):
+    """Return all eight verified files, including the manifest and checksums."""
+    root = pathlib.Path(assets_dir)
+    expected = (set(release_assets.expected_archives(VERSION)) |
+                {release_assets.VSIX, "release-manifest.json", "SHA256SUMS.txt"})
+    manifest_assets = {item["basename"]: item for item in manifest["assets"]}
+    require(set(manifest_assets) == expected - {"release-manifest.json", "SHA256SUMS.txt"},
+            "release_manifest_assets_invalid")
+    inventory = []
+    for name in sorted(expected):
+        path = root / name
+        record = {"basename": name, "size": path.stat().st_size,
+                  "sha256": file_digest(path, MAX_INPUT_TREE)}
+        if name in manifest_assets:
+            producer_record = manifest_assets[name]
+            require((record["size"], record["sha256"]) ==
+                    (producer_record["size"], producer_record["sha256"]),
+                    "release_manifest_assets_invalid")
+        inventory.append(record)
+    return inventory
 
 
 def extract_candidate(assets_dir, summary_path, sha, version, output_dir):
@@ -833,8 +877,8 @@ def _validate_series(series_dir, candidate_sha, candidate_version, binary_sha):
 
 def _validate_soak(soak_path, candidate_sha, candidate_version, binary_sha):
     soak_dir = pathlib.Path(soak_path).parent
-    files = safe_tree(soak_dir, max_files=4, max_total=4 << 20,
-                      max_file=MAX_PROVENANCE)
+    files = safe_tree(soak_dir, max_files=4, max_total=MAX_SOAK_REPORT,
+                      max_file=MAX_SOAK_REPORT)
     require({name for name, _, _ in files} == {"report.json", "provenance.txt"},
             "soak_files_incomplete")
     provenance = (soak_dir / "provenance.txt").read_bytes()
@@ -843,7 +887,7 @@ def _validate_soak(soak_path, candidate_sha, candidate_version, binary_sha):
             f"candidate_sha={candidate_sha}" in text and
             "packager=production scripts/package.py; target=linux-amd64" in text,
             "soak_provenance_invalid")
-    report, _ = load_json(soak_path, 2 << 20)
+    report, _ = load_json(soak_path, MAX_SOAK_REPORT)
     binary = report.get("binary", {})
     workload, limits, counters = (report.get(key, {}) for key in
                                   ("workload", "limits", "counters"))
@@ -944,27 +988,20 @@ def _publication_notes(source_path, manual):
     if not manual:
         return source
     if manual.get("windows_outcome") == "complete":
-        old = ("The planned owner Windows VM first-run is not yet a result; manual status remains pending "
-               "until a matching report is reviewed. A passed report will describe only its recorded VM, "
-               "Windows build, and completed scenarios.")
-        new = ("A matching Windows amd64 first-run report for this exact candidate and archive was supplied "
-               "and passed the existing offline manual-evidence validation. The handoff retains its reference "
-               "and eight recorded scenario statuses/timings; environment details and free-form observations "
-               "were not independently verified or retained. This is not a release decision.")
-        require(old in text, "publication_notes_template_changed")
-        text = text.replace(old, new, 1)
-        paragraph = ("This base text does not assert matching beta.1 manual or voluntary-use outcomes. "
-                     "Automated package, browser, or installer checks are not human first-run or "
-                     "voluntary-use reports. Matching observations must be tied to the exact candidate "
-                     "and archive; if they are accepted after this source text is frozen, the "
-                     "publication-notes copy and hash must be updated and reviewed against that "
-                     "evidence before use.")
-        updated = ("The matching Windows first-run report is included as sanitized, candidate-bound "
-                   "evidence in this handoff. Apple Silicon first-run and voluntary-use evidence remain "
-                   "pending. The static base above is retained except for the superseded Windows status; "
-                   "this supplement does not authorize publication.")
-        require(paragraph in text, "publication_notes_template_changed")
-        text = text.replace(paragraph, updated, 1)
+        text = _replace_markdown_block(
+            text, "- **Windows amd64:**", "\n- **Linux arm64",
+            "- **Windows amd64:** primary target. A matching Windows amd64 first-run "
+            "report for this exact candidate and archive was supplied and passed the "
+            "existing offline manual-evidence validation. This handoff retains its "
+            "public reference and recorded scenario outcomes/timings; environment "
+            "details and free-form observations were not independently verified or "
+            "retained. This is not a release decision.")
+        text = _replace_markdown_block(
+            text, "This base text does not assert matching beta.1 manual or voluntary-use outcomes.",
+            "\n\n## Product and operational limits",
+            "The matching Windows first-run report is included as sanitized, candidate-bound "
+            "evidence in this handoff. Apple Silicon first-run and voluntary-use evidence "
+            "remain pending. This supplement does not authorize publication.")
     additions = []
     if manual.get("windows_outcome") == "incomplete":
         additions.append("- Windows amd64 first-run: a matching report was received but remains incomplete; readiness is pending.")
@@ -975,6 +1012,13 @@ def _publication_notes(source_path, manual):
     if additions:
         text += "\n\n## Candidate-bound handoff supplement\n\n" + "\n".join(additions) + "\n"
     return text.encode("utf-8")
+
+
+def _replace_markdown_block(text, start_marker, end_marker, replacement):
+    start = text.find(start_marker)
+    end = text.find(end_marker, start + len(start_marker)) if start >= 0 else -1
+    require(start >= 0 and end >= 0, "publication_notes_template_changed")
+    return text[:start] + replacement + text[end:]
 
 
 def _stage_copy(source, destination, maximum=MAX_FILE):
@@ -1076,7 +1120,7 @@ def _build_payload(stage, args, candidate, native, manifest, run_metadata,
     _copy_tree(args.performance_series_dir, stage / "performance-series",
                max_total=MAX_REPORT_TREE)
     _copy_tree(pathlib.Path(args.performance_soak).parent, stage / "performance-soak",
-               max_total=4 << 20, max_file=MAX_PROVENANCE)
+               max_total=MAX_SOAK_REPORT, max_file=MAX_SOAK_REPORT)
     _copy_tree(args.kits_dir, stage / "kits", max_total=24 << 20,
                max_file=8 << 20)
     for target in ("linux-amd64", "windows-amd64", "darwin-arm64"):
@@ -1111,10 +1155,7 @@ def _build_payload(stage, args, candidate, native, manifest, run_metadata,
                                       readiness_evidence, readiness_path)
     _expected_readiness(readiness_result, sha, version, windows_passed)
 
-    assets = []
-    for item in manifest["assets"]:
-        assets.append({"basename": item["basename"], "size": item["size"],
-                       "sha256": item["sha256"]})
+    assets = _full_asset_inventory(args.assets_dir, manifest)
     candidate_run = run_metadata["candidate_run"]
     performance_run = run_metadata["performance_run"]
     candidate_artifacts = [{key: item[key] for key in
@@ -1384,6 +1425,7 @@ def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=No
             index.get("candidate", {}).get("sha") == sha and
             index.get("candidate", {}).get("version") == version and
             index.get("final_release") is False, "evidence_index_invalid")
+    _validate_refresh_provenance(index)
     summary, _ = load_json(paths["main-verification/verification-summary.json"])
     native, asset_manifest = _validate_summary(summary, assets_dir, sha, version)
     binary_sha = native["linux-amd64"]["binary_sha256"]
@@ -1426,7 +1468,8 @@ def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=No
         require(outcome == "incomplete" and window.get("status") in ("incomplete", "not_run"),
                 "windows_intake_invalid")
     if "manual-evidence/linux-observations.json" in paths:
-        observations, _ = load_json(paths["manual-evidence/linux-observations.json"], 64 << 10)
+        observations, _ = load_json(paths["manual-evidence/linux-observations.json"],
+                                    MAX_LINUX_OBSERVATIONS)
         _validate_linux_observations(observations, summary, native)
     readiness_path = paths.get("readiness-after-scale.json")
     require(readiness_path is not None, "readiness_missing")
@@ -1454,6 +1497,8 @@ def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=No
 
 def _validate_linux_observations(observations, candidate, native):
     require(type(observations) is dict and
+            set(observations) == {"format_version", "kind", "candidate_sha",
+                                  "candidate_version", "observations"} and
             (observations.get("format_version"), observations.get("kind"),
              observations.get("candidate_sha"), observations.get("candidate_version")) ==
             (1, "linux_first_run", candidate["candidate_sha"], candidate["candidate_version"]),
@@ -1486,6 +1531,20 @@ def _validate_linux_observations(observations, candidate, native):
                       math.isfinite(item["elapsed_seconds"]) and item["elapsed_seconds"] >= 0)) and
                     set(item) == {"case", "status", "elapsed_seconds"},
                     "linux_observations_invalid")
+        manual_record = {
+            "kind": "linux_first_run", "evidence_type": "manual",
+            "status": "passed" if record["status"] == "complete" else "incomplete",
+            "candidate_sha": candidate["candidate_sha"],
+            "candidate_version": candidate["candidate_version"],
+            "target": "linux-amd64", "archive_sha256": expected_archive,
+            "reference": reference,
+            "cases": [{**item, "observation": ""} for item in cases],
+        }
+        try:
+            outcome = manual_evidence.validate(manual_record, candidate, native)
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            raise EvidenceError("linux_observations_invalid") from None
+        require(outcome == record["status"], "linux_observations_invalid")
 
 
 def _verify_manual_payload(paths, manual, candidate, native):
@@ -1513,14 +1572,50 @@ def _verify_manual_payload(paths, manual, candidate, native):
 
 def _verify_asset_index(index, manifest, assets_dir, sha, version):
     candidate = index.get("candidate", {})
-    actual = [{"basename": item["basename"], "size": item["size"], "sha256": item["sha256"]}
-              for item in manifest["assets"]]
+    actual = _full_asset_inventory(assets_dir, manifest)
     require(candidate.get("assets") == actual and
             candidate.get("manifest_sha256") == file_digest(pathlib.Path(assets_dir) / "release-manifest.json") and
             candidate.get("checksums_sha256") == file_digest(pathlib.Path(assets_dir) / "SHA256SUMS.txt") and
             (candidate.get("schema_version"), candidate.get("client_api_version"),
              candidate.get("vsix_version")) == (SCHEMA, CLIENT_API, VSIX_VERSION),
             "evidence_index_assets_invalid")
+
+
+def _validate_refresh_provenance(index):
+    provenance = index.get("refresh_provenance")
+    if provenance is None:
+        return
+    require(type(provenance) is dict and
+            set(provenance) == {"previous_handoff_run", "previous_handoff_artifact"},
+            "refresh_provenance_invalid")
+    run = provenance["previous_handoff_run"]
+    artifact = provenance["previous_handoff_artifact"]
+    run_fields = {"run_id", "run_attempt", "workflow_id", "workflow_path", "event",
+                  "head_branch", "head_sha", "status", "conclusion", "url"}
+    artifact_fields = {"name", "id", "digest", "size_in_bytes", "expires_at", "url"}
+    require(type(run) is dict and set(run) == run_fields and
+            RUN_ID_RE.fullmatch(str(run.get("run_id", ""))) is not None and
+            type(run.get("run_attempt")) is int and run["run_attempt"] > 0 and
+            type(run.get("workflow_id")) is str and run["workflow_id"].isdigit() and
+            run.get("workflow_path") == ".github/workflows/beta-evidence.yml" and
+            run.get("event") == "workflow_dispatch" and run.get("head_branch") == "main" and
+            SHA_RE.fullmatch(str(run.get("head_sha", ""))) is not None and
+            (run.get("status"), run.get("conclusion")) == ("completed", "success") and
+            run.get("url") ==
+            f"https://github.com/{REPOSITORY}/actions/runs/{run['run_id']}" and
+            type(artifact) is dict and set(artifact) == artifact_fields,
+            "refresh_provenance_invalid")
+    artifact_name = f"beta-evidence-handoff-{run['run_id']}-{run['run_attempt']}"
+    artifact_id = str(artifact.get("id", ""))
+    require(artifact.get("name") == artifact_name and
+            RUN_ID_RE.fullmatch(artifact_id) is not None and
+            ARTIFACT_DIGEST_RE.fullmatch(str(artifact.get("digest", ""))) is not None and
+            type(artifact.get("size_in_bytes")) is int and
+            0 < artifact["size_in_bytes"] <= MAX_INPUT_TREE and
+            type(artifact.get("expires_at")) is str and
+            artifact.get("url") ==
+            f"https://github.com/{REPOSITORY}/actions/runs/{run['run_id']}/artifacts/{artifact_id}",
+            "refresh_provenance_invalid")
 
 
 def _verify_reports_zip(root, zip_path):
@@ -1539,6 +1634,316 @@ def _verify_reports_zip(root, zip_path):
         raise
     except (OSError, zipfile.BadZipFile, KeyError, RuntimeError):
         raise EvidenceError("reports_zip_invalid") from None
+
+
+def _tree_digests(root, *, max_total=MAX_REPORT_TREE, max_file=MAX_FILE):
+    files = safe_tree(root, max_files=MAX_INPUT_FILES, max_total=max_total,
+                      max_file=max_file)
+    return {name: (size, file_digest(path)) for name, path, size in files}
+
+
+def _run_identity_matches(index_run, trusted_run):
+    fields = ("run_id", "run_attempt", "workflow_id", "workflow_path", "event",
+              "head_branch", "head_sha", "conclusion", "url")
+    require(type(index_run) is dict and
+            all(index_run.get(key) == trusted_run.get(key) for key in fields),
+            "previous_handoff_run_mismatch")
+
+
+def _artifact_inventory_matches(index_artifacts, trusted_run, expected_names):
+    expected = [{key: item[key] for key in
+                 ("name", "id", "digest", "size_in_bytes", "expires_at", "url")}
+                for item in trusted_run["artifacts"] if item["name"] in expected_names]
+    key = lambda item: item["name"]
+    require(sorted(index_artifacts, key=key) == sorted(expected, key=key),
+            "previous_handoff_artifact_mismatch")
+
+
+def _verify_previous_handoff(bundle_dir, assets_dir, source_artifacts_dir,
+                              metadata, sha, version):
+    bundle_dir = pathlib.Path(bundle_dir)
+    files = safe_tree(bundle_dir, max_files=MAX_INPUT_FILES,
+                      max_total=MAX_HANDOFF_TREE + MAX_REPORTS_ZIP,
+                      max_file=MAX_REPORTS_ZIP)
+    paths = {name: path for name, path, _ in files}
+    required = {"result.json", "diagnostics.json", "beta-evidence-reports.zip",
+                "handoff/evidence-index.json", "handoff/PACKAGE-MANIFEST.json"}
+    require(required <= set(paths) and
+            {name.split("/", 1)[0] for name in paths} <=
+            {"result.json", "diagnostics.json", "beta-evidence-reports.zip", "handoff"},
+            "previous_handoff_layout_invalid")
+    result, _ = load_json(paths["result.json"], 1 << 20)
+    diagnostics, _ = load_json(paths["diagnostics.json"], 1 << 20)
+    reports_zip = paths["beta-evidence-reports.zip"]
+    reports_sha = file_digest(reports_zip, MAX_REPORTS_ZIP)
+    require((result.get("result_version"), result.get("status"),
+             result.get("candidate_sha"), result.get("candidate_version"),
+             result.get("report_zip_sha256")) ==
+            (1, "passed", sha, version, reports_sha) and
+            (diagnostics.get("diagnostic_version"), diagnostics.get("status"),
+             diagnostics.get("candidate_sha"), diagnostics.get("candidate_version"),
+             diagnostics.get("report_zip_sha256")) ==
+            (1, "passed", sha, version, reports_sha), "previous_handoff_result_invalid")
+    handoff = bundle_dir / "handoff"
+    _verify_handoff_directory(handoff, assets_dir, sha, version)
+    _verify_reports_zip(handoff, reports_zip)
+    index, _ = load_json(handoff / "evidence-index.json", 4 << 20)
+    source_runs = index.get("source_runs", {})
+    for name in ("candidate", "performance"):
+        _run_identity_matches(source_runs.get(name), metadata[name + "_run"])
+    _artifact_inventory_matches(
+        source_runs.get("candidate_artifacts"), metadata["candidate_run"],
+        {f"release-assets-{sha}", f"release-verification-{sha}",
+         f"release-package-{sha}-linux-amd64"})
+    perf_run = metadata["performance_run"]
+    _artifact_inventory_matches(
+        source_runs.get("performance_artifacts"), perf_run,
+        {f"performance-series-{sha}-{perf_run['run_id']}",
+         f"performance-soak-{sha}-{perf_run['run_id']}"})
+    require(index.get("candidate", {}).get("candidate_delivery_url") ==
+            metadata.get("candidate_delivery_url"), "previous_handoff_run_mismatch")
+
+    source_root = pathlib.Path(source_artifacts_dir)
+    require(file_digest(handoff / "main-verification/verification-summary.json") ==
+            file_digest(source_root / "verification/verification-summary.json"),
+            "previous_handoff_source_mismatch")
+    require(file_digest(handoff / "linux-package/recovery-candidate.json") ==
+            file_digest(source_root / "linux-package/recovery-candidate.json"),
+            "previous_handoff_source_mismatch")
+    require(_tree_digests(handoff / "performance-series") ==
+            _tree_digests(source_root / "performance-series"),
+            "previous_handoff_source_mismatch")
+    require(_tree_digests(handoff / "performance-soak", max_total=MAX_SOAK_REPORT,
+                          max_file=MAX_SOAK_REPORT) ==
+            _tree_digests(source_root / "performance-soak", max_total=MAX_SOAK_REPORT,
+                          max_file=MAX_SOAK_REPORT), "previous_handoff_source_mismatch")
+    return handoff, index
+
+
+def _existing_windows_intake(handoff, candidate, native):
+    passed_path = pathlib.Path(handoff) / "evidence/windows-first-run.json"
+    incomplete_path = pathlib.Path(handoff) / "manual-evidence/windows-first-run.json"
+    if passed_path.is_file():
+        record, _ = load_json(passed_path)
+        try:
+            outcome = manual_evidence.validate(record, candidate, native)
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            raise EvidenceError("previous_windows_intake_invalid") from None
+        require(outcome == "complete", "previous_windows_intake_invalid")
+        return record, "complete"
+    if incomplete_path.is_file():
+        record, _ = load_json(incomplete_path, MAX_MANUAL_JSON)
+        try:
+            outcome = manual_evidence.validate(record, candidate, native)
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            raise EvidenceError("previous_windows_intake_invalid") from None
+        require(outcome == "incomplete", "previous_windows_intake_invalid")
+        return record, "incomplete"
+    return None, "not_supplied"
+
+
+def _refresh_technical_paths(root):
+    root = pathlib.Path(root)
+    paths = [root / "main-verification/verification-summary.json",
+             root / "linux-package/recovery-candidate.json",
+             root / "evidence/recovery.json", root / "performance-soak/provenance.txt",
+             root / "performance-soak/report.json", root / "scale-10k.json",
+             root / "evidence/scale-10k.json", root / "scale-100k.json",
+             root / "evidence/scale-100k.json",
+             *(root / "kits" / f"{target}.zip" for target in
+               ("linux-amd64", "windows-amd64", "darwin-arm64"))]
+    files = safe_tree(root / "performance-series", max_files=32,
+                      max_total=MAX_REPORT_TREE, max_file=MAX_FILE)
+    paths.extend(path for _, path, _ in files)
+    return {path.relative_to(root).as_posix():
+            (path.stat().st_size, file_digest(path, MAX_SOAK_REPORT
+                                              if path.name == "report.json" and
+                                              path.parent.name == "performance-soak"
+                                              else MAX_FILE))
+            for path in paths}
+
+
+def refresh(args):
+    sha, version = args.candidate_sha, args.candidate_version
+    require(version == VERSION and SHA_RE.fullmatch(sha) is not None,
+            "candidate_identity_mismatch")
+    output_dir, reports_zip = pathlib.Path(args.output_dir), pathlib.Path(args.reports_zip)
+    inputs = [args.previous_bundle_dir, args.source_artifacts_dir, args.assets_dir,
+              args.run_metadata]
+    inputs.extend(path for path in (args.windows_report, args.linux_report) if path)
+    _require_disjoint(output_dir, reports_zip, inputs)
+    _check_components(output_dir, allow_missing=True)
+    _check_components(reports_zip, allow_missing=True)
+    require(not output_dir.exists() and not reports_zip.exists(), "output_exists")
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    reports_zip.parent.mkdir(parents=True, exist_ok=True)
+
+    metadata, _ = load_json(args.run_metadata, 1 << 20)
+    validate_trusted_metadata(metadata, sha, version)
+    require(metadata.get("previous_handoff_run") is not None,
+            "previous_handoff_metadata_missing")
+    manifest = validate_assets(args.assets_dir, sha, version)
+    previous, previous_index = _verify_previous_handoff(
+        args.previous_bundle_dir, args.assets_dir, args.source_artifacts_dir,
+        metadata, sha, version)
+    old_technical = _refresh_technical_paths(previous)
+    summary_path = previous / "main-verification/verification-summary.json"
+    summary, _ = load_json(summary_path)
+    native, _ = _validate_summary(summary, args.assets_dir, sha, version)
+    old_windows, old_windows_outcome = _existing_windows_intake(previous, summary, native)
+    old_linux = None
+    old_linux_outcome = "not_supplied"
+    linux_path = previous / "manual-evidence/linux-observations.json"
+    if linux_path.is_file():
+        old_linux, _ = load_json(linux_path, MAX_LINUX_OBSERVATIONS)
+        _validate_linux_observations(old_linux, summary, native)
+        statuses = [item["status"] for item in old_linux["observations"]]
+        old_linux_outcome = "incomplete" if "incomplete" in statuses else "complete"
+
+    previous_note_state = {}
+    if old_windows_outcome != "not_supplied":
+        previous_note_state["windows_outcome"] = old_windows_outcome
+    if old_linux_outcome != "not_supplied":
+        previous_note_state["linux_outcome"] = old_linux_outcome
+    frozen_notes = _publication_notes(
+        pathlib.Path(__file__).resolve().parents[1] / "docs/release-notes-beta1.md",
+        previous_note_state)
+    require(frozen_notes == (previous / "publication-notes.md").read_bytes(),
+            "previous_publication_notes_invalid")
+
+    new_manual = _prepare_manual_inputs(args.windows_report, args.linux_report,
+                                        summary, native)
+    windows_record, windows_outcome = old_windows, old_windows_outcome
+    if "windows" in new_manual:
+        incoming = new_manual["windows"]
+        incoming_outcome = new_manual["windows_outcome"]
+        require(not (windows_outcome == "complete" and incoming_outcome != "complete"),
+                "windows_passed_evidence_cannot_be_downgraded")
+        windows_record, windows_outcome = incoming, incoming_outcome
+
+    linux_observations = old_linux
+    linux_outcome = old_linux_outcome
+    if "linux" in new_manual:
+        incoming = new_manual["linux"]
+        if linux_observations is None:
+            linux_observations = incoming
+        else:
+            linux_observations["observations"].extend(incoming["observations"])
+        _validate_linux_observations(linux_observations, summary, native)
+        outcomes = [item["status"] for item in linux_observations["observations"]]
+        linux_outcome = "incomplete" if "incomplete" in outcomes else "complete"
+    references = []
+    if windows_record is not None:
+        references.append(windows_record["reference"])
+    if linux_observations is not None:
+        references.extend(item["reference"] for item in linux_observations["observations"]
+                          if item["reference"])
+    require(len(references) == len(set(references)), "manual_reference_duplicate")
+    require("windows" in new_manual or "linux" in new_manual,
+            "manual_refresh_input_required")
+
+    temporary = pathlib.Path(tempfile.mkdtemp(prefix=".beta-evidence-refresh-",
+                                               dir=output_dir.parent))
+    zip_temp = None
+    try:
+        _copy_tree(previous, temporary, max_total=MAX_HANDOFF_TREE,
+                   max_file=MAX_FILE)
+        stage = temporary
+        windows_passed = windows_outcome == "complete"
+        passed_path = stage / "evidence/windows-first-run.json"
+        incomplete_path = stage / "manual-evidence/windows-first-run.json"
+        if windows_outcome == "complete":
+            write_json(passed_path, windows_record)
+            incomplete_path.unlink(missing_ok=True)
+        elif windows_outcome == "incomplete":
+            write_json(incomplete_path, windows_record)
+            passed_path.unlink(missing_ok=True)
+        if linux_observations is not None:
+            write_json(stage / "manual-evidence/linux-observations.json",
+                       linux_observations)
+        if windows_outcome != "not_supplied" or linux_outcome != "not_supplied":
+            write_json(stage / "manual-evidence/intake-summary.json", {
+                "candidate_sha": sha, "candidate_version": version,
+                "windows_first_run": windows_outcome,
+                "linux_first_run": linux_outcome,
+                "apple_silicon_first_run": "pending",
+                "voluntary_usage": "pending"})
+
+        manual_for_notes = {}
+        if windows_outcome != "not_supplied":
+            manual_for_notes["windows_outcome"] = windows_outcome
+        if linux_outcome != "not_supplied":
+            manual_for_notes["linux_outcome"] = linux_outcome
+        notes = _publication_notes(pathlib.Path(__file__).resolve().parents[1] /
+                                   "docs/release-notes-beta1.md", manual_for_notes)
+        (stage / "publication-notes.md").write_bytes(notes)
+
+        readiness_evidence = [stage / "evidence/scale-10k.json",
+                              stage / "evidence/scale-100k.json"]
+        if windows_passed:
+            readiness_evidence.append(passed_path)
+        readiness_path = stage / "readiness-after-scale.json"
+        recovery_path = stage / "linux-package/recovery-candidate.json"
+        readiness_result = _readiness_cli(summary_path, sha, version, recovery_path,
+                                          readiness_evidence, readiness_path)
+        _expected_readiness(readiness_result, sha, version, windows_passed)
+        index_path = stage / "evidence-index.json"
+        index, _ = load_json(index_path, 4 << 20)
+        previous_run = metadata["previous_handoff_run"]
+        previous_artifact = metadata["previous_handoff_artifact"]
+        index["refresh_provenance"] = {
+            "previous_handoff_run": {key: previous_run[key] for key in
+                                      ("run_id", "run_attempt", "workflow_id", "workflow_path",
+                                       "event", "head_branch", "head_sha", "status",
+                                       "conclusion", "url")},
+            "previous_handoff_artifact": {key: previous_artifact[key] for key in
+                                          ("name", "id", "digest", "size_in_bytes",
+                                           "expires_at", "url")}}
+        index["readiness"] = {
+            "software_status": readiness_result["software_status"],
+            "release_readiness": readiness_result["release_readiness"],
+            "final_release": False,
+            "human_pending": [key for key in
+                              ("windows_first_run", "apple_silicon_first_run", "voluntary_usage")
+                              if readiness_result["evidence"][key] == "pending"],
+            "evidence": readiness_result["evidence"]}
+        index["publication_notes_sha256"] = sha256_bytes(notes)
+        index["platform_summary"]["windows-amd64"].update(
+            manual_first_run="passed" if windows_passed else windows_outcome,
+            scope=("operator-supplied matching manual report" if windows_passed else
+                   "matching report supplied" if windows_outcome == "incomplete" else
+                   "not supplied"))
+        index["platform_summary"]["linux-amd64"].update(
+            manual_first_run=("recorded" if linux_outcome == "complete" else
+                              "incomplete" if linux_outcome == "incomplete" else "not supplied"),
+            readiness_gate=False)
+        write_json(index_path, index)
+        write_json(stage / "PACKAGE-MANIFEST.json", {
+            "manifest_version": 1, "files": _manifest_entries(stage)})
+        _verify_handoff_directory(stage, args.assets_dir, sha, version)
+        require(_refresh_technical_paths(stage) == old_technical,
+                "refresh_changed_technical_evidence")
+        zip_temp = reports_zip.parent / ("." + reports_zip.name + ".tmp-" + str(os.getpid()))
+        zip_temp.unlink(missing_ok=True)
+        _zip_reports(stage, zip_temp)
+        _verify_reports_zip(stage, zip_temp)
+        zip_sha = file_digest(zip_temp, MAX_REPORTS_ZIP)
+        os.replace(temporary, output_dir)
+        try:
+            os.replace(zip_temp, reports_zip)
+        except OSError:
+            shutil.rmtree(output_dir, ignore_errors=True)
+            raise
+        _write_diagnostics(args.diagnostics, "passed", "none", zip_sha, sha, version)
+        return {"result_version": 1, "status": "passed", "candidate_sha": sha,
+                "candidate_version": version, "report_zip_sha256": zip_sha}
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        if zip_temp:
+            zip_temp.unlink(missing_ok=True)
+        if output_dir.exists():
+            shutil.rmtree(output_dir, ignore_errors=True)
+        raise
 
 
 def verify(args):
@@ -1576,9 +1981,14 @@ def _write_manual_inputs(args):
     destination = pathlib.Path(args.output_dir)
     _check_components(destination, allow_missing=True)
     destination.mkdir(parents=True, exist_ok=True)
+    require(args.event_path is not None, "workflow_event_missing")
+    event, _ = load_json(args.event_path, 1 << 20)
+    inputs = event.get("inputs")
+    require(type(inputs) is dict, "workflow_event_invalid")
     outputs = {}
-    for field, env_name in (("windows", args.windows_env), ("linux", args.linux_env)):
-        raw = os.environ.get(env_name, "")
+    for field in ("windows", "linux"):
+        raw = inputs.get(field + "_report_json", "")
+        require(type(raw) is str, "manual_report_invalid")
         if raw == "":
             outputs[field] = ""
             continue
@@ -1625,8 +2035,8 @@ def main(argv=None):
     kits.add_argument("--output-dir", required=True, type=pathlib.Path)
     kits.add_argument("--diagnostics", type=pathlib.Path)
     manual = sub.add_parser("write-manual-inputs")
-    manual.add_argument("--windows-env", default="WINDOWS_REPORT_JSON")
-    manual.add_argument("--linux-env", default="LINUX_REPORT_JSON")
+    manual.add_argument("--event-path", default=os.environ.get("GITHUB_EVENT_PATH"),
+                        type=pathlib.Path)
     manual.add_argument("--output-dir", required=True, type=pathlib.Path)
     manual.add_argument("--github-output", type=pathlib.Path)
     assemble_parser = sub.add_parser("assemble")
@@ -1640,6 +2050,15 @@ def main(argv=None):
     assemble_parser.add_argument("--windows-report", type=pathlib.Path)
     assemble_parser.add_argument("--linux-report", type=pathlib.Path)
     assemble_parser.add_argument("--diagnostics", type=pathlib.Path)
+    refresh_parser = sub.add_parser("refresh")
+    for name in ("candidate-sha", "candidate-version"):
+        refresh_parser.add_argument("--" + name, required=True)
+    for name in ("previous-bundle-dir", "source-artifacts-dir", "assets-dir",
+                 "run-metadata", "output-dir", "reports-zip"):
+        refresh_parser.add_argument("--" + name, required=True, type=pathlib.Path)
+    refresh_parser.add_argument("--windows-report", type=pathlib.Path)
+    refresh_parser.add_argument("--linux-report", type=pathlib.Path)
+    refresh_parser.add_argument("--diagnostics", type=pathlib.Path)
     verify_parser = sub.add_parser("verify")
     verify_parser.add_argument("--candidate-sha", required=True)
     verify_parser.add_argument("--candidate-version", required=True)
@@ -1680,6 +2099,10 @@ def main(argv=None):
             result = assemble(args)
             print(json.dumps(result, sort_keys=True, allow_nan=False))
             return 0
+        if args.command == "refresh":
+            result = refresh(args)
+            print(json.dumps(result, sort_keys=True, allow_nan=False))
+            return 0
         if args.command == "verify":
             result = verify(args)
             print(json.dumps(result, sort_keys=True, allow_nan=False))
@@ -1693,7 +2116,7 @@ def main(argv=None):
         code = "input_invalid"
     if diag:
         _write_diagnostics(diag, "failed", code, sha=sha, version=version)
-    if args.command in ("assemble", "verify"):
+    if args.command in ("assemble", "verify", "refresh"):
         print(json.dumps({"result_version": 1, "status": "failed",
                           "candidate_sha": sha if SHA_RE.fullmatch(str(sha or "")) else None,
                           "candidate_version": version if version == VERSION else VERSION,

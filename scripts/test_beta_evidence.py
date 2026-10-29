@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import copy
 import hashlib
 import io
@@ -34,21 +35,25 @@ FUTURE = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 
 
 def _run(kind, run_id):
-    job_names = (evidence.CANDIDATE_JOB_NAMES if kind == "candidate"
-                 else evidence.PERFORMANCE_JOB_NAMES)
+    job_names = (evidence.CANDIDATE_JOB_NAMES if kind == "candidate" else
+                 evidence.PERFORMANCE_JOB_NAMES if kind == "performance" else {"handoff"})
     jobs = [{"name": name, "run_attempt": 2, "status": "completed",
              "conclusion": "skipped" if name == "publish" else "success"}
             for name in sorted(job_names)]
-    run = {"run_id": run_id, "run_attempt": 2, "workflow_id": "101" if kind == "candidate" else "202",
-           "workflow_path": github.WORKFLOWS[kind], "event": "push" if kind == "candidate" else "workflow_dispatch",
+    workflow_id = {"candidate": "101", "performance": "202", "handoff": "303"}[kind]
+    event = "push" if kind == "candidate" else "workflow_dispatch"
+    run = {"run_id": run_id, "run_attempt": 2, "workflow_id": workflow_id,
+           "workflow_path": github.WORKFLOWS[kind], "event": event,
            "head_branch": "main", "head_sha": SHA, "status": "completed", "conclusion": "success",
            "url": f"https://github.com/{evidence.REPOSITORY}/actions/runs/{run_id}",
            "jobs": jobs, "artifacts": []}
     if kind == "candidate":
         names = [f"release-assets-{SHA}", f"release-verification-{SHA}",
                  f"release-package-{SHA}-linux-amd64"]
-    else:
+    elif kind == "performance":
         names = [f"performance-series-{SHA}-{run_id}", f"performance-soak-{SHA}-{run_id}"]
+    else:
+        names = [f"beta-evidence-handoff-{run_id}-2"]
     for index, name in enumerate(names):
         artifact_id = str(int(run_id) * 10 + index + 1)
         run["artifacts"].append({"id": artifact_id, "name": name,
@@ -58,13 +63,121 @@ def _run(kind, run_id):
     return run
 
 
-def _metadata():
+def _metadata(include_previous=False):
     candidate = _run("candidate", "110")
     performance = _run("performance", "120")
-    return {"metadata_version": 1, "repository": evidence.REPOSITORY,
-            "candidate_sha": SHA, "candidate_version": evidence.VERSION,
-            "candidate_run": candidate, "performance_run": performance,
-            "candidate_delivery_url": candidate["artifacts"][0]["url"]}
+    metadata = {"metadata_version": 1, "repository": evidence.REPOSITORY,
+                "candidate_sha": SHA, "candidate_version": evidence.VERSION,
+                "candidate_run": candidate, "performance_run": performance,
+                "candidate_delivery_url": candidate["artifacts"][0]["url"]}
+    if include_previous:
+        previous = _run("handoff", "130")
+        previous["head_sha"] = "3" * 40
+        metadata["previous_handoff_run"] = previous
+        metadata["previous_handoff_artifact"] = previous["artifacts"][0]
+    return metadata
+
+
+def _replace_fixture_value(value, old, new):
+    if isinstance(value, dict):
+        return {key: _replace_fixture_value(item, old, new)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_replace_fixture_value(item, old, new) for item in value]
+    if isinstance(value, str):
+        return value.replace(old, new)
+    return value
+
+
+def _manual_report(kind, target, candidate, native, reference, status="passed"):
+    cases = [{"case": name, "status": "passed", "elapsed_seconds": 1}
+             for name in manual_evidence.CASES]
+    return {"kind": kind, "evidence_type": "manual", "status": status,
+            "candidate_sha": candidate["candidate_sha"],
+            "candidate_version": candidate["candidate_version"], "target": target,
+            "archive_sha256": native[target]["archive"]["sha256"],
+            "reference": reference, "cases": cases}
+
+
+def _full_beta_fixture(root, *, initial_manual=True):
+    root = pathlib.Path(root)
+    alpha_root = root / "alpha-source"
+    alpha_root.mkdir(parents=True)
+    summary, _native = _summary_fixture(alpha_root)
+    old_sha = summary["candidate_sha"]
+    summary = _replace_fixture_value(summary, old_sha, SHA)
+    summary = _replace_fixture_value(summary, "0.1.0-alpha.5", evidence.VERSION)
+
+    beta_root = root / "beta-source"
+    beta_root.mkdir()
+    source, revision = test_release_assets.ReleaseAssetTests().candidate(
+        beta_root, revision=SHA, version=evidence.VERSION, schema=evidence.SCHEMA)
+    assets = root / "assets"
+    manifest = release_assets.assemble(source, assets, evidence.VERSION, revision)
+    by_target = {item["target"]: item for item in manifest["assets"] if item.get("target")}
+    native_records = root / "beta-native-records"
+    for index, record in enumerate(summary["native"]):
+        actual = by_target[record["target"]]
+        record = _replace_fixture_value(record, record["archive"]["sha256"], actual["sha256"])
+        record["archive"] = {key: actual[key] for key in ("basename", "size", "sha256")}
+        summary["native"][index] = record
+        record_path = native_records / record["target"] / "verification.json"
+        evidence.write_json(record_path, record)
+    journey_names = {item["case"] for item in summary["journey"]["cases"]}
+    summary["journey"]["cases"].extend(
+        {"case": name, "status": "passed", "duration_seconds": 0.1}
+        for name in candidate_record.BETA1_JOURNEY_CASES if name not in journey_names)
+
+    metadata = _metadata(include_previous=False)
+    browser_path = root / "beta-browser-report.json"
+    evidence.write_json(browser_path, summary["journey"])
+    summary = candidate_record.summarize(native_records, assets, browser_path,
+                                         revision, evidence.VERSION)
+    summary["run_url"] = metadata["candidate_run"]["url"]
+    summary["run_attempt"] = str(metadata["candidate_run"]["run_attempt"])
+    summary_path = root / "verification-summary.json"
+    evidence.write_json(summary_path, summary)
+    native = {item["target"]: item for item in summary["native"]}
+
+    recovery_wrapper = _recovery(summary, native)
+    recovery_path = root / "recovery-candidate.json"
+    evidence.write_json(recovery_path, recovery_wrapper["measurement"])
+    scale_paths = {}
+    for kind, suffix in (("scale_10k", "10k"), ("scale_100k", "100k")):
+        wrapper = _scale_record(summary, kind)
+        path = root / f"scale-{suffix}.json"
+        evidence.write_json(path, wrapper["measurement"])
+        scale_paths[kind] = path
+
+    binary_sha = native["linux-amd64"]["binary_sha256"]
+    series_dir = root / "performance-series"
+    _series_fixture(series_dir, candidate_sha=SHA, candidate_version=evidence.VERSION,
+                    candidate_binary=binary_sha)
+    soak_path = _soak_fixture(root / "performance-soak", candidate_sha=SHA,
+                              candidate_version=evidence.VERSION, binary_sha=binary_sha)
+    metadata_path = root / "trusted-run-metadata.json"
+    evidence.write_json(metadata_path, metadata)
+    kits_dir = root / "kits"
+    evidence.prepare_kits(assets, metadata_path, SHA, evidence.VERSION, kits_dir)
+
+    windows_report = root / "windows-report.json"
+    linux_report = root / "linux-report.json"
+    if initial_manual:
+        evidence.write_json(windows_report, _manual_report(
+            "windows_first_run", "windows-amd64", summary, native,
+            "https://github.com/Lephiziel/findrail/issues/211"))
+        linux_incomplete = _manual_report(
+            "linux_first_run", "linux-amd64", summary, native, "", status="incomplete")
+        for case in linux_incomplete["cases"]:
+            case.update(status="not_run", elapsed_seconds=None)
+        linux_incomplete["reference"] = ""
+        evidence.write_json(linux_report, linux_incomplete)
+    return {"root": root, "summary": summary, "native": native, "assets": assets,
+            "summary_path": summary_path, "recovery_path": recovery_path,
+            "series_dir": series_dir, "soak_path": soak_path,
+            "scale_paths": scale_paths, "metadata": metadata,
+            "metadata_path": metadata_path, "kits_dir": kits_dir,
+            "windows_report": windows_report, "linux_report": linux_report}
 
 
 def _summary_fixture(root):
@@ -274,6 +387,16 @@ class BetaEvidenceTests(unittest.TestCase):
             mutate(bad)
             with self.subTest(change=mutate), self.assertRaises(evidence.EvidenceError):
                 evidence.validate_trusted_metadata(bad, SHA, evidence.VERSION)
+        refreshed = _metadata(include_previous=True)
+        self.assertEqual(refreshed["previous_handoff_run"]["head_sha"], "3" * 40)
+        evidence.validate_trusted_metadata(refreshed, SHA, evidence.VERSION)
+        bad_previous = copy.deepcopy(refreshed)
+        bad_previous["previous_handoff_artifact"] = copy.deepcopy(
+            refreshed["previous_handoff_artifact"])
+        bad_previous["previous_handoff_run"]["artifacts"][0]["digest"] = \
+            "sha256:" + "0" * 64
+        with self.assertRaises(evidence.EvidenceError):
+            evidence.validate_trusted_metadata(bad_previous, SHA, evidence.VERSION)
 
     def test_metadata_requires_candidate_and_performance_run_ids_to_be_decimal(self):
         metadata = _metadata()
@@ -296,6 +419,148 @@ class BetaEvidenceTests(unittest.TestCase):
                                                    "voluntary_usage_pending"})
             evidence._expected_readiness(result, summary["candidate_sha"],
                                          summary["candidate_version"], False)
+
+    def test_synthetic_assemble_verify_and_refresh_preserve_verified_technical_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            fixture = _full_beta_fixture(root, initial_manual=False)
+            summary, native = fixture["summary"], fixture["native"]
+            # These are the real production validators, not compatibility mocks.
+            production_manifest = release_assets.verify(
+                fixture["assets"], evidence.VERSION, SHA)
+            production_native = readiness.strict_candidate(summary, SHA, evidence.VERSION)
+            self.assertEqual(len(summary["assets"]), 8)
+            self.assertEqual(len(production_manifest["assets"]), 6)
+            self.assertEqual(set(production_native),
+                             set(release_assets.expected_archives(evidence.VERSION).values()))
+
+            handoff = root / "initial-handoff"
+            reports_zip = root / "initial-reports.zip"
+            diagnostics = root / "initial-diagnostics.json"
+            assemble_args = argparse.Namespace(
+                candidate_sha=SHA, candidate_version=evidence.VERSION,
+                assets_dir=fixture["assets"], verification_summary=fixture["summary_path"],
+                recovery=fixture["recovery_path"],
+                performance_series_dir=fixture["series_dir"],
+                performance_soak=fixture["soak_path"],
+                scale_10k=fixture["scale_paths"]["scale_10k"],
+                scale_100k=fixture["scale_paths"]["scale_100k"],
+                run_metadata=fixture["metadata_path"], kits_dir=fixture["kits_dir"],
+                output_dir=handoff, reports_zip=reports_zip,
+                windows_report=None, linux_report=None, diagnostics=diagnostics)
+            assembled = evidence.assemble(assemble_args)
+            verified = evidence.verify(argparse.Namespace(
+                candidate_sha=SHA, candidate_version=evidence.VERSION,
+                assets_dir=fixture["assets"], handoff_dir=handoff,
+                reports_zip=reports_zip))
+            self.assertEqual(assembled["report_zip_sha256"], verified["report_zip_sha256"])
+            initial_index, _ = evidence.load_json(handoff / "evidence-index.json")
+            self.assertEqual(len(initial_index["candidate"]["assets"]), 8)
+            self.assertEqual(initial_index["readiness"]["human_pending"], [
+                "windows_first_run", "apple_silicon_first_run", "voluntary_usage"])
+            self.assertEqual((handoff / "publication-notes.md").read_bytes(),
+                             (pathlib.Path(__file__).parents[1] /
+                              "docs/release-notes-beta1.md").read_bytes())
+
+            # Model the exact extracted layout of the successful Actions artifact.
+            source_artifacts = root / "source-artifacts"
+            (source_artifacts / "verification").mkdir(parents=True)
+            shutil.copyfile(fixture["summary_path"],
+                            source_artifacts / "verification/verification-summary.json")
+            (source_artifacts / "linux-package").mkdir()
+            shutil.copyfile(fixture["recovery_path"],
+                            source_artifacts / "linux-package/recovery-candidate.json")
+            shutil.copytree(fixture["series_dir"], source_artifacts / "performance-series")
+            shutil.copytree(fixture["soak_path"].parent, source_artifacts / "performance-soak")
+            previous_bundle = root / "previous-bundle"
+            previous_bundle.mkdir()
+            shutil.copytree(handoff, previous_bundle / "handoff")
+            shutil.copyfile(reports_zip, previous_bundle / "beta-evidence-reports.zip")
+            shutil.copyfile(diagnostics, previous_bundle / "diagnostics.json")
+            evidence.write_json(previous_bundle / "result.json", assembled)
+
+            previous_zip = io.BytesIO()
+            with zipfile.ZipFile(previous_zip, "w", zipfile.ZIP_DEFLATED) as archive:
+                for path in sorted(previous_bundle.rglob("*")):
+                    if path.is_file():
+                        archive.write(path, path.relative_to(previous_bundle).as_posix())
+            previous_artifact_digest = hashlib.sha256(previous_zip.getvalue()).hexdigest()
+            metadata = _metadata(include_previous=True)
+            metadata["previous_handoff_artifact"].update(
+                digest="sha256:" + previous_artifact_digest,
+                size_in_bytes=len(previous_zip.getvalue()))
+            metadata["previous_handoff_run"]["artifacts"][0].update(
+                digest="sha256:" + previous_artifact_digest,
+                size_in_bytes=len(previous_zip.getvalue()))
+            refreshed_metadata = root / "refresh-run-metadata.json"
+            evidence.write_json(refreshed_metadata, metadata)
+
+            windows_report = _manual_report(
+                "windows_first_run", "windows-amd64", summary, native,
+                "https://github.com/Lephiziel/findrail/issues/211")
+            linux_report = _manual_report(
+                "linux_first_run", "linux-amd64", summary, native,
+                "https://github.com/Lephiziel/findrail/issues/212")
+            windows_path, linux_path = root / "windows-passed.json", root / "linux-passed.json"
+            evidence.write_json(windows_path, windows_report)
+            evidence.write_json(linux_path, linux_report)
+            refreshed = root / "refreshed-handoff"
+            refreshed_zip = root / "refreshed-reports.zip"
+            refresh_args = argparse.Namespace(
+                candidate_sha=SHA, candidate_version=evidence.VERSION,
+                previous_bundle_dir=previous_bundle, source_artifacts_dir=source_artifacts,
+                assets_dir=fixture["assets"], run_metadata=refreshed_metadata,
+                output_dir=refreshed, reports_zip=refreshed_zip,
+                windows_report=windows_path, linux_report=linux_path,
+                diagnostics=root / "refreshed-diagnostics.json")
+            original_run = evidence.subprocess.run
+            with mock.patch.object(evidence.subprocess, "run", wraps=original_run) as run_spy:
+                refresh_result = evidence.refresh(refresh_args)
+            self.assertEqual(len(run_spy.call_args_list), 1)
+            readiness_command = run_spy.call_args.args[0]
+            self.assertEqual(pathlib.Path(readiness_command[2]).name, "readiness.py")
+            self.assertNotIn("search_resource_check.py", " ".join(readiness_command))
+
+            refreshed_verify = evidence.verify(argparse.Namespace(
+                candidate_sha=SHA, candidate_version=evidence.VERSION,
+                assets_dir=fixture["assets"], handoff_dir=refreshed,
+                reports_zip=refreshed_zip))
+            self.assertEqual(refresh_result["report_zip_sha256"],
+                             refreshed_verify["report_zip_sha256"])
+            self.assertEqual(evidence._refresh_technical_paths(handoff),
+                             evidence._refresh_technical_paths(refreshed))
+            refreshed_index, _ = evidence.load_json(refreshed / "evidence-index.json")
+            self.assertEqual(refreshed_index["source_runs"], initial_index["source_runs"])
+            self.assertEqual(len(refreshed_index["candidate"]["assets"]), 8)
+            self.assertEqual(refreshed_index["refresh_provenance"][
+                "previous_handoff_run"]["run_id"], "130")
+            self.assertEqual(refreshed_index["refresh_provenance"][
+                "previous_handoff_artifact"]["digest"], "sha256:" + previous_artifact_digest)
+            self.assertEqual(refreshed_index["readiness"]["human_pending"], [
+                "apple_silicon_first_run", "voluntary_usage"])
+            notes = (refreshed / "publication-notes.md").read_text(encoding="utf-8")
+            self.assertIn("A matching Windows amd64 first-run report", notes)
+            self.assertNotIn("manual status remains pending", notes)
+            self.assertIn("Apple Silicon first-run and voluntary-use evidence remain pending", notes)
+
+            # Recompute all outer hashes so the independent verifier reaches the
+            # Linux case semantics instead of rejecting a stale manifest/ZIP.
+            linux_observations_path = refreshed / "manual-evidence/linux-observations.json"
+            observations, _ = evidence.load_json(linux_observations_path)
+            observation = observations["observations"][0]
+            observation["status"] = "complete"
+            observation["cases"][0]["status"] = "failed"
+            evidence.write_json(linux_observations_path, observations)
+            evidence.write_json(refreshed / "PACKAGE-MANIFEST.json", {
+                "manifest_version": 1, "files": evidence._manifest_entries(refreshed)})
+            invalid_zip = root / "rehashed-failed-linux.zip"
+            evidence._zip_reports(refreshed, invalid_zip)
+            with self.assertRaisesRegex(evidence.EvidenceError,
+                                       "linux_observations_invalid"):
+                evidence.verify(argparse.Namespace(
+                    candidate_sha=SHA, candidate_version=evidence.VERSION,
+                    assets_dir=fixture["assets"], handoff_dir=refreshed,
+                    reports_zip=invalid_zip))
 
     def test_extracted_scale_records_reuse_readiness_checks_and_reject_mutations(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -356,6 +621,83 @@ class BetaEvidenceTests(unittest.TestCase):
             with self.assertRaises(evidence.EvidenceError):
                 evidence._validate_soak(path, SHA, evidence.VERSION, BINARY_SHA)
 
+    def test_soak_accepts_large_historical_cycle_shape_but_rejects_over_limit_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = _soak_fixture(pathlib.Path(temp) / "soak")
+            report = json.loads(path.read_text(encoding="utf-8"))
+            report["cases"] = [
+                {"case": name, "status": "passed", "generation": cycle}
+                for cycle in range(1, 2008)
+                for name in ("paging", "refresh_cancel",
+                             "collection_restart_provenance", "cycle")]
+            report["counters"].update(completed_cycles=2007, restarts=2007)
+            path.write_text(json.dumps(report), encoding="utf-8")
+            self.assertGreater(path.stat().st_size, evidence.MAX_PROVENANCE)
+            evidence._validate_soak(path, SHA, evidence.VERSION, BINARY_SHA)
+            staged = pathlib.Path(temp) / "staged"
+            evidence._copy_tree(path.parent, staged / "performance-soak",
+                                max_total=evidence.MAX_SOAK_REPORT,
+                                max_file=evidence.MAX_SOAK_REPORT)
+            entries = evidence._manifest_entries(staged)
+            self.assertGreater(next(item["size"] for item in entries
+                                    if item["path"] == "performance-soak/report.json"),
+                               evidence.MAX_PROVENANCE)
+            reports_zip = pathlib.Path(temp) / "large-soak.zip"
+            evidence._zip_reports(staged, reports_zip)
+            evidence._verify_reports_zip(staged, reports_zip)
+
+            report["padding"] = "x" * evidence.MAX_SOAK_REPORT
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaises(evidence.EvidenceError):
+                evidence._validate_soak(path, SHA, evidence.VERSION, BINARY_SHA)
+            with self.assertRaises(evidence.EvidenceError):
+                evidence._copy_tree(path.parent, pathlib.Path(temp) / "too-large",
+                                    max_total=evidence.MAX_SOAK_REPORT,
+                                    max_file=evidence.MAX_SOAK_REPORT)
+
+    def test_passed_windows_notes_use_the_real_wrapped_frozen_file(self):
+        source = pathlib.Path(__file__).parents[1] / "docs/release-notes-beta1.md"
+        first = evidence._publication_notes(source, {"windows_outcome": "complete"})
+        second = evidence._publication_notes(source, {"windows_outcome": "complete"})
+        self.assertEqual(first, second)
+        text = first.decode("utf-8")
+        self.assertIn("A matching Windows amd64 first-run report", text)
+        self.assertNotIn("manual status remains pending", text)
+        self.assertNotIn("This base text does not assert matching beta.1 manual", text)
+        self.assertIn("Apple Silicon first-run and voluntary-use evidence remain pending", text)
+
+    def test_dispatch_report_inputs_are_read_from_event_file_without_echoing_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            secret = "synthetic-sensitive-report-marker"
+            report = json.dumps({"kind": "windows_first_run", "notes": secret})
+            event = root / "event.json"
+            event.write_text(json.dumps({"inputs": {"windows_report_json": report,
+                                                     "linux_report_json": ""}}),
+                             encoding="utf-8")
+            output = root / "manual-inputs"
+            github_output = root / "github-output"
+            args = argparse.Namespace(event_path=event, output_dir=output,
+                                      github_output=github_output)
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                evidence._write_manual_inputs(args)
+            windows_path = output / "windows-report.json"
+            self.assertEqual(windows_path.read_text(encoding="utf-8"), report)
+            self.assertNotIn(secret, stdout.getvalue())
+            self.assertNotIn(secret, github_output.read_text(encoding="utf-8"))
+            self.assertIn(str(windows_path), github_output.read_text(encoding="utf-8"))
+
+            oversized_event = root / "oversized-event.json"
+            oversized_report = json.dumps({"notes": "x" * evidence.MAX_MANUAL_JSON})
+            oversized_event.write_text(json.dumps({"inputs": {
+                "windows_report_json": oversized_report, "linux_report_json": ""}}),
+                encoding="utf-8")
+            with self.assertRaisesRegex(evidence.EvidenceError, "manual_report_too_large"):
+                evidence._write_manual_inputs(argparse.Namespace(
+                    event_path=oversized_event, output_dir=root / "oversized-inputs",
+                    github_output=None))
+
     def test_manual_intake_sanitizes_real_reports_and_blocks_failures_or_mismatches(self):
         with tempfile.TemporaryDirectory() as temp:
             summary, native = _summary_fixture(pathlib.Path(temp))
@@ -408,6 +750,14 @@ class BetaEvidenceTests(unittest.TestCase):
                                                   _scale_record(summary, "scale_10k"),
                                                   _scale_record(summary, "scale_100k")])
             self.assertEqual(before["evidence"], after["evidence"])
+            inconsistent = copy.deepcopy(sanitized)
+            inconsistent["observations"][0]["status"] = "complete"
+            inconsistent["observations"][0]["reference"] = "https://github.com/Lephiziel/findrail/issues/213"
+            inconsistent["observations"][0]["cases"] = [
+                {"case": case, "status": "failed" if index == 0 else "passed",
+                 "elapsed_seconds": 1} for index, case in enumerate(manual_evidence.CASES)]
+            with self.assertRaisesRegex(evidence.EvidenceError, "linux_observations_invalid"):
+                evidence._validate_linux_observations(inconsistent, summary, native)
             failed = copy.deepcopy(report)
             failed["status"] = "failed"
             failed["reference"] = "https://github.com/Lephiziel/findrail/issues/212"
@@ -513,6 +863,12 @@ class BetaEvidenceTests(unittest.TestCase):
         self.assertNotIn("go run", workflow)
         self.assertNotIn("gh release create", workflow)
         self.assertNotIn("VERSION=", workflow)
+        self.assertIn('--event-path "$GITHUB_EVENT_PATH"', workflow)
+        self.assertNotIn("WINDOWS_REPORT_JSON: ${{ inputs.windows_report_json }}", workflow)
+        self.assertIn("mode:", workflow)
+        self.assertIn("previous-handoff-run-id", workflow)
+        self.assertIn("beta_evidence.py refresh", workflow)
+        self.assertIn("refresh-verify-result.json", workflow)
 
 
 class FakeGitHubAPI:
@@ -525,22 +881,27 @@ class FakeGitHubAPI:
         self.bad_artifact_digest = bad_artifact_digest
         self.bad_artifact_size = bad_artifact_size
         for kind, run_id, workflow_id in (("candidate", "110", 101),
-                                          ("performance", "120", 202)):
+                                          ("performance", "120", 202),
+                                          ("handoff", "130", 303)):
             names = ([f"release-assets-{SHA}", f"release-verification-{SHA}",
                       f"release-package-{SHA}-linux-amd64"] if kind == "candidate" else
-                     [f"performance-series-{SHA}-{run_id}", f"performance-soak-{SHA}-{run_id}"])
+                     [f"performance-series-{SHA}-{run_id}", f"performance-soak-{SHA}-{run_id}"]
+                     if kind == "performance" else
+                     [f"beta-evidence-handoff-{run_id}-2"])
             workflow_path = github.WORKFLOWS[kind]
+            head_sha = "3" * 40 if kind == "handoff" else SHA
             self.runs[run_id] = {
                 "id": int(run_id), "workflow_id": workflow_id,
                 "repository": {"full_name": evidence.REPOSITORY, "id": 900},
                 "head_repository": {"full_name": evidence.REPOSITORY},
-                "head_sha": "0" * 40 if bad_candidate_sha and kind == "candidate" else SHA,
+                "head_sha": "0" * 40 if bad_candidate_sha and kind == "candidate" else head_sha,
                 "head_branch": "main", "status": "completed", "conclusion": "success",
                 "event": "push" if kind == "candidate" else "workflow_dispatch",
                 "run_attempt": 2, "html_url": f"https://github.com/{evidence.REPOSITORY}/actions/runs/{run_id}",
                 "path": workflow_path + "@refs/heads/main",
             }
-            job_names = evidence.CANDIDATE_JOB_NAMES if kind == "candidate" else evidence.PERFORMANCE_JOB_NAMES
+            job_names = (evidence.CANDIDATE_JOB_NAMES if kind == "candidate" else
+                         evidence.PERFORMANCE_JOB_NAMES if kind == "performance" else {"handoff"})
             jobs = [{"name": name, "run_attempt": 2, "status": "completed",
                      "conclusion": "success"} for name in sorted(job_names)]
             if bad_job and kind == "candidate":
@@ -561,7 +922,7 @@ class FakeGitHubAPI:
                     (1 if bad_artifact_size and index == 0 and kind == "candidate" else 0),
                     "digest": "sha256:" + ("f" * 64 if bad_artifact_digest and index == 0 and kind == "candidate" else digest),
                     "expired": False, "expires_at": FUTURE,
-                    "workflow_run": {"id": int(run_id), "head_sha": SHA,
+                    "workflow_run": {"id": int(run_id), "head_sha": head_sha,
                                      "head_branch": "main", "repository_id": 900,
                                      "head_repository_id": 900},
                 })
@@ -573,6 +934,8 @@ class FakeGitHubAPI:
             return {"path": github.WORKFLOWS["candidate"], "id": 101, "state": "active"}
         if path_no_query.endswith("/performance-check.yml"):
             return {"path": github.WORKFLOWS["performance"], "id": 202, "state": "active"}
+        if path_no_query.endswith("/beta-evidence.yml"):
+            return {"path": github.WORKFLOWS["handoff"], "id": 303, "state": "active"}
         if path_no_query.endswith("/jobs"):
             run_id = path_no_query.split("/")[-2]
             jobs = self.runs[run_id]["jobs"]
@@ -629,6 +992,24 @@ class BetaEvidenceGitHubTests(unittest.TestCase):
             self.assertEqual(metadata["performance_run"]["run_attempt"], 2)
             for name in ("assets", "verification", "linux-package", "performance-series", "performance-soak"):
                 self.assertTrue((root / "downloads" / name / "payload.txt").is_file())
+
+    def test_preflight_refresh_binds_previous_handoff_id_digest_and_workflow_sha(self):
+        fake = FakeGitHubAPI()
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(github, "GitHubAPI", return_value=fake):
+            root = pathlib.Path(temp)
+            result = github.preflight(
+                SHA, evidence.VERSION, "110", "120", root / "downloads",
+                root / "trusted-run-metadata.json", token="x" * 30,
+                previous_handoff_run_id="130")
+            self.assertEqual(result["artifacts_downloaded"], 6)
+            self.assertEqual(set(fake.downloaded),
+                             {"1101", "1102", "1103", "1201", "1202", "1301"})
+            metadata = json.loads((root / "trusted-run-metadata.json").read_text())
+            self.assertEqual(metadata["previous_handoff_run"]["head_sha"], "3" * 40)
+            artifact = metadata["previous_handoff_artifact"]
+            self.assertEqual(artifact["id"], "1301")
+            self.assertEqual(artifact["digest"], fake.artifacts["130"][0]["digest"])
+            self.assertTrue((root / "downloads/previous-handoff/payload.txt").is_file())
 
     def test_preflight_refuses_wrong_head_before_download_and_checks_download_digest(self):
         wrong_head = FakeGitHubAPI(bad_candidate_sha=True)

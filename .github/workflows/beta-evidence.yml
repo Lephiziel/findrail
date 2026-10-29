@@ -2,8 +2,14 @@ name: Beta evidence handoff
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Initial evidence collection or a report-only refresh
+        required: true
+        default: initial
+        type: choice
+        options: [initial, refresh]
       candidate_sha:
-        description: Exact main commit whose beta.1 bytes were measured
+        description: Exact beta.1 candidate SHA from the original handoff
         required: true
         type: string
       candidate_version:
@@ -19,6 +25,10 @@ on:
       performance_run_id:
         description: Successful Explicit performance check run ID for this SHA
         required: true
+        type: string
+      refresh_run_id:
+        description: Successful prior Beta evidence handoff run ID (refresh mode only)
+        required: false
         type: string
       windows_report_json:
         description: Optional sanitized Windows first-run JSON (max 8 KiB; no private prose)
@@ -46,8 +56,10 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+      MODE: ${{ inputs.mode }}
       CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
       PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
+      REFRESH_RUN_ID: ${{ inputs.refresh_run_id }}
       WORK_ROOT: ${{ runner.temp }}/beta-evidence-work
       OUTPUT_ROOT: ${{ runner.temp }}/beta-evidence-output
     steps:
@@ -68,26 +80,37 @@ jobs:
           test "$REPOSITORY" = 'Lephiziel/findrail'
           test "$REF" = 'refs/heads/main'
           test "$CANDIDATE_VERSION" = '0.1.0-beta.1'
-          test "$CANDIDATE_SHA" = "$WORKFLOW_SHA"
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
           [[ "$PERFORMANCE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          if [[ "$MODE" == initial ]]; then
+            test "$CANDIDATE_SHA" = "$WORKFLOW_SHA"
+          else
+            [[ "$MODE" == refresh ]]
+            [[ "$REFRESH_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          fi
       - name: Confirm checked-out source is the exact candidate
-        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Preflight GitHub run metadata and download exact artifact IDs
         id: preflight
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          args=()
+          if [[ "$MODE" == refresh ]]; then
+            args+=(--previous-handoff-run-id "$REFRESH_RUN_ID")
+          fi
           python3 scripts/beta_evidence_github.py preflight \
             --candidate-sha "$CANDIDATE_SHA" \
             --candidate-version "$CANDIDATE_VERSION" \
             --candidate-run-id "$CANDIDATE_RUN_ID" \
             --performance-run-id "$PERFORMANCE_RUN_ID" \
             --download-dir "$WORK_ROOT/downloads" \
-            --metadata "$WORK_ROOT/trusted-run-metadata.json"
+            --metadata "$WORK_ROOT/trusted-run-metadata.json" \
+            "${args[@]}"
       - name: Extract the canonical Linux amd64 candidate without rebuilding
+        if: inputs.mode == 'initial'
         id: extract
         run: |
           set -euo pipefail
@@ -108,6 +131,7 @@ jobs:
               env.write('CANDIDATE_BINARY=' + binary + '\n')
           PY
       - name: Measure extracted beta.1 Linux binary at 10,000 documents
+        if: inputs.mode == 'initial'
         id: scale10k
         timeout-minutes: 35
         run: |
@@ -117,6 +141,7 @@ jobs:
             --seed 42 --queries 10 --source-cycle-boundaries \
             --report "$WORK_ROOT/scale-10k.json"
       - name: Measure extracted beta.1 Linux binary at 100,000 documents
+        if: inputs.mode == 'initial'
         id: scale100k
         timeout-minutes: 65
         run: |
@@ -126,6 +151,7 @@ jobs:
             --seed 42 --queries 10 --source-cycle-boundaries --allow-large \
             --report "$WORK_ROOT/scale-100k.json"
       - name: Prepare exact-candidate Windows, Linux, and Apple Silicon kits
+        if: inputs.mode == 'initial'
         id: kits
         run: |
           set -euo pipefail
@@ -138,15 +164,14 @@ jobs:
             --diagnostics "$OUTPUT_ROOT/diagnostics.json"
       - name: Parse bounded optional manual reports without exposing their prose
         id: manual
-        env:
-          WINDOWS_REPORT_JSON: ${{ inputs.windows_report_json }}
-          LINUX_REPORT_JSON: ${{ inputs.linux_report_json }}
         run: |
           set -euo pipefail
           python3 scripts/beta_evidence.py write-manual-inputs \
+            --event-path "$GITHUB_EVENT_PATH" \
             --output-dir "$WORK_ROOT/manual-inputs" --github-output "$GITHUB_OUTPUT"
       - name: Assemble and independently verify the reports-only handoff
         id: assemble
+        if: inputs.mode == 'initial'
         env:
           WINDOWS_REPORT: ${{ steps.manual.outputs.windows_report }}
           LINUX_REPORT: ${{ steps.manual.outputs.linux_report }}
@@ -185,6 +210,43 @@ jobs:
           if (assembled.get('status') != 'passed' or verified.get('status') != 'passed' or
                   assembled.get('report_zip_sha256') != verified.get('report_zip_sha256')):
               raise SystemExit('independent handoff verification mismatch')
+          PY
+      - name: Refresh verified handoff without repeating technical measurements
+        id: refresh
+        if: inputs.mode == 'refresh'
+        env:
+          WINDOWS_REPORT: ${{ steps.manual.outputs.windows_report }}
+          LINUX_REPORT: ${{ steps.manual.outputs.linux_report }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "$WINDOWS_REPORT" ]]; then args+=(--windows-report "$WINDOWS_REPORT"); fi
+          if [[ -n "$LINUX_REPORT" ]]; then args+=(--linux-report "$LINUX_REPORT"); fi
+          python3 scripts/beta_evidence.py refresh \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --candidate-version "$CANDIDATE_VERSION" \
+            --previous-bundle-dir "$WORK_ROOT/downloads/previous-handoff" \
+            --source-artifacts-dir "$WORK_ROOT/downloads" \
+            --assets-dir "$WORK_ROOT/downloads/assets" \
+            --run-metadata "$WORK_ROOT/trusted-run-metadata.json" \
+            --output-dir "$OUTPUT_ROOT/handoff" \
+            --reports-zip "$OUTPUT_ROOT/beta-evidence-reports.zip" \
+            --diagnostics "$OUTPUT_ROOT/diagnostics.json" \
+            "${args[@]}" > "$OUTPUT_ROOT/result.json"
+          python3 scripts/beta_evidence.py verify \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --candidate-version "$CANDIDATE_VERSION" \
+            --assets-dir "$WORK_ROOT/downloads/assets" \
+            --handoff-dir "$OUTPUT_ROOT/handoff" \
+            --reports-zip "$OUTPUT_ROOT/beta-evidence-reports.zip" \
+            > "$WORK_ROOT/refresh-verify-result.json"
+          python3 - "$OUTPUT_ROOT/result.json" "$WORK_ROOT/refresh-verify-result.json" <<'PY'
+          import json, pathlib, sys
+          refreshed = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+          verified = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding='utf-8'))
+          if (refreshed.get('status') != 'passed' or verified.get('status') != 'passed' or
+                  refreshed.get('report_zip_sha256') != verified.get('report_zip_sha256')):
+              raise SystemExit('independent refreshed handoff verification mismatch')
           PY
       - name: Record bounded failure diagnostics when an earlier step failed
         if: always()
@@ -264,6 +326,14 @@ jobs:
                         '- Consumed GitHub artifacts:']
               for item in runs['candidate_artifacts'] + runs['performance_artifacts']:
                   lines.append(f"  - `{item['name']}` · ID `{item['id']}` · `{item['digest']}`")
+              refresh = index.get('refresh_provenance')
+              if refresh:
+                  prior_run = refresh['previous_handoff_run']
+                  prior_artifact = refresh['previous_handoff_artifact']
+                  lines += [f"- Refreshed from handoff run [#{prior_run['run_id']}]({prior_run['url']}) "+
+                            f"(attempt `{prior_run['run_attempt']}`)",
+                            f"- Prior handoff artifact: `{prior_artifact['name']}` · "+
+                            f"ID `{prior_artifact['id']}` · `{prior_artifact['digest']}`"]
               lines += ['', '- Readiness: `'+index['readiness']['release_readiness']+'`; '+
                         '`final_release=false`',
                         '- Human gaps: '+(', '.join('`'+name+'`' for name in

@@ -62,13 +62,18 @@ not itself; its own digest is recorded in the inventory.
 ## Workflow and helper interface
 
 Run `.github/workflows/beta-evidence.yml` only from canonical `main`, with
-`candidate_sha` equal to the workflow's own source SHA and explicit candidate
-and performance run IDs. The workflow grants only `contents: read` and
+explicit candidate and performance run IDs. In `initial` mode,
+`candidate_sha` must equal the workflow's own source SHA. In `refresh` mode,
+`candidate_sha` stays bound to the original candidate and `refresh_run_id` must
+identify a successful prior handoff for that same candidate; the workflow source
+SHA may be newer. The workflow grants only `contents: read` and
 `actions: read`; the token is present only in the metadata/download step. It
 does not build or release the app, create tags, write repository contents, or
-modify `VERSION`. It downloads by artifact ID, extracts the checked Linux
-amd64 archive, and measures only that binary. Pull requests receive the
-synthetic CI tests, not a path to submit evidence to this workflow.
+modify `VERSION`. Initial mode downloads by artifact ID, extracts the checked
+Linux amd64 archive, and measures only that binary. Refresh mode verifies and
+reuses the prior reports-only handoff and source artifacts; it does not extract
+or rebuild the app or rerun scale, series, or soak measurements. Pull requests
+receive the synthetic CI tests, not a path to submit evidence to this workflow.
 
 The offline `scripts/beta_evidence.py` commands have stable subcommands and
 option names. Paths are explicit; the helper does not discover or build an
@@ -96,6 +101,16 @@ python3 scripts/beta_evidence.py verify \
   --assets-dir /abs/evidence/release-assets \
   --handoff-dir /abs/evidence/handoff \
   --reports-zip /abs/evidence/beta-evidence-reports.zip
+
+python3 scripts/beta_evidence.py refresh \
+  --candidate-sha "$CANDIDATE_SHA" --candidate-version 0.1.0-beta.1 \
+  --previous-bundle-dir /abs/evidence/prior-workflow-artifact \
+  --source-artifacts-dir /abs/evidence/source-artifacts \
+  --assets-dir /abs/evidence/release-assets \
+  --run-metadata /abs/evidence/trusted-refresh-run-metadata.json \
+  --windows-report /abs/evidence/windows-report.json \
+  --output-dir /abs/evidence/refreshed-handoff \
+  --reports-zip /abs/evidence/refreshed-beta-evidence-reports.zip
 ```
 
 `--run-metadata` is a bounded JSON file produced by the workflow after GitHub
@@ -115,7 +130,13 @@ python3 scripts/beta_evidence_github.py preflight \
 The preflight requires a read-only `GITHUB_TOKEN`, validates all requested run
 and job metadata before transfer, bounds artifact downloads/extraction, and
 downloads the five required artifact payloads by their verified IDs. It does
-not query “latest” runs. `assemble` verifies the exact assets with
+not query “latest” runs. Refresh preflight additionally downloads the exact
+previous handoff artifact by its run/artifact ID and verifies its GitHub digest.
+It still verifies the candidate/performance run IDs and source-artifact digests.
+For refresh, add `--previous-handoff-run-id "$REFRESH_RUN_ID"`; preflight
+extracts that artifact under `previous-handoff/` and records its run/artifact
+identity in the trusted metadata file.
+`assemble` verifies the exact assets with
 `scripts/release_assets.py verify --directory DIR --version 0.1.0-beta.1
 --revision SHA`, reuses `scripts/candidate_record.py` and `scripts/readiness.py`
 contracts, and records but does not rewrite producer reports. It extracts the
@@ -257,14 +278,22 @@ ordered case outcomes and elapsed times. It does not retain free-form observer,
 environment or obstacle prose. If that evidence scope is insufficient, do not
 submit the report through this workflow.
 
-The workflow passes each bounded JSON field through the environment to a
-dedicated parser, which writes a temporary data file; it is not interpolated
-into shell source or logs. It does not upload the original input report. A JSON
-record does not establish identity: the operator confirms that it came from a
-real voluntary observation.
-With no new technical run, matching reports update intake/readiness only;
-technical bundle/source run IDs and hashes stay identical. The updated outer
-manifest/ZIP fingerprint changes and must be reviewed again. A matching passed
+The workflow parser reads bounded fields directly from `GITHUB_EVENT_PATH`;
+raw JSON is not placed in a shell-step environment or interpolated into shell
+source. Only temporary file paths are passed to later steps, and the original
+input report is not uploaded. A JSON record does not establish identity: the
+operator confirms that it came from a real voluntary observation.
+Refresh requires a successful prior handoff run ID. Preflight checks the exact
+candidate, performance, prior handoff run identities and artifact IDs/digests;
+the offline refresh verifies the prior result, diagnostics, reports ZIP,
+package manifest, candidate-bound source files, and technical producer reports.
+It changes only human intake, readiness, notes, index, package manifest, and
+outer ZIP. It checks that technical measurement/package files retain their
+original byte hashes and that candidate/performance run identities are
+unchanged. The index records the immediately previous handoff run and artifact
+ID/digest as refresh provenance. The workflow independently verifies the
+refreshed handoff before upload. The updated outer manifest/ZIP fingerprint
+changes and must be reviewed again. A matching passed
 Windows report can change only `windows_first_run` from pending to passed;
 Apple Silicon and voluntary-use gaps remain pending unless their own matching
 reports are supplied. Failed, invalid, or mismatched reports remain visible and
