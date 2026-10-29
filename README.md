@@ -250,6 +250,7 @@ historical indexed passages, not live copies of the original files.
 | [Indexing diagnostics](docs/indexing-diagnostics.md) | [Search evaluation](docs/search-evaluation.md) |
 | [Portable snapshots](docs/portable-snapshots.md) | [Experimental connector kit](docs/connectors.md) |
 | [Release checks](docs/release-alpha5-verification.md) | [Product direction](docs/product.md) |
+| [Beta.1 platform and preparation policy](docs/beta-support.md) | [Beta evidence handoff contract](docs/beta-evidence.md) |
 | [Русский обзор](docs/ru/overview.md) | [Contributing](CONTRIBUTING.md) |
 
 ## Build from source
