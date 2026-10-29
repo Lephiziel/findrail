@@ -63,7 +63,7 @@ func verifyNativeEvidence(t *testing.T, store *sqlite.Store, query, sourceID, re
 	}
 	hit := result.Results[0]
 	wantURI := nativeFileURI(fullPath)
-	if hit.SourceID != sourceID || hit.Path != relativePath || hit.URI != wantURI {
+	if hit.SourceID != sourceID || hit.Path != relativePath || (hit.URI != wantURI && !nativeURIReferencesPath(hit.URI, fullPath)) {
 		t.Fatalf("search provenance differs from native path: got=%+v want source=%q path=%q uri=%q", hit, sourceID, relativePath, wantURI)
 	}
 	evidence, err := store.Evidence(context.Background(), hit.ID, 0)
@@ -82,6 +82,23 @@ func nativeFileURI(path string) string {
 		path = "/" + path
 	}
 	return (&url.URL{Scheme: "file", Path: path}).String()
+}
+
+func nativeURIReferencesPath(uri, path string) bool {
+	parsed, err := url.Parse(uri)
+	if err != nil || parsed.Scheme != "file" || parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	uriPath := parsed.Path
+	if len(uriPath) >= 3 && uriPath[0] == '/' && uriPath[2] == ':' {
+		uriPath = uriPath[1:]
+	}
+	uriInfo, err := os.Stat(filepath.FromSlash(uriPath))
+	if err != nil {
+		return false
+	}
+	pathInfo, err := os.Stat(path)
+	return err == nil && os.SameFile(uriInfo, pathInfo)
 }
 
 func replaceNativeFile(t *testing.T, path, content string) {
@@ -421,7 +438,7 @@ func TestForgetDuringControlledNativeEnumerationCancelsWithoutLateCommit(t *test
 	if err := os.WriteFile(filepath.Join(root, "controlled.pdf"), []byte("synthetic local pdf bytes"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	watcher.events <- fsnotify.Event{Name: filepath.Join(root, "controlled.pdf"), Op: fsnotify.Create}
+	watcher.events <- fsnotify.Event{Name: filepath.Join(initial.Source().Root, "controlled.pdf"), Op: fsnotify.Create}
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
