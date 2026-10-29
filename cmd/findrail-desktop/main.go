@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/Lephiziel/findrail/internal/cli"
+	"github.com/Lephiziel/findrail/internal/desktop"
 )
 
 var version = "dev"
@@ -16,18 +16,21 @@ var version = "dev"
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	args := os.Args[1:]
+	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr,
+		desktop.StartupDialogAllowed(os.Args[1:], desktop.StartupDialogPlatformAvailable(), desktop.HasInteractiveConsole(), os.LookupEnv),
+		desktop.NotifyNativeStartupFailure)
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+func run(ctx context.Context, args []string, out, stderr io.Writer, allowDialog bool, notify desktop.StartupNotifier) int {
+	cliArgs := args
 	// The executable also hosts the bounded extraction child and version query.
 	// Those must reach CLI dispatch without starting or locking the desktop app.
-	if !(len(args) == 1 && (args[0] == "__extract-pdf" || args[0] == "version")) {
-		args = append([]string{"desktop"}, args...)
+	if !(len(cliArgs) == 1 && (cliArgs[0] == "__extract-pdf" || cliArgs[0] == "version")) {
+		cliArgs = append([]string{"desktop"}, cliArgs...)
 	}
-	if err := cli.Run(ctx, args, os.Stdout, os.Stderr, version); err != nil {
-		fmt.Fprintln(os.Stderr, "findrail-desktop:", err)
-		var exit interface{ ExitCode() int }
-		if errors.As(err, &exit) {
-			os.Exit(exit.ExitCode())
-		}
-		os.Exit(1)
-	}
+	err := cli.Run(ctx, cliArgs, out, stderr, version)
+	return desktop.ReportStartupFailure(err, allowDialog && desktop.IsDesktopInvocation(args), stderr, notify)
 }
