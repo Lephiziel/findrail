@@ -3,6 +3,9 @@
 `0.1.0-beta.1` is an explicitly supported **preparation-only** candidate on
 schema 8. It does not change `build/package/VERSION` (`0.1.0-alpha.5`), create a
 tag/release, or authorize publication. Unknown beta/stable versions fail closed.
+The canonical platform, readiness, and owner-decision policy is
+[beta support](beta-support.md); the offline evidence handoff is specified in
+[beta evidence](beta-evidence.md).
 The contract remains alpha.3/schema 6, alpha.4/schema 7, alpha.5/schema 8, and
 beta.1/schema 8; Client API is 1, VSIX is 0.1.0, with the same five native
 targets and eight release-staging files. Historical manifests and release
@@ -43,18 +46,26 @@ in the [alpha.5 verification record](release-alpha5-verification.md) and
 [resource baseline](resource-baseline.md). No beta binary measurement is claimed
 here.
 
-Human evidence remains pending for TASK30: actual Windows first-run/SmartScreen
-and GUI experience; macOS Apple Silicon Finder/Gatekeeper first-run; independent
-retrieval usefulness and return-use reports tied to the exact candidate/archive;
-and human crash-recovery observations where requested. Automated browser/native
-CI is not a substitute. Missing reports remain pending; malformed or failed
-provided evidence blocks readiness. TASK21 resource-series and TASK23 soak
-reports are supplemental technical evidence, not synthetic substitutes for
-manual use. `final_release` remains false.
+Matching beta.1 human outcomes must be tied to the exact frozen candidate and
+archive. Windows first-run uses the existing `windows_first_run` validator kind;
+the owner's 35/C Windows VM is a plan, not a completed report. Apple Silicon
+first-run and voluntary-use records use the existing `apple_silicon_first_run`
+and `voluntary_usage` kinds. Linux first-use observations are separate and do
+not add a readiness gate. The earlier TASK 30 acceptance is valid only for its
+recorded `b593c70258d4fcc8491d07247dff2004b9580025` SHA/bytes; it is not beta.1
+evidence for this or a later candidate. Automated browser/native CI is not a
+human report. Missing human evidence remains pending; malformed, failed, or
+mismatched supplied evidence blocks readiness. Recovery, 10k/100k scale,
+performance series, and soak are technical evidence and cannot be waived as
+missing people. `final_release` remains false. See the
+[readiness distinction and permitted limited-beta decision](beta-support.md#three-different-decisions).
 
-Build the two manual first-run kits from the actual, byte-verified beta release
-asset bundle, not from an edited alpha.5 manifest. For example, after downloading
-the `release-assets-<full-sha>` Actions artifact into `/abs/evidence/assets`:
+Build manual first-run kits only from the actual, byte-verified beta release
+asset bundle, not from an edited alpha.5 manifest. At this revision the existing
+kit generator covers Windows and Apple Silicon; TASK 32 adds the Linux amd64
+observation kit as a separate, non-readiness observation. After downloading the
+`release-assets-<full-sha>` Actions artifact into `/abs/evidence/assets`, the
+existing Windows/Apple examples are:
 
 ```bash
 python3 scripts/acceptance_kit.py --assets-dir /abs/evidence/assets \
@@ -71,5 +82,8 @@ collect voluntary matching reports separately.
 
 After a successful rehearsal, the owner must separately decide whether to change
 the shipped version and authorize a future release workflow. This document does
-not authorize that action. Any planning target around mid-December for 1.0 is a
-planning assumption, not a promised release date.
+not authorize that action. TASK 34's explicit-publisher protection must be
+integrated before TASK 35/A changes `VERSION`; a version mismatch is only the
+current guard against main-push publication. The current download remains
+alpha.5 until actual beta publication. Any planning target around mid-December
+for 1.0 is a planning assumption, not a promised release date.
