@@ -6,8 +6,9 @@ import io
 import json
 import pathlib
 import shutil
-import sys
 import stat
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -561,6 +562,119 @@ class BetaEvidenceTests(unittest.TestCase):
                     candidate_sha=SHA, candidate_version=evidence.VERSION,
                     assets_dir=fixture["assets"], handoff_dir=refreshed,
                     reports_zip=invalid_zip))
+
+    def test_independent_verify_rejects_rehashed_provenance_and_manual_summary_contradictions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            fixture = _full_beta_fixture(root, initial_manual=True)
+            handoff, reports_zip = root / "handoff", root / "reports.zip"
+            evidence.assemble(argparse.Namespace(
+                candidate_sha=SHA, candidate_version=evidence.VERSION,
+                assets_dir=fixture["assets"], verification_summary=fixture["summary_path"],
+                recovery=fixture["recovery_path"],
+                performance_series_dir=fixture["series_dir"],
+                performance_soak=fixture["soak_path"],
+                scale_10k=fixture["scale_paths"]["scale_10k"],
+                scale_100k=fixture["scale_paths"]["scale_100k"],
+                run_metadata=fixture["metadata_path"], kits_dir=fixture["kits_dir"],
+                output_dir=handoff, reports_zip=reports_zip,
+                windows_report=fixture["windows_report"],
+                linux_report=fixture["linux_report"], diagnostics=None))
+
+            command = [sys.executable, "-B",
+                       str(pathlib.Path(__file__).parents[1] / "scripts/beta_evidence.py"),
+                       "verify", "--candidate-sha", SHA,
+                       "--candidate-version", evidence.VERSION,
+                       "--assets-dir", str(fixture["assets"]),
+                       "--handoff-dir", str(handoff), "--reports-zip", str(reports_zip)]
+
+            def verify():
+                result = subprocess.run(command, capture_output=True, text=True, check=False)
+                return result.returncode, json.loads(result.stdout)
+
+            def reseal():
+                evidence.write_json(handoff / "PACKAGE-MANIFEST.json", {
+                    "manifest_version": 1, "files": evidence._manifest_entries(handoff)})
+                reports_zip.unlink(missing_ok=True)
+                evidence._zip_reports(handoff, reports_zip)
+
+            result_code, result = verify()
+            self.assertEqual((result_code, result["status"]), (0, "passed"))
+            mutations = (
+                ("evidence-index.json", lambda value: value["source_runs"]["candidate"].update(
+                    head_sha="0" * 40)),
+                ("evidence-index.json", lambda value: value["source_runs"]["performance"].update(
+                    head_branch="other-branch")),
+                ("main-verification/verification-summary.json",
+                 lambda value: value.update(run_attempt="99")),
+                ("evidence-index.json", lambda value: next(
+                    artifact for artifact in value["source_runs"]["candidate_artifacts"]
+                    if artifact["name"] == f"release-assets-{SHA}"
+                ).update(url=f"https://github.com/{evidence.REPOSITORY}/actions/runs/120/artifacts/1101")),
+                ("evidence-index.json", lambda value: value["candidate"].update(
+                    candidate_delivery_url=next(
+                        artifact["url"] for artifact in
+                        value["source_runs"]["candidate_artifacts"]
+                        if artifact["name"] == f"release-verification-{SHA}"))),
+                ("evidence-index.json", lambda value: value["readiness"].update(
+                    human_pending=[], release_readiness="passed", software_status="failed")),
+                ("manual-evidence/intake-summary.json", lambda value: value.update(
+                    candidate_sha="0" * 40, windows_first_run="failed",
+                    linux_first_run="complete")),
+                ("evidence-index.json", lambda value: value["platform_summary"][
+                    "windows-amd64"].update(manual_first_run="failed")),
+            )
+            for relative, mutate in mutations:
+                with self.subTest(path=relative, mutation=mutate):
+                    path = handoff / relative
+                    original = path.read_bytes()
+                    changed = json.loads(original)
+                    mutate(changed)
+                    evidence.write_json(path, changed)
+                    reseal()
+                    result_code, result = verify()
+                    self.assertNotEqual(result_code, 0)
+                    self.assertEqual(result["status"], "failed")
+                    path.write_bytes(original)
+                    reseal()
+            result_code, result = verify()
+            self.assertEqual((result_code, result["status"]), (0, "passed"))
+
+    def test_incomplete_manual_intake_remains_consistent_and_verifiable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            fixture = _full_beta_fixture(root, initial_manual=True)
+            windows, _ = evidence.load_json(fixture["windows_report"])
+            windows["status"] = "incomplete"
+            for case in windows["cases"]:
+                case.update(status="not_run", elapsed_seconds=None)
+            evidence.write_json(fixture["windows_report"], windows)
+            handoff, reports_zip = root / "incomplete-handoff", root / "incomplete.zip"
+            result = evidence.assemble(argparse.Namespace(
+                candidate_sha=SHA, candidate_version=evidence.VERSION,
+                assets_dir=fixture["assets"], verification_summary=fixture["summary_path"],
+                recovery=fixture["recovery_path"],
+                performance_series_dir=fixture["series_dir"],
+                performance_soak=fixture["soak_path"],
+                scale_10k=fixture["scale_paths"]["scale_10k"],
+                scale_100k=fixture["scale_paths"]["scale_100k"],
+                run_metadata=fixture["metadata_path"], kits_dir=fixture["kits_dir"],
+                output_dir=handoff, reports_zip=reports_zip,
+                windows_report=fixture["windows_report"],
+                linux_report=fixture["linux_report"], diagnostics=None))
+            verified = evidence.verify(argparse.Namespace(
+                candidate_sha=SHA, candidate_version=evidence.VERSION,
+                assets_dir=fixture["assets"], handoff_dir=handoff,
+                reports_zip=reports_zip))
+            self.assertEqual(result["report_zip_sha256"], verified["report_zip_sha256"])
+            index, _ = evidence.load_json(handoff / "evidence-index.json")
+            intake, _ = evidence.load_json(handoff / "manual-evidence/intake-summary.json")
+            self.assertEqual(intake["windows_first_run"], "incomplete")
+            self.assertEqual(intake["linux_first_run"], "incomplete")
+            self.assertEqual(index["readiness"]["human_pending"], [
+                "windows_first_run", "apple_silicon_first_run", "voluntary_usage"])
+            self.assertEqual(index["platform_summary"]["windows-amd64"]["manual_first_run"],
+                             "incomplete")
 
     def test_extracted_scale_records_reuse_readiness_checks_and_reject_mutations(self):
         with tempfile.TemporaryDirectory() as temp:

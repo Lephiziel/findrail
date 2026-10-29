@@ -1035,26 +1035,51 @@ def _copy_tree(source, destination, *, max_total, max_file=MAX_FILE):
 
 
 def _expected_readiness(readiness_report, sha, version, windows_passed):
-    require(readiness_report.get("candidate_sha") == sha and
-            readiness_report.get("candidate_version") == version and
-            readiness_report.get("software_status") == "passed" and
-            readiness_report.get("final_release") is False and
-            readiness_report.get("release_readiness") == "pending",
+    fields = {"report_version", "candidate_sha", "candidate_version", "software_status",
+              "release_readiness", "final_release", "evidence", "gaps"}
+    require(type(readiness_report) is dict and set(readiness_report) == fields and
+            (readiness_report.get("report_version"), readiness_report.get("candidate_sha"),
+             readiness_report.get("candidate_version"), readiness_report.get("software_status"),
+             readiness_report.get("final_release"), readiness_report.get("release_readiness")) ==
+            (1, sha, version, "passed", False, "pending"),
             "readiness_not_pending")
     evidence = readiness_report.get("evidence", {})
-    technical = ("strict_candidate", "freshness_browser", "installer_native", "crash_recovery",
-                 "scale_10k", "scale_100k")
-    require(all(evidence.get(key) == "passed" for key in technical),
-            "technical_readiness_incomplete")
     expected_windows = "passed" if windows_passed else "pending"
-    require(evidence.get("windows_first_run") == expected_windows and
-            evidence.get("apple_silicon_first_run") == "pending" and
-            evidence.get("voluntary_usage") == "pending", "human_readiness_invalid")
-    gaps = set(readiness_report.get("gaps", []))
-    expected_gaps = {"apple_silicon_first_run_pending", "voluntary_usage_pending"}
-    if not windows_passed:
-        expected_gaps.add("windows_first_run_pending")
-    require(gaps == expected_gaps, "readiness_gaps_invalid")
+    expected_evidence = {
+        "strict_candidate": "passed", "freshness_browser": "passed",
+        "installer_native": "passed", "crash_recovery": "passed",
+        "scale_10k": "passed", "scale_100k": "passed",
+        "windows_first_run": expected_windows,
+        "apple_silicon_first_run": "pending", "voluntary_usage": "pending",
+    }
+    require(type(evidence) is dict and evidence == expected_evidence,
+            "readiness_evidence_invalid")
+    expected_gaps = [f"{key}_pending" for key in readiness.KINDS
+                     if expected_evidence[key] == "pending"]
+    require(readiness_report.get("gaps") == expected_gaps, "readiness_gaps_invalid")
+
+
+def _expected_platform_summary(windows_outcome, linux_outcome):
+    windows_manual = {
+        "complete": "passed", "incomplete": "incomplete", "not_supplied": "pending",
+    }[windows_outcome]
+    windows_scope = {
+        "complete": "operator-supplied matching manual report",
+        "incomplete": "matching report supplied",
+        "not_supplied": "not supplied",
+    }[windows_outcome]
+    linux_manual = {
+        "complete": "recorded", "incomplete": "incomplete", "not_supplied": "not supplied",
+    }[linux_outcome]
+    return {
+        "windows-amd64": {"native_ci": "passed", "manual_first_run": windows_manual,
+                          "scope": windows_scope},
+        "linux-amd64": {"native_ci": "passed", "manual_first_run": linux_manual,
+                        "readiness_gate": False},
+        "macos": {"native_ci": "passed", "manual_first_run": "pending",
+                  "coverage": "macOS CI-only; Apple Silicon and Intel manual outcomes not inferred"},
+        "linux-arm64": {"native_ci": "passed", "manual_first_run": "experimental/pending"},
+    }
 
 
 def _manifest_entries(root):
@@ -1221,18 +1246,9 @@ def _build_payload(stage, args, candidate, native, manifest, run_metadata,
                                         ("windows_first_run", "apple_silicon_first_run", "voluntary_usage")
                                         if readiness_result["evidence"][key] == "pending"],
                       "evidence": readiness_result["evidence"]},
-        "platform_summary": {
-            "windows-amd64": {"native_ci": "passed", "manual_first_run":
-                              "passed" if windows_passed else "pending",
-                              "scope": "operator-supplied matching manual report" if windows_passed else "not supplied"},
-            "linux-amd64": {"native_ci": "passed", "manual_first_run":
-                            ("recorded" if manual.get("linux_outcome") == "complete" else
-                             "incomplete" if manual.get("linux_outcome") == "incomplete" else "not supplied"),
-                            "readiness_gate": False},
-            "macos": {"native_ci": "passed", "manual_first_run": "pending",
-                      "coverage": "macOS CI-only; Apple Silicon and Intel manual outcomes not inferred"},
-            "linux-arm64": {"native_ci": "passed", "manual_first_run": "experimental/pending"},
-        },
+        "platform_summary": _expected_platform_summary(
+            manual.get("windows_outcome", "not_supplied"),
+            manual.get("linux_outcome", "not_supplied")),
         "publication_notes_sha256": notes_sha,
         "final_release": False,
     }
@@ -1428,6 +1444,7 @@ def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=No
     _validate_refresh_provenance(index)
     summary, _ = load_json(paths["main-verification/verification-summary.json"])
     native, asset_manifest = _validate_summary(summary, assets_dir, sha, version)
+    _validate_source_runs(index, summary, sha)
     binary_sha = native["linux-amd64"]["binary_sha256"]
     require(index["candidate"].get("linux_binary_sha256") == binary_sha,
             "evidence_index_binary_mismatch")
@@ -1451,36 +1468,50 @@ def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=No
     soak_info = _validate_soak(root / "performance-soak/report.json", sha, version, binary_sha)
     windows_path = paths.get("evidence/windows-first-run.json")
     windows_passed = windows_path is not None
+    windows_outcome = "not_supplied"
     if windows_path:
         window, _ = load_json(windows_path)
         try:
-            outcome = manual_evidence.validate(window, summary, native)
+            windows_outcome = manual_evidence.validate(window, summary, native)
         except (ValueError, KeyError, TypeError, AttributeError):
             raise EvidenceError("windows_supplement_invalid") from None
-        require(outcome == "complete" and window.get("status") == "passed",
+        require(windows_outcome == "complete" and window.get("status") == "passed",
                 "windows_supplement_invalid")
     elif "manual-evidence/windows-first-run.json" in paths:
         window, _ = load_json(paths["manual-evidence/windows-first-run.json"], MAX_MANUAL_JSON)
         try:
-            outcome = manual_evidence.validate(window, summary, native)
+            windows_outcome = manual_evidence.validate(window, summary, native)
         except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
             raise EvidenceError("windows_intake_invalid") from None
-        require(outcome == "incomplete" and window.get("status") in ("incomplete", "not_run"),
+        require(windows_outcome == "incomplete" and
+                window.get("status") in ("incomplete", "not_run"),
                 "windows_intake_invalid")
+    linux_outcome = "not_supplied"
     if "manual-evidence/linux-observations.json" in paths:
         observations, _ = load_json(paths["manual-evidence/linux-observations.json"],
                                     MAX_LINUX_OBSERVATIONS)
-        _validate_linux_observations(observations, summary, native)
+        linux_outcome = _validate_linux_observations(observations, summary, native)
     readiness_path = paths.get("readiness-after-scale.json")
     require(readiness_path is not None, "readiness_missing")
     readiness_report, _ = load_json(readiness_path, 1 << 20)
     _expected_readiness(readiness_report, sha, version, windows_passed)
-    if expected_manual is not None:
-        _verify_manual_payload(paths, expected_manual, summary, native)
+    _verify_manual_payload(paths, expected_manual, summary, native,
+                           windows_outcome, linux_outcome)
     _verify_asset_index(index, asset_manifest, assets_dir, sha, version)
-    require(index.get("readiness", {}).get("evidence") == readiness_report["evidence"] and
-            index.get("readiness", {}).get("final_release") is False,
+    expected_index_readiness = {
+        "software_status": readiness_report["software_status"],
+        "release_readiness": readiness_report["release_readiness"],
+        "final_release": False,
+        "human_pending": [key for key in
+                          ("windows_first_run", "apple_silicon_first_run", "voluntary_usage")
+                          if readiness_report["evidence"][key] == "pending"],
+        "evidence": readiness_report["evidence"],
+    }
+    require(index.get("readiness") == expected_index_readiness,
             "evidence_index_readiness_mismatch")
+    require(index.get("platform_summary") ==
+            _expected_platform_summary(windows_outcome, linux_outcome),
+            "evidence_index_platform_summary_mismatch")
     require(index.get("publication_notes_sha256") == file_digest(paths["publication-notes.md"]),
             "publication_notes_hash_mismatch")
     require(series_info[0]["qualification"] == "reference_only" and
@@ -1545,10 +1576,12 @@ def _validate_linux_observations(observations, candidate, native):
         except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
             raise EvidenceError("linux_observations_invalid") from None
         require(outcome == record["status"], "linux_observations_invalid")
+    return "incomplete" if any(item["status"] == "incomplete" for item in records) else "complete"
 
 
-def _verify_manual_payload(paths, manual, candidate, native):
-    if "windows" in manual:
+def _verify_manual_payload(paths, manual, candidate, native,
+                           windows_outcome, linux_outcome):
+    if manual is not None and "windows" in manual:
         if manual["windows_outcome"] == "complete":
             require("evidence/windows-first-run.json" in paths, "windows_supplement_missing")
             actual, _ = load_json(paths["evidence/windows-first-run.json"])
@@ -1557,16 +1590,29 @@ def _verify_manual_payload(paths, manual, candidate, native):
             require("manual-evidence/windows-first-run.json" in paths, "windows_intake_missing")
             actual, _ = load_json(paths["manual-evidence/windows-first-run.json"])
             require(actual == manual["windows"], "windows_intake_mismatch")
-    if "linux" in manual:
+    if manual is not None and "linux" in manual:
         require("manual-evidence/linux-observations.json" in paths,
                 "linux_observations_missing")
         actual, _ = load_json(paths["manual-evidence/linux-observations.json"])
         require(actual == manual["linux"], "linux_observations_mismatch")
-    if manual:
+    has_manual = any(name in paths for name in (
+        "evidence/windows-first-run.json", "manual-evidence/windows-first-run.json",
+        "manual-evidence/linux-observations.json"))
+    if has_manual:
         require("manual-evidence/intake-summary.json" in paths, "manual_summary_missing")
         summary, _ = load_json(paths["manual-evidence/intake-summary.json"])
-        require(summary.get("candidate_sha") == candidate["candidate_sha"] and
-                summary.get("candidate_version") == candidate["candidate_version"],
+        expected = {
+            "candidate_sha": candidate["candidate_sha"],
+            "candidate_version": candidate["candidate_version"],
+            "windows_first_run": windows_outcome,
+            "linux_first_run": linux_outcome,
+            "apple_silicon_first_run": "pending",
+            "voluntary_usage": "pending",
+        }
+        require(summary == expected,
+                "manual_summary_mismatch")
+    else:
+        require("manual-evidence/intake-summary.json" not in paths,
                 "manual_summary_mismatch")
 
 
@@ -1579,6 +1625,80 @@ def _verify_asset_index(index, manifest, assets_dir, sha, version):
             (candidate.get("schema_version"), candidate.get("client_api_version"),
              candidate.get("vsix_version")) == (SCHEMA, CLIENT_API, VSIX_VERSION),
             "evidence_index_assets_invalid")
+
+
+def _validate_source_runs(index, summary, candidate_sha):
+    source_runs = index.get("source_runs")
+    run_fields = {"run_id", "run_attempt", "workflow_id", "workflow_path", "event",
+                  "head_branch", "head_sha", "conclusion", "url"}
+
+    def validate_run(run, kind, workflow_path, event):
+        require(type(run) is dict and set(run) == run_fields and
+                type(run.get("run_id")) is str and
+                RUN_ID_RE.fullmatch(run["run_id"]) is not None and
+                type(run.get("run_attempt")) is int and run["run_attempt"] > 0 and
+                type(run.get("workflow_id")) is str and run["workflow_id"].isdigit() and
+                (run.get("workflow_path"), run.get("event"), run.get("head_branch"),
+                 run.get("head_sha"), run.get("conclusion"), run.get("url")) ==
+                (workflow_path, event, "main", candidate_sha, "success",
+                 f"https://github.com/{REPOSITORY}/actions/runs/{run['run_id']}"),
+                f"{kind}_source_run_invalid")
+
+    artifact_fields = {"name", "id", "digest", "size_in_bytes", "expires_at", "url"}
+
+    def validate_artifacts(items, run, expected_names, kind):
+        require(type(items) is list and len(items) == len(expected_names),
+                f"{kind}_source_artifacts_invalid")
+        by_name = {}
+        ids = set()
+        for item in items:
+            require(type(item) is dict and set(item) == artifact_fields and
+                    type(item.get("name")) is str and item["name"] not in by_name and
+                    type(item.get("id")) is str and
+                    RUN_ID_RE.fullmatch(item["id"]) is not None and item["id"] not in ids and
+                    type(item.get("digest")) is str and
+                    ARTIFACT_DIGEST_RE.fullmatch(item["digest"]) is not None and
+                    type(item.get("size_in_bytes")) is int and
+                    0 < item["size_in_bytes"] <= MAX_INPUT_TREE and
+                    type(item.get("expires_at")) is str and
+                    item.get("url") ==
+                    f"https://github.com/{REPOSITORY}/actions/runs/{run['run_id']}"
+                    f"/artifacts/{item['id']}", f"{kind}_source_artifact_invalid")
+            by_name[item["name"]] = item
+            ids.add(item["id"])
+        require(set(by_name) == expected_names, f"{kind}_source_artifacts_invalid")
+        return by_name
+
+    require(type(source_runs) is dict and set(source_runs) == {
+        "candidate", "performance", "candidate_artifacts", "performance_artifacts"},
+        "source_runs_invalid")
+    candidate = source_runs["candidate"]
+    performance = source_runs["performance"]
+    validate_run(candidate, "candidate", ".github/workflows/alpha-release.yml", "push")
+    validate_run(performance, "performance", ".github/workflows/performance-check.yml",
+                 "workflow_dispatch")
+    require(candidate["run_id"] != performance["run_id"], "source_runs_invalid")
+    require(summary.get("run_url") == candidate["url"] and
+            type(summary.get("run_attempt")) is str and
+            summary["run_attempt"] == str(candidate["run_attempt"]),
+            "summary_run_provenance_mismatch")
+
+    candidate_names = {
+        f"release-assets-{candidate_sha}",
+        f"release-verification-{candidate_sha}",
+        f"release-package-{candidate_sha}-linux-amd64",
+    }
+    candidate_artifacts = validate_artifacts(
+        source_runs["candidate_artifacts"], candidate, candidate_names, "candidate")
+    performance_names = {
+        f"performance-series-{candidate_sha}-{performance['run_id']}",
+        f"performance-soak-{candidate_sha}-{performance['run_id']}",
+    }
+    validate_artifacts(source_runs["performance_artifacts"], performance,
+                       performance_names, "performance")
+    require(index.get("candidate", {}).get("candidate_delivery_url") ==
+            candidate_artifacts[f"release-assets-{candidate_sha}"]["url"],
+            "candidate_delivery_url_invalid")
 
 
 def _validate_refresh_provenance(index):
@@ -1908,15 +2028,8 @@ def refresh(args):
                               if readiness_result["evidence"][key] == "pending"],
             "evidence": readiness_result["evidence"]}
         index["publication_notes_sha256"] = sha256_bytes(notes)
-        index["platform_summary"]["windows-amd64"].update(
-            manual_first_run="passed" if windows_passed else windows_outcome,
-            scope=("operator-supplied matching manual report" if windows_passed else
-                   "matching report supplied" if windows_outcome == "incomplete" else
-                   "not supplied"))
-        index["platform_summary"]["linux-amd64"].update(
-            manual_first_run=("recorded" if linux_outcome == "complete" else
-                              "incomplete" if linux_outcome == "incomplete" else "not supplied"),
-            readiness_gate=False)
+        index["platform_summary"] = _expected_platform_summary(
+            windows_outcome, linux_outcome)
         write_json(index_path, index)
         write_json(stage / "PACKAGE-MANIFEST.json", {
             "manifest_version": 1, "files": _manifest_entries(stage)})
