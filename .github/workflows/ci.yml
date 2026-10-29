@@ -50,6 +50,8 @@ jobs:
         run: go vet ./...
       - name: Tests
         run: go test ./...
+      - name: Native case-only rename observation
+        run: go test -v ./internal/sync -run '^TestNativeCaseOnlyRenameReplacesIdentityAndPrunesOldDocument$' -count=1
       - name: Build without CGO
         env:
           CGO_ENABLED: '0'
