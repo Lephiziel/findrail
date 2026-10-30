@@ -138,9 +138,10 @@ jobs:
         timeout-minutes: 35
         run: |
           set -euo pipefail
+          # --queries counts warm samples per family: 5 common + 5 rare.
           python3 scripts/search_resource_check.py \
             --binary "$CANDIDATE_BINARY" --documents 10000 \
-            --seed 42 --queries 10 --source-cycle-boundaries \
+            --seed 42 --queries 5 --source-cycle-boundaries \
             --report "$WORK_ROOT/scale-10k.json"
       - name: Measure extracted beta.1 Linux binary at 100,000 documents
         if: inputs.mode == 'initial'
@@ -150,7 +151,7 @@ jobs:
           set -euo pipefail
           python3 scripts/search_resource_check.py \
             --binary "$CANDIDATE_BINARY" --documents 100000 \
-            --seed 42 --queries 10 --source-cycle-boundaries --allow-large \
+            --seed 42 --queries 5 --source-cycle-boundaries --allow-large \
             --report "$WORK_ROOT/scale-100k.json"
       - name: Prepare exact-candidate Windows, Linux, and Apple Silicon kits
         if: inputs.mode == 'initial'
