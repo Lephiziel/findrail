@@ -25,6 +25,38 @@ type recordingRunner struct {
 	apiResponses map[string][]byte
 }
 
+type execGHRunner struct {
+	mode string
+}
+
+type execTagGateway struct {
+	*fakeGateway
+	missingTag *GitHubCLI
+	presentTag *GitHubCLI
+}
+
+func (g *execTagGateway) TagSHA(ctx context.Context, tag string) (string, error) {
+	g.events = append(g.events, "tag")
+	if g.publishCalls > 0 {
+		return g.presentTag.TagSHA(ctx, tag)
+	}
+	return g.missingTag.TagSHA(ctx, tag)
+}
+
+func (r execGHRunner) Run(ctx context.Context, _ string, args []string, dir string, env map[string]string, outputLimit int) ([]byte, error) {
+	if len(args) != 2 || args[0] != "api" {
+		return nil, fmt.Errorf("unexpected gh command: %v", args)
+	}
+	childEnv := make(map[string]string, len(env)+2)
+	for key, value := range env {
+		childEnv[key] = value
+	}
+	childEnv["FINDRAIL_PROMOTION_HELPER"] = "1"
+	childEnv["FINDRAIL_PROMOTION_HELPER_MODE"] = r.mode
+	return (ExecRunner{}).Run(ctx, os.Args[0],
+		[]string{"-test.run=^TestPromotionSubprocessHelper$", "--"}, dir, childEnv, outputLimit)
+}
+
 func (r *recordingRunner) Run(_ context.Context, program string, args []string, _ string, _ map[string]string, outputLimit int) ([]byte, error) {
 	r.calls = append(r.calls, recordedCommand{program: program, args: append([]string(nil), args...), limit: outputLimit})
 	if len(args) == 2 && args[0] == "api" {
@@ -114,7 +146,7 @@ func TestGitHubCLIDraftTargetAndTag404AreProviderFaithful(t *testing.T) {
 		}
 	})
 	t.Run("only exact tag-ref 404 is absence", func(t *testing.T) {
-		notFound := failure{code: "command_failed", output: "gh: Not Found (HTTP 404)\n"}
+		notFound := failure{code: "command_failed", stderr: "gh: Not Found (HTTP 404)\n"}
 		runner := &recordingRunner{apiErrors: map[string]error{
 			tagPath:     notFound,
 			releasePath: notFound,
@@ -134,7 +166,7 @@ func TestGitHubCLIDraftTargetAndTag404AreProviderFaithful(t *testing.T) {
 	for _, status := range []int{403, 500} {
 		t.Run(fmt.Sprintf("HTTP %d is not absence", status), func(t *testing.T) {
 			runner := &recordingRunner{apiErrors: map[string]error{
-				tagPath: failure{code: "command_failed", output: fmt.Sprintf("gh: provider error (HTTP %d)\n", status)},
+				tagPath: failure{code: "command_failed", stderr: fmt.Sprintf("gh: provider error (HTTP %d)\n", status)},
 			}}
 			cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
 			if _, err := cli.TagSHA(context.Background(), "v"+Version); err == nil || errors.Is(err, errTagNotFound) {
@@ -144,13 +176,77 @@ func TestGitHubCLIDraftTargetAndTag404AreProviderFaithful(t *testing.T) {
 	}
 	t.Run("malformed 404 output is not absence", func(t *testing.T) {
 		runner := &recordingRunner{apiErrors: map[string]error{
-			tagPath: failure{code: "command_failed", output: "HTTP 404\nprovider detail"},
+			tagPath: failure{code: "command_failed", stderr: "HTTP 404\nprovider detail"},
 		}}
 		cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
 		if _, err := cli.TagSHA(context.Background(), "v"+Version); err == nil || errors.Is(err, errTagNotFound) {
 			t.Fatalf("untrusted 404 text was treated as absence: %v", err)
 		}
 	})
+	t.Run("noncanonical 404 text is not absence", func(t *testing.T) {
+		runner := &recordingRunner{apiErrors: map[string]error{
+			tagPath: failure{code: "command_failed", stderr: "gh: API response failed (HTTP 404)\n"},
+		}}
+		cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+		if _, err := cli.TagSHA(context.Background(), "v"+Version); err == nil || errors.Is(err, errTagNotFound) {
+			t.Fatalf("noncanonical 404 text was treated as absence: %v", err)
+		}
+	})
+}
+
+func TestGitHubCLIRecognizesActualExecRunner404WithJSONOnStdout(t *testing.T) {
+	for _, test := range []struct {
+		mode       string
+		wantAbsent bool
+	}{
+		{mode: "gh-api-404-json", wantAbsent: true},
+		{mode: "gh-api-403-json"},
+		{mode: "gh-api-500-json"},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			cli := NewGitHubCLI(execGHRunner{mode: test.mode}, Config{RepoRoot: t.TempDir()})
+			_, err := cli.TagSHA(context.Background(), "v"+Version)
+			if test.wantAbsent {
+				if !errors.Is(err, errTagNotFound) {
+					t.Fatalf("real ExecRunner gh output did not map exact 404 to absence: %v", err)
+				}
+				if err.Error() != errTagNotFound.Error() {
+					t.Fatalf("raw API response leaked in expected-absence error: %v", err)
+				}
+				return
+			}
+			if err == nil || errors.Is(err, errTagNotFound) || err.Error() != "github_api_failed" {
+				t.Fatalf("non-404 API error was not kept as a short hard failure: %v", err)
+			}
+		})
+	}
+}
+
+func TestPromotionLifecycleAcceptsRealExecRunnerDraftTag404(t *testing.T) {
+	request := validRequest()
+	runner := &fakeRunner{request: request}
+	gateway := newFakeGateway(request)
+	config, deps := configForTest(t, runner, gateway)
+	deps.Gateway = &execTagGateway{
+		fakeGateway: gateway,
+		missingTag:  NewGitHubCLI(execGHRunner{mode: "gh-api-404-json"}, Config{RepoRoot: config.RepoRoot}),
+		presentTag:  NewGitHubCLI(execGHRunner{mode: "gh-api-tag-present"}, Config{RepoRoot: config.RepoRoot}),
+	}
+	result, err := Run(context.Background(), request, config, PublishMode, deps)
+	if err != nil {
+		t.Fatalf("promotion did not complete with expected unpublished-tag 404: %v", err)
+	}
+	if result.Decision != "published" || result.PublishedSHA != request.CandidateSHA {
+		t.Fatalf("unexpected successful promotion result: %+v", result)
+	}
+	if gateway.createCalls != 1 || gateway.uploadCalls != 1 || gateway.publishCalls != 1 {
+		t.Fatalf("404 interrupted fake promotion lifecycle: create=%d upload=%d publish=%d",
+			gateway.createCalls, gateway.uploadCalls, gateway.publishCalls)
+	}
+	if !hasOrderedEvents(gateway.events, []string{"upload", "assets", "download", "release", "assets", "tag", "main", "publish", "release", "tag"}) {
+		t.Fatalf("promotion did not verify existing ref only after public transition: %v", gateway.events)
+	}
+	assertAuditStatus(t, config.AuditFile, "published", false)
 }
 
 func TestGitHubCLIRejectsAmbiguousReleaseListAndUnexpectedOutput(t *testing.T) {

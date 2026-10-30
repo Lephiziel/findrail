@@ -144,7 +144,7 @@ type Result struct {
 
 type failure struct {
 	code   string
-	output string
+	stderr string
 }
 
 func (e failure) Error() string { return e.code }

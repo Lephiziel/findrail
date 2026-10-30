@@ -23,7 +23,10 @@ func commandHTTPStatus(err error) int {
 	if !errors.As(err, &commandErr) || commandErr.code != "command_failed" {
 		return 0
 	}
-	line := strings.TrimSpace(commandErr.output)
+	line := commandErr.stderr
+	if strings.HasSuffix(line, "\n") {
+		line = strings.TrimSuffix(line, "\n")
+	}
 	if strings.ContainsAny(line, "\r\n") || !strings.HasPrefix(line, "gh: ") {
 		return 0
 	}
@@ -34,6 +37,9 @@ func commandHTTPStatus(err error) int {
 	}
 	status, err := strconv.Atoi(line[index+len(marker) : len(line)-1])
 	if err != nil || status < 100 || status > 599 {
+		return 0
+	}
+	if status == 404 && line != "gh: Not Found (HTTP 404)" {
 		return 0
 	}
 	return status

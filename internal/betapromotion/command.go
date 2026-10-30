@@ -1,6 +1,7 @@
 package betapromotion
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 func runExec(ctx context.Context, program string, args []string, directory string, overrides map[string]string, outputLimit int) ([]byte, error) {
@@ -21,9 +23,9 @@ func runExec(ctx context.Context, program string, args []string, directory strin
 	cmd := exec.CommandContext(ctx, program, args...)
 	cmd.Dir = directory
 	cmd.Env = commandEnvironment(overrides)
-	output := &boundedBuffer{max: outputLimit}
-	cmd.Stdout = output
-	cmd.Stderr = output
+	output := &commandOutput{max: outputLimit}
+	cmd.Stdout = output.stream(false)
+	cmd.Stderr = output.stream(true)
 	runErr := cmd.Run()
 	if output.exceeded() {
 		return nil, fail("command_output_exceeded")
@@ -35,9 +37,64 @@ func runExec(ctx context.Context, program string, args []string, directory strin
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil, fail("command_canceled")
 		}
-		return nil, failure{code: "command_failed", output: string(output.result())}
+		return nil, failure{code: "command_failed", stderr: string(output.stderrResult())}
 	}
-	return output.result(), nil
+	return output.stdoutResult(), nil
+}
+
+type commandOutput struct {
+	mu       sync.Mutex
+	stdout   bytes.Buffer
+	stderr   bytes.Buffer
+	max      int
+	total    int
+	overflow bool
+}
+
+type commandOutputStream struct {
+	output *commandOutput
+	stderr bool
+}
+
+func (o *commandOutput) stream(stderr bool) io.Writer {
+	return commandOutputStream{output: o, stderr: stderr}
+}
+
+func (s commandOutputStream) Write(p []byte) (int, error) {
+	o := s.output
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(p) > o.max-o.total {
+		o.overflow = true
+		return 0, errors.New("command output exceeded bound")
+	}
+	var target *bytes.Buffer
+	if s.stderr {
+		target = &o.stderr
+	} else {
+		target = &o.stdout
+	}
+	n, err := target.Write(p)
+	o.total += n
+	return n, err
+}
+
+func (o *commandOutput) exceeded() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.overflow
+}
+
+func (o *commandOutput) stdoutResult() []byte {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]byte(nil), o.stdout.Bytes()...)
+}
+
+func (o *commandOutput) stderrResult() []byte {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]byte(nil), o.stderr.Bytes()...)
 }
 
 func runExecToFile(ctx context.Context, program string, args []string, directory string, overrides map[string]string, destination string, maxBytes int64, outputLimit int) error {

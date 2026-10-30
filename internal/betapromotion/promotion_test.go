@@ -587,7 +587,12 @@ func TestExecRunnerEnforcesOutputAndContextBounds(t *testing.T) {
 	if output, err := runner.Run(context.Background(), os.Args[0], helperArgs, "", env, 32); err == nil {
 		t.Fatalf("oversized child output was accepted (len=%d, output=%q)", len(output), output)
 	}
+	env["FINDRAIL_PROMOTION_HELPER_MODE"] = "split-output"
+	if _, err := runner.Run(context.Background(), os.Args[0], helperArgs, "", env, 32); err == nil || errorCode(err) != "command_output_exceeded" {
+		t.Fatalf("stdout and stderr did not share one output bound: %v", err)
+	}
 	destination := filepath.Join(t.TempDir(), "bounded.bin")
+	env["FINDRAIL_PROMOTION_HELPER_MODE"] = "output"
 	if err := runner.RunToFile(context.Background(), os.Args[0], helperArgs, "", env, destination, 32, 32); err == nil || errorCode(err) != "download_size_exceeded" {
 		t.Fatalf("oversized child file output was accepted: %v", err)
 	}
@@ -609,6 +614,23 @@ func TestPromotionSubprocessHelper(t *testing.T) {
 	switch os.Getenv("FINDRAIL_PROMOTION_HELPER_MODE") {
 	case "output":
 		_, _ = os.Stdout.Write([]byte(strings.Repeat("x", 1024)))
+	case "split-output":
+		_, _ = os.Stdout.Write([]byte(strings.Repeat("o", 20)))
+		_, _ = os.Stderr.Write([]byte(strings.Repeat("e", 20)))
+	case "gh-api-404-json":
+		_, _ = os.Stdout.Write([]byte(`{"message":"Not Found","documentation_url":"https://docs.github.com/rest/git/refs#get-a-reference","status":"404"}`))
+		_, _ = os.Stderr.Write([]byte("gh: Not Found (HTTP 404)\n"))
+		os.Exit(1)
+	case "gh-api-403-json":
+		_, _ = os.Stdout.Write([]byte(`{"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com/rest/git/refs#get-a-reference","status":"403"}`))
+		_, _ = os.Stderr.Write([]byte("gh: Resource not accessible by integration (HTTP 403)\n"))
+		os.Exit(1)
+	case "gh-api-500-json":
+		_, _ = os.Stdout.Write([]byte(`{"message":"Server Error","documentation_url":"https://docs.github.com/rest/git/refs#get-a-reference","status":"500"}`))
+		_, _ = os.Stderr.Write([]byte("gh: Server Error (HTTP 500)\n"))
+		os.Exit(1)
+	case "gh-api-tag-present":
+		_, _ = os.Stdout.Write([]byte(`{"object":{"type":"commit","sha":"` + testSHA + `"}}`))
 	case "wait":
 		time.Sleep(time.Second)
 	}
