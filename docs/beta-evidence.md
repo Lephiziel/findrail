@@ -203,8 +203,10 @@ assets and candidate. `linux-package/recovery-candidate.json` must be a passed
 Linux recovery record for that SHA/schema. Both scale files are the unchanged
 `search_resource_check.py` reports on the extracted candidate binary, fixture
 v2/seed 42, 10,000 and 100,000 documents, with source-cycle boundaries (and
-`--allow-large` for 100k). Verify all producer checks, not just the top-level
-status: corpus/counts, paging 20/50/100, refresh/cancellation/concurrent reads,
+`--allow-large` for 100k). Pass `--queries 5`: this counts five warm requests per
+family (`common` and `rare`), ten measured requests in total. The first warmup
+request for each family is excluded. Verify all producer checks, not just the
+top-level status: corpus/counts, paging 20/50/100, refresh/cancellation/concurrent reads,
 evidence boundaries, and exact binary hash.
 
 The performance-series artifact must retain the full TASK 21 series (10k and
