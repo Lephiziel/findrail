@@ -22,7 +22,7 @@ class ReleaseGateTests(unittest.TestCase):
             release_gate.validate_publication_version('0.1.0-beta.1', '0.1.0-alpha.5', True)
         self.assertTrue(release_gate.validate_publication_version('0.1.0-alpha.5', '0.1.0-alpha.5', True))
         with self.assertRaisesRegex(ValueError, 'unknown published'):
-            release_gate.existing_release_decision('0.1.0-beta.1', 'a' * 40, None, None, [])
+            release_gate.existing_release_decision('0.1.0-beta.2', 'a' * 40, None, None, [])
 
     def test_only_expected_push_context_is_trusted(self):
         sha = 'a' * 40
@@ -61,6 +61,11 @@ class ReleaseGateTests(unittest.TestCase):
         release_gate.verify_remote_checksums([{'name': 'a.zip', 'data': content}, {'name': 'SHA256SUMS.txt'}], f'{good}  a.zip\n')
         with self.assertRaises(ValueError): release_gate.verify_remote_checksums([{'name': 'a.zip', 'data': b'bad'}, {'name': 'SHA256SUMS.txt'}], f'{good}  a.zip\n')
         with self.assertRaises(ValueError): release_gate.verify_remote_checksums([{'name': 'a.zip', 'data': content}, {'name': 'SHA256SUMS.txt'}], f'{good}  a.zip\n{good}  a.zip\n')
+
+    def test_github_json_responses_are_bounded(self):
+        with patch.object(release_gate, 'MAX_GITHUB_JSON', 4):
+            with self.assertRaisesRegex(ValueError, 'response bound'):
+                release_gate._read_github_json(io.BytesIO(b'12345'), 'synthetic response')
 
     def test_alpha3_published_sha_is_immutable_and_unknown_contract_fails_closed(self):
         sha = release_gate.ALPHA3_REVISION
@@ -125,11 +130,13 @@ class ReleaseGateTests(unittest.TestCase):
             root, revision=sha, version='0.1.0-alpha.5', schema=8)
         output = root / 'release'
         release_assets.assemble(source, output, '0.1.0-alpha.5', sha)
-        urls = {path.name: 'https://example.invalid/' + path.name for path in output.iterdir()}
+        urls = {path.name: 'https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/' + path.name
+                for path in output.iterdir()}
         base = 'https://api.github.com/repos/Lephiziel/findrail'
         responses = {urls[path.name]: path.read_bytes() for path in output.iterdir()}
         responses[base + '/releases/tags/v0.1.0-alpha.5'] = json.dumps({
-            'assets': [{'name': name, 'browser_download_url': url} for name, url in urls.items()]}).encode()
+            'assets': [{'name': name, 'browser_download_url': url,
+                        'size': len(responses[url])} for name, url in urls.items()]}).encode()
         responses[base + '/git/ref/tags/v0.1.0-alpha.5'] = json.dumps({
             'object': {'type': 'commit', 'sha': sha}}).encode()
         return sha, urls, responses
@@ -158,9 +165,189 @@ class ReleaseGateTests(unittest.TestCase):
         responses[urls['SHA256SUMS.txt']] = ''.join(
             hashlib.sha256(responses[urls[name]]).hexdigest() + '  ' + name + '\n'
             for name in sorted(urls) if name != 'SHA256SUMS.txt').encode()
+        for url, body in tuple(responses.items()):
+            if '/releases/tags/v0.1.0-' not in url:
+                continue
+            release = json.loads(body)
+            for item in release.get('assets', []):
+                item['size'] = len(responses[item['browser_download_url']])
+            responses[url] = json.dumps(release).encode()
         release_gate.verify_remote_checksums(
             [{'name': name, 'data': responses[url]} for name, url in urls.items()],
             responses[urls['SHA256SUMS.txt']].decode())
+
+    def beta1_remote_fixture(self, root):
+        sha = '7' * 40
+        source, _ = test_release_assets.ReleaseAssetTests().candidate(
+            root, revision=sha, version=release_gate.BETA1_VERSION, schema=8)
+        output = root / 'beta-release'
+        release_assets.assemble(source, output, release_gate.BETA1_VERSION, sha)
+        urls = {path.name: 'https://github.com/Lephiziel/findrail/releases/download/v0.1.0-beta.1/' + path.name
+                for path in output.iterdir()}
+        base = 'https://api.github.com/repos/Lephiziel/findrail'
+        responses = {urls[path.name]: path.read_bytes() for path in output.iterdir()}
+        responses[base + '/releases/tags/v0.1.0-beta.1'] = json.dumps({
+            'tag_name': 'v0.1.0-beta.1', 'draft': False, 'prerelease': True,
+            'assets': [{'name': name, 'browser_download_url': url, 'size': len(responses[url])}
+                       for name, url in urls.items()]}).encode()
+        responses[base + '/git/ref/tags/v0.1.0-beta.1'] = json.dumps({
+            'object': {'type': 'commit', 'sha': sha}}).encode()
+        return sha, urls, responses
+
+    def check_remote_beta1(self, responses):
+        base = 'https://api.github.com/repos/Lephiziel/findrail'
+
+        def response(request, **kwargs):
+            value = responses[request.full_url]
+            if isinstance(value, Exception):
+                raise value
+            return io.BytesIO(value)
+
+        with patch.object(release_gate.urllib.request, 'urlopen', side_effect=response), \
+                patch.object(release_assets.package, 'schema_version', return_value=9):
+            return release_gate.github_release_state(
+                'Lephiziel/findrail', release_gate.BETA1_VERSION, '8' * 40, 'test-token')
+
+    def test_complete_beta1_is_historical_noop_with_immutable_schema_and_exact_eight_assets(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            sha, urls, responses = self.beta1_remote_fixture(root)
+            self.assertEqual(self.check_remote_beta1(responses),
+                             {'decision': 'noop', 'published_sha': sha})
+            release_response = json.loads(responses[
+                'https://api.github.com/repos/Lephiziel/findrail/releases/tags/v0.1.0-beta.1'])
+            assets = [{'name': item['name']} for item in release_response['assets']]
+            manifest = json.loads(responses[urls['release-manifest.json']])
+            self.assertEqual(release_gate.existing_release_decision(
+                release_gate.BETA1_VERSION, '8' * 40, sha,
+                {'tag_sha': sha, 'tag_name': 'v0.1.0-beta.1', 'manifest': manifest,
+                 'prerelease': True, 'draft': False},
+                assets), 'noop')
+            for tag_name in (None, 'v0.1.0-beta.2'):
+                invalid_release = {'tag_sha': sha, 'manifest': manifest,
+                                   'prerelease': True, 'draft': False}
+                if tag_name is not None:
+                    invalid_release['tag_name'] = tag_name
+                with self.subTest(tag_name=tag_name), self.assertRaisesRegex(ValueError, 'tag name'):
+                    release_gate.existing_release_decision(
+                        release_gate.BETA1_VERSION, '8' * 40, sha,
+                        invalid_release, assets)
+            with self.assertRaisesRegex(ValueError, 'prerelease'):
+                release_gate.existing_release_decision(
+                    release_gate.BETA1_VERSION, '8' * 40, sha,
+                    {'tag_sha': sha, 'tag_name': 'v0.1.0-beta.1', 'manifest': manifest,
+                     'prerelease': False, 'draft': False},
+                    assets)
+            with self.assertRaisesRegex(ValueError, 'prerelease'):
+                release_gate.existing_release_decision(
+                    release_gate.BETA1_VERSION, '8' * 40, sha,
+                    {'tag_sha': sha, 'tag_name': 'v0.1.0-beta.1', 'manifest': manifest,
+                     'prerelease': True, 'draft': True},
+                    assets)
+
+    def test_beta1_remote_rejects_embedded_sha_schema_target_and_vsix_mismatches(self):
+        changes = (dict(schema=7), dict(revision='6' * 40), dict(target_override='linux-arm64'))
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            sha, urls, original = self.beta1_remote_fixture(root)
+            archive_name = 'findrail_0.1.0-beta.1_linux-amd64.tar.gz'
+            for index, change in enumerate(changes):
+                with self.subTest(change=change):
+                    source_root = root / f'bad-{index}'
+                    source_root.mkdir()
+                    options = {'revision': sha, 'version': release_gate.BETA1_VERSION,
+                               'schema': 8, **change}
+                    malformed, _ = test_release_assets.ReleaseAssetTests().candidate(
+                        source_root, **options)
+                    responses = dict(original)
+                    responses[urls[archive_name]] = (malformed / archive_name).read_bytes()
+                    self.refresh_remote_hashes(responses, urls)
+                    with self.assertRaises(ValueError):
+                        self.check_remote_beta1(responses)
+
+            vsix_case_root = root / 'vsix-case'
+            vsix_case_root.mkdir()
+            _, urls, responses = self.beta1_remote_fixture(vsix_case_root)
+            vsix_url = urls[release_assets.VSIX]
+            changed = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(responses[vsix_url])) as original_zip, \
+                    zipfile.ZipFile(changed, 'w') as replacement:
+                for item in original_zip.infolist():
+                    data = original_zip.read(item)
+                    if item.filename == 'extension/package.json':
+                        metadata = json.loads(data)
+                        metadata['publisher'] = 'untrusted-publisher'
+                        data = json.dumps(metadata).encode()
+                    replacement.writestr(item, data)
+            responses[vsix_url] = changed.getvalue()
+            self.refresh_remote_hashes(responses, urls)
+            with self.assertRaisesRegex(ValueError, 'VSIX identity'):
+                self.check_remote_beta1(responses)
+
+    def test_beta1_remote_rejects_partial_tag_release_checksum_collision_and_api_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            _, urls, original = self.beta1_remote_fixture(root)
+            base = 'https://api.github.com/repos/Lephiziel/findrail'
+            release_url = base + '/releases/tags/v0.1.0-beta.1'
+            ref_url = base + '/git/ref/tags/v0.1.0-beta.1'
+            asset_url = urls['findrail_0.1.0-beta.1_windows-amd64.zip']
+            for url, code in ((release_url, 500), (release_url, 404),
+                              (ref_url, 404), (asset_url, 403)):
+                with self.subTest(url=url, code=code):
+                    responses = dict(original)
+                    responses[url] = urllib.error.HTTPError(url, code, 'synthetic failure', {}, None)
+                    with self.assertRaises(ValueError):
+                        self.check_remote_beta1(responses)
+
+            changed = dict(original)
+            original_bytes = changed[asset_url]
+            changed[asset_url] = original_bytes[:-1] + bytes([original_bytes[-1] ^ 1])
+            with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                self.check_remote_beta1(changed)
+
+            duplicate_asset = json.loads(original[release_url])
+            duplicate_asset['assets'].append(duplicate_asset['assets'][0])
+            collision = dict(original)
+            collision[release_url] = json.dumps(duplicate_asset).encode()
+            with self.assertRaisesRegex(ValueError, 'duplicate assets'):
+                self.check_remote_beta1(collision)
+
+    def test_beta1_absent_release_requires_two_404s_and_no_existing_draft(self):
+        base = 'https://api.github.com/repos/Lephiziel/findrail'
+        release_url = base + '/releases/tags/v0.1.0-beta.1'
+        ref_url = base + '/git/ref/tags/v0.1.0-beta.1'
+        list_url = base + '/releases?per_page=100&page=1'
+
+        def response(request, **kwargs):
+            if request.full_url == list_url:
+                return io.BytesIO(b'[]')
+            if request.full_url in (release_url, ref_url):
+                raise urllib.error.HTTPError(request.full_url, 404, 'not found', {}, None)
+            raise AssertionError(request.full_url)
+
+        with patch.object(release_gate.urllib.request, 'urlopen', side_effect=response):
+            self.assertEqual(release_gate.github_release_state(
+                'Lephiziel/findrail', release_gate.BETA1_VERSION, 'a' * 40,
+                'test-token'), {'decision': 'publish', 'published_sha': None})
+
+        def draft_response(request, **kwargs):
+            if request.full_url == list_url:
+                return io.BytesIO(json.dumps([{'tag_name': 'v0.1.0-beta.1', 'draft': True}]).encode())
+            raise urllib.error.HTTPError(request.full_url, 404, 'not found', {}, None)
+
+        with patch.object(release_gate.urllib.request, 'urlopen', side_effect=draft_response):
+            with self.assertRaisesRegex(ValueError, 'draft or incomplete'):
+                release_gate.github_release_state(
+                    'Lephiziel/findrail', release_gate.BETA1_VERSION, 'a' * 40,
+                    'test-token')
+
+    def test_unknown_versions_fail_before_absent_remote_state_can_become_publish(self):
+        with patch.object(release_gate.urllib.request, 'urlopen') as opener:
+            for version in ('0.1.0-beta.2', '0.1.0', '1.0.0'):
+                with self.subTest(version=version), self.assertRaisesRegex(ValueError, 'unknown published'):
+                    release_gate.github_release_state('Lephiziel/findrail', version, 'a' * 40, 'test-token')
+            opener.assert_not_called()
 
     def test_remote_alpha5_verifies_tag_and_all_bytes_after_source_advances(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -174,7 +361,8 @@ class ReleaseGateTests(unittest.TestCase):
                 'object': {'type': 'commit', 'sha': sha}}).encode()
             self.assertEqual(self.check_remote_alpha5(responses), 'noop')
             archive_url = urls['findrail_0.1.0-alpha.5_linux-amd64.tar.gz']
-            responses[archive_url] += b'corrupt transfer'
+            original_bytes = responses[archive_url]
+            responses[archive_url] = original_bytes[:-1] + bytes([original_bytes[-1] ^ 1])
             with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
                 self.check_remote_alpha5(responses)
 
@@ -254,12 +442,14 @@ class ReleaseGateTests(unittest.TestCase):
             output = root / 'release'
             release_assets.assemble(source, output, '0.1.0-alpha.4', sha)
             base = 'https://api.github.com/repos/Lephiziel/findrail'
-            assets = [{'name': path.name, 'browser_download_url': 'https://example.invalid/' + path.name}
+            assets = [{'name': path.name, 'browser_download_url': 'https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.4/' + path.name,
+                       'size': path.stat().st_size}
                       for path in output.iterdir()]
             responses = {
                 base + '/releases/tags/v0.1.0-alpha.4': json.dumps({'assets': assets}).encode(),
                 base + '/git/ref/tags/v0.1.0-alpha.4': json.dumps({'object': {'type': 'commit', 'sha': sha}}).encode(),
-                **{'https://example.invalid/' + path.name: path.read_bytes() for path in output.iterdir()}}
+                **{'https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.4/' + path.name:
+                   path.read_bytes() for path in output.iterdir()}}
 
             def response(request, **kwargs):
                 return io.BytesIO(responses[request.full_url])
@@ -270,7 +460,8 @@ class ReleaseGateTests(unittest.TestCase):
                     'Lephiziel/findrail', '0.1.0-alpha.4', 'c' * 40, 'test-token'), 'noop')
                 archive = next(asset['browser_download_url'] for asset in assets
                                if asset['name'].endswith('.tar.gz'))
-                responses[archive] += b'corrupt transfer'
+                original_bytes = responses[archive]
+                responses[archive] = original_bytes[:-1] + bytes([original_bytes[-1] ^ 1])
                 with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
                     release_gate.github_release_decision(
                         'Lephiziel/findrail', '0.1.0-alpha.4', 'c' * 40, 'test-token')

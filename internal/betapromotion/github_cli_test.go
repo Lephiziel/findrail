@@ -1,0 +1,301 @@
+package betapromotion
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+type recordedCommand struct {
+	program     string
+	args        []string
+	limit       int
+	destination string
+	maxBytes    int64
+}
+
+type recordingRunner struct {
+	calls        []recordedCommand
+	body         string
+	apiErrors    map[string]error
+	apiResponses map[string][]byte
+}
+
+type execGHRunner struct {
+	mode string
+}
+
+type execTagGateway struct {
+	*fakeGateway
+	missingTag *GitHubCLI
+	presentTag *GitHubCLI
+}
+
+func (g *execTagGateway) TagSHA(ctx context.Context, tag string) (string, error) {
+	g.events = append(g.events, "tag")
+	if g.publishCalls > 0 {
+		return g.presentTag.TagSHA(ctx, tag)
+	}
+	return g.missingTag.TagSHA(ctx, tag)
+}
+
+func (r execGHRunner) Run(ctx context.Context, _ string, args []string, dir string, env map[string]string, outputLimit int) ([]byte, error) {
+	if len(args) != 2 || args[0] != "api" {
+		return nil, fmt.Errorf("unexpected gh command: %v", args)
+	}
+	childEnv := make(map[string]string, len(env)+2)
+	for key, value := range env {
+		childEnv[key] = value
+	}
+	childEnv["FINDRAIL_PROMOTION_HELPER"] = "1"
+	childEnv["FINDRAIL_PROMOTION_HELPER_MODE"] = r.mode
+	return (ExecRunner{}).Run(ctx, os.Args[0],
+		[]string{"-test.run=^TestPromotionSubprocessHelper$", "--"}, dir, childEnv, outputLimit)
+}
+
+func (r *recordingRunner) Run(_ context.Context, program string, args []string, _ string, _ map[string]string, outputLimit int) ([]byte, error) {
+	r.calls = append(r.calls, recordedCommand{program: program, args: append([]string(nil), args...), limit: outputLimit})
+	if len(args) == 2 && args[0] == "api" {
+		if err := r.apiErrors[args[1]]; err != nil {
+			return nil, err
+		}
+		if response, ok := r.apiResponses[args[1]]; ok {
+			return response, nil
+		}
+		if strings.Contains(args[1], "/git/ref/tags/") {
+			return []byte(fmt.Sprintf(`{"object":{"type":"commit","sha":%q}}`, testSHA)), nil
+		}
+	}
+	if len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "/releases?per_page=100") {
+		return []byte(fmt.Sprintf(`[{"id":77,"tag_name":"v%s","target_commitish":%q,"name":"Findrail v%s","draft":true,"prerelease":true,"body":%q}]`, Version, testSHA, Version, r.body)), nil
+	}
+	return []byte("ok\n"), nil
+}
+
+func (r *recordingRunner) RunToFile(_ context.Context, program string, args []string, _ string, _ map[string]string, destination string, maxBytes int64, outputLimit int) error {
+	r.calls = append(r.calls, recordedCommand{
+		program: program, args: append([]string(nil), args...), limit: outputLimit,
+		destination: destination, maxBytes: maxBytes,
+	})
+	return os.WriteFile(destination, []byte("asset"), 0o600)
+}
+
+func TestGitHubCLIUsesExplicitDraftUploadAndPublishCommands(t *testing.T) {
+	notes := filepath.Join(t.TempDir(), "notes.md")
+	if err := os.WriteFile(notes, []byte("approved notes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{body: "approved notes\n"}
+	cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+	draft, err := cli.CreateDraft(context.Background(), "v"+Version, testSHA, notes)
+	if err != nil || !validDraft(draft, "v"+Version, testSHA, "approved notes\n") {
+		t.Fatalf("draft command did not return exact draft identity: %+v, %v", draft, err)
+	}
+	create := runner.calls[0]
+	if create.program != "gh" || create.args[0] != "release" || create.args[1] != "create" ||
+		!hasAllArgs(create.args, "--draft", "--prerelease", "--latest=false", "--target", testSHA, "--notes-file", notes) {
+		t.Fatalf("draft creation is not explicit and unpublished: %+v", create)
+	}
+	if containsString(create.args, "--verify-tag") || len(create.args) != 14 {
+		t.Fatalf("draft creation unexpectedly requires or uploads an existing tag/assets: %+v", create.args)
+	}
+
+	paths := make([]string, 0, 8)
+	for i := range 8 {
+		paths = append(paths, filepath.Join(t.TempDir(), fmt.Sprintf("accepted-%d", i)))
+	}
+	if err := cli.Upload(context.Background(), "v"+Version, paths); err != nil {
+		t.Fatal(err)
+	}
+	upload := runner.calls[len(runner.calls)-1]
+	if upload.args[0] != "release" || upload.args[1] != "upload" || containsString(upload.args, "--clobber") {
+		t.Fatalf("upload may delete/replace assets: %+v", upload.args)
+	}
+	for _, path := range paths {
+		if !containsString(upload.args, path) {
+			t.Errorf("accepted asset was not named explicitly: %s", path)
+		}
+	}
+	if len(upload.args) != 3+2+len(paths) {
+		t.Fatalf("unexpected upload arguments: %+v", upload.args)
+	}
+
+	if err := cli.Publish(context.Background(), "v"+Version); err != nil {
+		t.Fatal(err)
+	}
+	publish := runner.calls[len(runner.calls)-1]
+	if publish.args[0] != "release" || publish.args[1] != "edit" ||
+		!hasAllArgs(publish.args, "--draft=false", "--prerelease", "--latest=false") {
+		t.Fatalf("public transition is not an explicit prerelease: %+v", publish.args)
+	}
+}
+
+func TestGitHubCLIDraftTargetAndTag404AreProviderFaithful(t *testing.T) {
+	tagPath := "repos/" + Repository + "/git/ref/tags/v" + Version
+	releasePath := "repos/" + Repository + "/releases/77"
+	t.Run("draft target is decoded", func(t *testing.T) {
+		runner := &recordingRunner{body: "notes"}
+		cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+		draft, err := cli.CreateDraft(context.Background(), "v"+Version, testSHA, filepath.Join(t.TempDir(), "notes"))
+		if err != nil || draft.TargetCommitish != testSHA {
+			t.Fatalf("draft target_commitish was not retained: %+v err=%v", draft, err)
+		}
+	})
+	t.Run("only exact tag-ref 404 is absence", func(t *testing.T) {
+		notFound := failure{code: "command_failed", stderr: "gh: Not Found (HTTP 404)\n"}
+		runner := &recordingRunner{apiErrors: map[string]error{
+			tagPath:     notFound,
+			releasePath: notFound,
+			"repos/" + Repository + "/git/ref/tags/v" + Version + "-unexpected": notFound,
+		}}
+		cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+		if _, err := cli.TagSHA(context.Background(), "v"+Version); !errors.Is(err, errTagNotFound) {
+			t.Fatalf("expected missing tag sentinel, got %v", err)
+		}
+		if _, err := cli.Release(context.Background(), 77); err == nil || errors.Is(err, errTagNotFound) {
+			t.Fatalf("release 404 was incorrectly treated as a missing tag: %v", err)
+		}
+		if _, err := cli.TagSHA(context.Background(), "v"+Version+"-unexpected"); err == nil || errors.Is(err, errTagNotFound) {
+			t.Fatalf("404 for a different tag was incorrectly treated as expected absence: %v", err)
+		}
+	})
+	for _, status := range []int{403, 500} {
+		t.Run(fmt.Sprintf("HTTP %d is not absence", status), func(t *testing.T) {
+			runner := &recordingRunner{apiErrors: map[string]error{
+				tagPath: failure{code: "command_failed", stderr: fmt.Sprintf("gh: provider error (HTTP %d)\n", status)},
+			}}
+			cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+			if _, err := cli.TagSHA(context.Background(), "v"+Version); err == nil || errors.Is(err, errTagNotFound) {
+				t.Fatalf("HTTP %d was treated as missing tag: %v", status, err)
+			}
+		})
+	}
+	t.Run("malformed 404 output is not absence", func(t *testing.T) {
+		runner := &recordingRunner{apiErrors: map[string]error{
+			tagPath: failure{code: "command_failed", stderr: "HTTP 404\nprovider detail"},
+		}}
+		cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+		if _, err := cli.TagSHA(context.Background(), "v"+Version); err == nil || errors.Is(err, errTagNotFound) {
+			t.Fatalf("untrusted 404 text was treated as absence: %v", err)
+		}
+	})
+	t.Run("noncanonical 404 text is not absence", func(t *testing.T) {
+		runner := &recordingRunner{apiErrors: map[string]error{
+			tagPath: failure{code: "command_failed", stderr: "gh: API response failed (HTTP 404)\n"},
+		}}
+		cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+		if _, err := cli.TagSHA(context.Background(), "v"+Version); err == nil || errors.Is(err, errTagNotFound) {
+			t.Fatalf("noncanonical 404 text was treated as absence: %v", err)
+		}
+	})
+}
+
+func TestGitHubCLIRecognizesActualExecRunner404WithJSONOnStdout(t *testing.T) {
+	for _, test := range []struct {
+		mode       string
+		wantAbsent bool
+	}{
+		{mode: "gh-api-404-json", wantAbsent: true},
+		{mode: "gh-api-403-json"},
+		{mode: "gh-api-500-json"},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			cli := NewGitHubCLI(execGHRunner{mode: test.mode}, Config{RepoRoot: t.TempDir()})
+			_, err := cli.TagSHA(context.Background(), "v"+Version)
+			if test.wantAbsent {
+				if !errors.Is(err, errTagNotFound) {
+					t.Fatalf("real ExecRunner gh output did not map exact 404 to absence: %v", err)
+				}
+				if err.Error() != errTagNotFound.Error() {
+					t.Fatalf("raw API response leaked in expected-absence error: %v", err)
+				}
+				return
+			}
+			if err == nil || errors.Is(err, errTagNotFound) || err.Error() != "github_api_failed" {
+				t.Fatalf("non-404 API error was not kept as a short hard failure: %v", err)
+			}
+		})
+	}
+}
+
+func TestPromotionLifecycleAcceptsRealExecRunnerDraftTag404(t *testing.T) {
+	request := validRequest()
+	runner := &fakeRunner{request: request}
+	gateway := newFakeGateway(request)
+	config, deps := configForTest(t, runner, gateway)
+	deps.Gateway = &execTagGateway{
+		fakeGateway: gateway,
+		missingTag:  NewGitHubCLI(execGHRunner{mode: "gh-api-404-json"}, Config{RepoRoot: config.RepoRoot}),
+		presentTag:  NewGitHubCLI(execGHRunner{mode: "gh-api-tag-present"}, Config{RepoRoot: config.RepoRoot}),
+	}
+	result, err := Run(context.Background(), request, config, PublishMode, deps)
+	if err != nil {
+		t.Fatalf("promotion did not complete with expected unpublished-tag 404: %v", err)
+	}
+	if result.Decision != "published" || result.PublishedSHA != request.CandidateSHA {
+		t.Fatalf("unexpected successful promotion result: %+v", result)
+	}
+	if gateway.createCalls != 1 || gateway.uploadCalls != 1 || gateway.publishCalls != 1 {
+		t.Fatalf("404 interrupted fake promotion lifecycle: create=%d upload=%d publish=%d",
+			gateway.createCalls, gateway.uploadCalls, gateway.publishCalls)
+	}
+	if !hasOrderedEvents(gateway.events, []string{"upload", "assets", "download", "release", "assets", "tag", "main", "publish", "release", "tag"}) {
+		t.Fatalf("promotion did not verify existing ref only after public transition: %v", gateway.events)
+	}
+	assertAuditStatus(t, config.AuditFile, "published", false)
+}
+
+func TestGitHubCLIRejectsAmbiguousReleaseListAndUnexpectedOutput(t *testing.T) {
+	runner := &recordingRunner{body: "notes"}
+	cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+	if _, err := cli.CreateDraft(context.Background(), "v"+Version, testSHA, filepath.Join(t.TempDir(), "notes")); err != nil {
+		t.Fatal(err)
+	}
+	if runner.calls[1].limit != maxCommandOutput {
+		t.Fatalf("GitHub API output is not bounded: %+v", runner.calls[1])
+	}
+	if err := cli.Upload(context.Background(), "v"+Version, []string{"only-one"}); err == nil {
+		t.Fatal("incomplete upload was accepted")
+	}
+}
+
+func TestGitHubCLIDownloadsExactAssetIDsWithPerAssetByteBounds(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "downloads")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{body: "notes"}
+	cli := NewGitHubCLI(runner, Config{RepoRoot: root})
+	assets := make([]RemoteAsset, 0, 8)
+	for i, name := range expectedAssets() {
+		assets = append(assets, RemoteAsset{ID: int64(200 + i), Name: name, Size: 5, Digest: "sha256:" + strings.Repeat("a", 64)})
+	}
+	if err := cli.Download(context.Background(), assets, directory); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 8 {
+		t.Fatalf("expected eight exact-ID download calls, got %d", len(runner.calls))
+	}
+	for i, call := range runner.calls {
+		if call.program != "gh" || call.args[0] != "api" || call.args[1] != "-H" ||
+			call.args[2] != "Accept: application/octet-stream" ||
+			call.args[3] != fmt.Sprintf("repos/%s/releases/assets/%d", Repository, 200+i) ||
+			call.destination != filepath.Join(directory, assets[i].Name) || call.maxBytes != 5 {
+			t.Errorf("download did not use exact asset identity and byte bound: %+v", call)
+		}
+	}
+}
+
+func hasAllArgs(have []string, want ...string) bool {
+	for _, value := range want {
+		if !containsString(have, value) {
+			return false
+		}
+	}
+	return true
+}

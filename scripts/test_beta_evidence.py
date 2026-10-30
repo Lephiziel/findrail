@@ -35,12 +35,20 @@ BASELINE_BINARY_SHA = "b" * 64
 FUTURE = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 
 
+def _current_candidate_jobs():
+    fixture = pathlib.Path(__file__).parent / "fixtures/alpha-release-readonly-jobs-b5846ae.json"
+    value = json.loads(fixture.read_text(encoding="utf-8"))
+    return [{"name": item["name"], "run_attempt": 2, "status": "completed",
+             "conclusion": item["conclusion"]} for item in value["jobs"]]
+
+
 def _run(kind, run_id):
-    job_names = (evidence.CANDIDATE_JOB_NAMES if kind == "candidate" else
-                 evidence.PERFORMANCE_JOB_NAMES if kind == "performance" else {"handoff"})
-    jobs = [{"name": name, "run_attempt": 2, "status": "completed",
-             "conclusion": "skipped" if name == "publish" else "success"}
-            for name in sorted(job_names)]
+    if kind == "candidate":
+        jobs = _current_candidate_jobs()
+    else:
+        job_names = evidence.PERFORMANCE_JOB_NAMES if kind == "performance" else {"handoff"}
+        jobs = [{"name": name, "run_attempt": 2, "status": "completed",
+                 "conclusion": "success"} for name in sorted(job_names)]
     workflow_id = {"candidate": "101", "performance": "202", "handoff": "303"}[kind]
     event = "push" if kind == "candidate" else "workflow_dispatch"
     run = {"run_id": run_id, "run_attempt": 2, "workflow_id": workflow_id,
@@ -399,6 +407,47 @@ class BetaEvidenceTests(unittest.TestCase):
         with self.assertRaises(evidence.EvidenceError):
             evidence.validate_trusted_metadata(bad_previous, SHA, evidence.VERSION)
 
+    def test_candidate_job_graph_accepts_current_read_only_and_explicit_legacy_graphs(self):
+        current = _metadata()
+        fixture = json.loads((pathlib.Path(__file__).parent /
+                              "fixtures/alpha-release-readonly-jobs-b5846ae.json").read_text(
+                                  encoding="utf-8"))
+        self.assertEqual({job["name"] for job in current["candidate_run"]["jobs"]},
+                         {job["name"] for job in fixture["jobs"]})
+        evidence.validate_trusted_metadata(current, SHA, evidence.VERSION)
+
+        invalid_graphs = (
+            ("missing native", lambda jobs: jobs.remove(
+                next(job for job in jobs if job["name"].startswith("native-packages (linux-amd64")))),
+            ("skipped browser", lambda jobs: next(
+                job for job in jobs if job["name"] == "packaged-browser-journey").update(conclusion="skipped")),
+            ("skipped verifier", lambda jobs: next(
+                job for job in jobs if job["name"] == "aggregate-and-verify").update(conclusion="skipped")),
+            ("skipped final verification", lambda jobs: next(
+                job for job in jobs if job["name"] ==
+                "reusable-final-verification / verify-assets").update(conclusion="skipped")),
+            ("wrong attempt", lambda jobs: next(
+                job for job in jobs if job["name"] == "promotion-preflight").update(run_attempt=1)),
+            ("unknown extra", lambda jobs: jobs.append({
+                "name": "unreviewed-job", "run_attempt": 2,
+                "status": "completed", "conclusion": "success"})),
+            ("write job ran", lambda jobs: next(
+                job for job in jobs if job["name"] == "promotion-publish").update(conclusion="success")),
+        )
+        for label, mutate in invalid_graphs:
+            bad = copy.deepcopy(current)
+            mutate(bad["candidate_run"]["jobs"])
+            with self.subTest(graph=label), self.assertRaises(evidence.EvidenceError):
+                evidence.validate_trusted_metadata(bad, SHA, evidence.VERSION)
+
+        historical = _metadata()
+        historical["candidate_run"]["jobs"] = [
+            {"name": name, "run_attempt": 2, "status": "completed",
+             "conclusion": "skipped" if name == "publish" else "success"}
+            for name in sorted(evidence.CANDIDATE_LEGACY_JOB_NAMES)
+        ]
+        evidence.validate_trusted_metadata(historical, SHA, evidence.VERSION)
+
     def test_metadata_requires_candidate_and_performance_run_ids_to_be_decimal(self):
         metadata = _metadata()
         metadata["candidate_run"]["run_id"] = "01"
@@ -455,6 +504,40 @@ class BetaEvidenceTests(unittest.TestCase):
                 assets_dir=fixture["assets"], handoff_dir=handoff,
                 reports_zip=reports_zip))
             self.assertEqual(assembled["report_zip_sha256"], verified["report_zip_sha256"])
+
+            # Promotion repeats both the source-run provenance and the exact
+            # successful outer handoff-artifact contract before any write.
+            promotion_bundle = root / "promotion-artifact"
+            promotion_bundle.mkdir()
+            shutil.copytree(handoff, promotion_bundle / "handoff")
+            shutil.copyfile(reports_zip, promotion_bundle / "beta-evidence-reports.zip")
+            shutil.copyfile(diagnostics, promotion_bundle / "diagnostics.json")
+            evidence.write_json(promotion_bundle / "result.json", assembled)
+            promotion_metadata = copy.deepcopy(fixture["metadata"])
+            promotion_run = _run("handoff", "130")
+            promotion_metadata["promotion_handoff_run"] = promotion_run
+            promotion_metadata["promotion_handoff_artifact"] = promotion_run["artifacts"][0]
+            promotion_metadata_path = root / "promotion-run-metadata.json"
+            evidence.write_json(promotion_metadata_path, promotion_metadata)
+            promoted_verify = evidence.verify(argparse.Namespace(
+                candidate_sha=SHA, candidate_version=evidence.VERSION,
+                assets_dir=fixture["assets"],
+                handoff_dir=promotion_bundle / "handoff",
+                reports_zip=promotion_bundle / "beta-evidence-reports.zip",
+                trusted_run_metadata=promotion_metadata_path,
+                handoff_artifact_dir=promotion_bundle))
+            self.assertEqual(promoted_verify["status"], "passed")
+            failed_result = dict(assembled, status="failed")
+            evidence.write_json(promotion_bundle / "result.json", failed_result)
+            with self.assertRaisesRegex(evidence.EvidenceError, "promotion_handoff_result_invalid"):
+                evidence.verify(argparse.Namespace(
+                    candidate_sha=SHA, candidate_version=evidence.VERSION,
+                    assets_dir=fixture["assets"],
+                    handoff_dir=promotion_bundle / "handoff",
+                    reports_zip=promotion_bundle / "beta-evidence-reports.zip",
+                    trusted_run_metadata=promotion_metadata_path,
+                    handoff_artifact_dir=promotion_bundle))
+            evidence.write_json(promotion_bundle / "result.json", assembled)
             initial_index, _ = evidence.load_json(handoff / "evidence-index.json")
             self.assertEqual(len(initial_index["candidate"]["assets"]), 8)
             self.assertEqual(initial_index["readiness"]["human_pending"], [
@@ -987,11 +1070,12 @@ class BetaEvidenceTests(unittest.TestCase):
 
 class FakeGitHubAPI:
     def __init__(self, *, bad_candidate_sha=False, bad_artifact_digest=False,
-                 bad_artifact_size=False, bad_job=False):
+                 bad_artifact_size=False, bad_job=False, main_sha=SHA):
         self.runs = {}
         self.artifacts = {}
         self.zip_bytes = {}
         self.downloaded = []
+        self.main_sha = main_sha
         self.bad_artifact_digest = bad_artifact_digest
         self.bad_artifact_size = bad_artifact_size
         for kind, run_id, workflow_id in (("candidate", "110", 101),
@@ -1014,10 +1098,13 @@ class FakeGitHubAPI:
                 "run_attempt": 2, "html_url": f"https://github.com/{evidence.REPOSITORY}/actions/runs/{run_id}",
                 "path": workflow_path + "@refs/heads/main",
             }
-            job_names = (evidence.CANDIDATE_JOB_NAMES if kind == "candidate" else
-                         evidence.PERFORMANCE_JOB_NAMES if kind == "performance" else {"handoff"})
-            jobs = [{"name": name, "run_attempt": 2, "status": "completed",
-                     "conclusion": "success"} for name in sorted(job_names)]
+            if kind == "candidate":
+                jobs = _current_candidate_jobs()
+            else:
+                job_names = (evidence.PERFORMANCE_JOB_NAMES if kind == "performance"
+                             else {"handoff"})
+                jobs = [{"name": name, "run_attempt": 2, "status": "completed",
+                         "conclusion": "success"} for name in sorted(job_names)]
             if bad_job and kind == "candidate":
                 jobs = jobs[:-1]
             self.runs[run_id]["jobs"] = jobs
@@ -1044,6 +1131,8 @@ class FakeGitHubAPI:
 
     def json(self, path):
         path_no_query = path.split("?", 1)[0]
+        if path_no_query == "/git/ref/heads/main":
+            return {"object": {"type": "commit", "sha": self.main_sha}}
         if path_no_query.endswith("/alpha-release.yml"):
             return {"path": github.WORKFLOWS["candidate"], "id": 101, "state": "active"}
         if path_no_query.endswith("/performance-check.yml"):
@@ -1124,6 +1213,103 @@ class BetaEvidenceGitHubTests(unittest.TestCase):
             self.assertEqual(artifact["id"], "1301")
             self.assertEqual(artifact["digest"], fake.artifacts["130"][0]["digest"])
             self.assertTrue((root / "downloads/previous-handoff/payload.txt").is_file())
+
+    def test_promotion_metadata_pins_current_main_all_run_attempts_and_handoff_digest(self):
+        fake = FakeGitHubAPI()
+        fake.runs['130']['head_sha'] = SHA
+        for artifact in fake.artifacts['130']:
+            artifact['workflow_run']['head_sha'] = SHA
+        digest = fake.artifacts['130'][0]['digest']
+        with mock.patch.object(github, 'GitHubAPI', return_value=fake):
+            metadata = github.promotion_metadata(
+                SHA, evidence.VERSION, '110', 2, '120', 2, '130', 2, digest,
+                token='x' * 30)
+            self.assertEqual(metadata['candidate_run']['run_attempt'], 2)
+            self.assertEqual(metadata['performance_run']['run_attempt'], 2)
+            self.assertEqual(metadata['promotion_handoff_run']['head_sha'], SHA)
+            self.assertEqual(metadata['promotion_handoff_artifact']['digest'], digest)
+            with self.assertRaisesRegex(github.PreflightError, 'run_attempt_mismatch'):
+                github.promotion_metadata(
+                    SHA, evidence.VERSION, '110', 1, '120', 2, '130', 2, digest,
+                    token='x' * 30)
+            with self.assertRaisesRegex(github.PreflightError, 'handoff_artifact_digest_mismatch'):
+                github.promotion_metadata(
+                    SHA, evidence.VERSION, '110', 2, '120', 2, '130', 2,
+                    'sha256:' + 'f' * 64, token='x' * 30)
+
+    def test_promotion_preflight_downloads_handoff_by_exact_run_and_artifact_id(self):
+        fake = FakeGitHubAPI()
+        fake.runs['130']['head_sha'] = SHA
+        for artifact in fake.artifacts['130']:
+            artifact['workflow_run']['head_sha'] = SHA
+        digest = fake.artifacts['130'][0]['digest']
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(github, 'GitHubAPI', return_value=fake):
+            root = pathlib.Path(temp)
+            result = github.preflight(
+                SHA, evidence.VERSION, '110', '120', root / 'downloads',
+                root / 'trusted-run-metadata.json', token='x' * 30,
+                candidate_run_attempt=2, performance_run_attempt=2,
+                handoff_run_id='130', handoff_run_attempt=2,
+                expected_handoff_artifact_digest=digest, require_main_head=True)
+            self.assertEqual(result['artifacts_downloaded'], 6)
+            self.assertEqual(result['handoff_artifact_id'], '1301')
+            self.assertIn('1301', fake.downloaded)
+            self.assertTrue((root / 'downloads/handoff-bundle/payload.txt').is_file())
+            metadata = json.loads((root / 'trusted-run-metadata.json').read_text())
+            evidence.validate_trusted_metadata(metadata, SHA, evidence.VERSION)
+            self.assertEqual(metadata['promotion_handoff_run']['run_id'], '130')
+            self.assertEqual(metadata['promotion_handoff_run']['run_attempt'], 2)
+            self.assertEqual(metadata['promotion_handoff_artifact'],
+                             metadata['promotion_handoff_run']['artifacts'][0])
+
+            original = pathlib.Path(__file__).parents[1] / 'internal/betapromotion/promotion_test.go'
+            go_test = root / 'promotion_test.go'
+            bridge_test = r'''
+func TestPythonPreflightMetadataRoundTrip(t *testing.T) {
+	request := validRequest()
+	request.CandidateRun = RunIdentity{ID: "110", Attempt: 2}
+	request.PerformanceRun = RunIdentity{ID: "120", Attempt: 2}
+	request.HandoffRun = RunIdentity{ID: "130", Attempt: 2}
+	request.HandoffDigest = DIGEST
+	if err := verifyMetadata(METADATA_PATH, request); err != nil {
+		t.Fatalf("Python preflight metadata was rejected by Go: %v", err)
+	}
+}
+'''.replace('DIGEST', json.dumps(digest)).replace(
+                'METADATA_PATH', json.dumps(str(root / 'trusted-run-metadata.json')))
+            go_test.write_text(original.read_text(encoding='utf-8') + bridge_test,
+                               encoding='utf-8')
+            overlay = root / 'overlay.json'
+            overlay.write_text(json.dumps({'Replace': {str(original.resolve()): str(go_test)}}),
+                               encoding='utf-8')
+            subprocess.run(['go', 'test', '-overlay=' + str(overlay), '-run',
+                            '^TestPythonPreflightMetadataRoundTrip$',
+                            './internal/betapromotion'], cwd=pathlib.Path(__file__).parents[1],
+                           check=True, capture_output=True, text=True, timeout=180)
+
+    def test_promotion_preflight_rejects_main_movement_or_handoff_from_another_candidate(self):
+        fake = FakeGitHubAPI(main_sha='f' * 40)
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(github, 'GitHubAPI', return_value=fake):
+            root = pathlib.Path(temp)
+            digest = fake.artifacts['130'][0]['digest']
+            with self.assertRaisesRegex(github.PreflightError, 'main_moved'):
+                github.promotion_metadata(
+                    SHA, evidence.VERSION, '110', 2, '120', 2, '130', 2,
+                    digest, token='x' * 30, require_main_head=True)
+            self.assertEqual(fake.downloaded, [])
+
+            fake.main_sha = SHA
+            fake.runs['130']['head_sha'] = SHA
+            for artifact in fake.artifacts['130']:
+                artifact['workflow_run']['head_sha'] = SHA
+            fake.runs['130']['head_sha'] = '4' * 40
+            for artifact in fake.artifacts['130']:
+                artifact['workflow_run']['head_sha'] = '4' * 40
+            with self.assertRaisesRegex(github.PreflightError, 'handoff_candidate_sha_mismatch'):
+                github.promotion_metadata(
+                    SHA, evidence.VERSION, '110', 2, '120', 2, '130', 2,
+                    digest, token='x' * 30, require_main_head=True)
+            self.assertEqual(fake.downloaded, [])
 
     def test_preflight_refuses_wrong_head_before_download_and_checks_download_digest(self):
         wrong_head = FakeGitHubAPI(bad_candidate_sha=True)

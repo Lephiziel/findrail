@@ -133,7 +133,8 @@ def main():
             # The CI runner also executes the long package/journey matrix. Give
             # the periodic source scan room to finish under contention rather
             # than treating delayed indexing as a broken UI refresh.
-            WebDriverWait(browser, 45).until(lambda d: "4 documents" in d.find_element(By.CSS_SELECTOR, ".source-card").text)
+            WebDriverWait(browser, 45, ignored_exceptions=(StaleElementReferenceException,)).until(
+                lambda d: "4 documents" in d.find_element(By.CSS_SELECTOR, ".source-card").text)
             assert old.is_enabled(), "status refresh replaced the existing result snapshot"
             assert browser.switch_to.active_element == old, "inventory refresh moved keyboard focus"
             assert browser.execute_script("return window.__refreshSearches") == 0, "inventory polling implicitly reran Search"

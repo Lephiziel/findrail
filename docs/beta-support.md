@@ -94,11 +94,11 @@ Apple Silicon, or voluntary-use evidence.
 ## Preparation, freeze, decision, and publication
 
 1. **Prepare the policy and tooling.** TASK 31–34 are pre-beta work. TASK 34
-   must be integrated before TASK 35/A changes `VERSION`. At this revision,
-   [`alpha-release.yml`](../.github/workflows/alpha-release.yml) sets `PUBLISH` for a main push; a version mismatch is the
-   current guard that skips publication. Once `VERSION` matches the beta
-   candidate, that guard no longer protects the push. TASK 34 must remove this
-   automatic-publication path before any version bump. Do not change `VERSION`
+   must be integrated before TASK 35/A changes `VERSION`. The candidate workflow
+   now leaves publication disabled for every PR, fork, main push, and ordinary
+   dispatch; a matching candidate and `VERSION` never select a publisher. Only
+   the explicit owner-only canonical-main beta promotion path can write, and
+   only after it revalidates the exact accepted handoff. Do not change `VERSION`
    as part of this policy task.
 2. **Freeze one candidate.** After the required pre-beta work and TASK 34 are
    merged, TASK 35/A may prepare the version change and finalize
@@ -116,11 +116,12 @@ Apple Silicon, or voluntary-use evidence.
    and outer handoff material, then produces a new handoff digest for the owner.
    A changed digest requires a fresh review; it does not trigger another scale,
    series, or soak run.
-4. **Make a separate owner decision.** Show the owner the exact candidate SHA,
-   all eight asset bytes, evidence fingerprints, pending categories, known
-   limitations, and exact release-note body/hash. Keep the filled decision
-   record outside the product repository. No workflow JSON, generated card, or
-   policy statement is itself the owner's authorization.
+ 4. **Make a separate owner decision.** Show the owner the exact candidate SHA,
+    accepted root handoff artifact digest, all eight asset names/sizes/SHA-256
+    values, pending categories, known limitations, and exact release-note
+    body/hash. Keep the filled decision record outside the product repository.
+    No workflow JSON, generated card, or policy statement is itself the owner's
+    authorization.
 5. **Publish only through the explicit publisher.** Only after that decision
    may TASK 34's explicit path publish the approved candidate. Before that
    point, beta.1 is prospective preparation; no beta tag, release, download

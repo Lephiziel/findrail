@@ -13,6 +13,22 @@ ALPHA2_ASSETS = {
     for target in ('linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64', 'windows-amd64')
 } | {'SHA256SUMS.txt'}
 ALPHA3_REVISION = 'd5dc1bec50efcb3c26d09e9b24b14cf3c0b2f4cb'
+BETA1_VERSION = '0.1.0-beta.1'
+PUBLISHED_VERSIONS = {
+    '0.1.0-alpha.2', '0.1.0-alpha.3', '0.1.0-alpha.4',
+    '0.1.0-alpha.5', BETA1_VERSION,
+}
+MAX_GITHUB_JSON = 16 << 20
+
+
+def _read_github_json(response, label):
+    raw = response.read(MAX_GITHUB_JSON + 1)
+    if len(raw) > MAX_GITHUB_JSON:
+        raise ValueError(label + ' exceeds the response bound')
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError(label + ' is invalid JSON') from error
 
 
 def validate_upstream(repository, event, branch, source_sha, expected_repository, expected_branch='main'):
@@ -30,7 +46,7 @@ def validate_publication_version(candidate_version, release_version, requested):
 def existing_release_decision(version, current_sha, tag_sha, release, assets, api_error=None):
     if api_error:
         raise ValueError('release API query failed: ' + str(api_error))
-    if version not in ('0.1.0-alpha.2', '0.1.0-alpha.3', '0.1.0-alpha.4', '0.1.0-alpha.5'):
+    if version not in PUBLISHED_VERSIONS:
         raise ValueError('unknown published release contract')
     if tag_sha and not release:
         raise ValueError('tag exists without a release; refusing publication')
@@ -47,7 +63,13 @@ def existing_release_decision(version, current_sha, tag_sha, release, assets, ap
         raise ValueError('existing release contains duplicate assets')
     expected = ALPHA2_ASSETS if version == '0.1.0-alpha.2' else None
     if expected is None:
-        schemas = {'0.1.0-alpha.3': 6, '0.1.0-alpha.4': 7, '0.1.0-alpha.5': 8}
+        schemas = {'0.1.0-alpha.3': 6, '0.1.0-alpha.4': 7,
+                   '0.1.0-alpha.5': 8, BETA1_VERSION: 8}
+        if version == BETA1_VERSION:
+            if release.get('tag_name') != 'v' + BETA1_VERSION:
+                raise ValueError('published beta.1 release tag name is contradictory')
+            if release.get('prerelease') is not True or release.get('draft') is not False:
+                raise ValueError('published beta.1 must be a public prerelease')
         if version == '0.1.0-alpha.3' and tag_sha != ALPHA3_REVISION:
             raise ValueError('published alpha.3 tag does not match its historical revision')
         manifest = release.get('manifest')
@@ -95,8 +117,10 @@ def verify_remote_checksums(assets, checksum_text):
             raise ValueError('existing release asset checksum mismatch: ' + name)
 
 
-def github_release_decision(repository, version, current_sha, token):
-    """Query tag/release and all bytes; 404 is the only absent-state signal."""
+def github_release_state(repository, version, current_sha, token):
+    """Query immutable release identity and every byte; only paired 404s are absent."""
+    if version not in PUBLISHED_VERSIONS:
+        raise ValueError('unknown published release contract')
     if not re.fullmatch(r'[0-9a-f]{40}', current_sha):
         raise ValueError('current source revision is not a full commit SHA')
     base = 'https://api.github.com/repos/' + repository
@@ -106,7 +130,7 @@ def github_release_decision(repository, version, current_sha, token):
             'Authorization': 'Bearer ' + token, 'X-GitHub-Api-Version': '2022-11-28'})
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                return json.load(response)
+                return _read_github_json(response, 'GitHub API response')
         except urllib.error.HTTPError as error:
             if allow_missing and error.code == 404:
                 return None
@@ -118,7 +142,19 @@ def github_release_decision(repository, version, current_sha, token):
     release = get(f'{base}/releases/tags/{tag}', allow_missing=True)
     ref = get(f'{base}/git/ref/tags/{tag}', allow_missing=True)
     if not release and not ref:
-        return 'publish'
+        # A draft can be hidden from /releases/tags while still occupying this
+        # immutable tag/version. Never create a second draft to repair it.
+        for page_number in range(1, 21):
+            page = get(f'{base}/releases?per_page=100&page={page_number}')
+            if type(page) is not list:
+                raise ValueError('GitHub release list response is invalid')
+            if any(type(item) is dict and item.get('tag_name') == tag for item in page):
+                raise ValueError('a draft or incomplete release already occupies beta.1; refusing repair')
+            if len(page) < 100:
+                break
+        else:
+            raise ValueError('GitHub release list exceeds the bounded draft lookup')
+        return {'decision': 'publish', 'published_sha': None}
     if ref is None:
         raise ValueError('release exists without its Git tag')
     obj = ref['object']
@@ -127,14 +163,30 @@ def github_release_decision(repository, version, current_sha, token):
     tag_sha = obj.get('sha') if obj.get('type') == 'commit' else None
     if release is None:
         raise ValueError('tag exists without a release; refusing publication')
+    remote_assets = release.get('assets')
+    if type(remote_assets) is not list:
+        raise ValueError('existing release asset list is invalid')
     assets = []
-    for asset in release.get('assets', []):
+    total_downloaded = 0
+    expected_download_prefix = f'https://github.com/{repository}/releases/download/'
+    for asset in remote_assets:
+        if (type(asset) is not dict or type(asset.get('name')) is not str or
+                type(asset.get('browser_download_url')) is not str or
+                not asset['browser_download_url'].startswith(expected_download_prefix)):
+            raise ValueError('existing release asset metadata is invalid')
         request = urllib.request.Request(asset['browser_download_url'], headers={'Accept': 'application/octet-stream'})
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
-                data = response.read()
+                data = response.read((512 << 20) + 1)
         except (OSError, urllib.error.HTTPError) as error:
             raise ValueError(f"could not download existing release asset {asset.get('name')}: {error}") from error
+        if len(data) > (512 << 20):
+            raise ValueError('existing release asset exceeds the verification bound')
+        total_downloaded += len(data)
+        if total_downloaded > (1 << 30):
+            raise ValueError('existing release assets exceed the aggregate verification bound')
+        if type(asset.get('size')) is not int or asset['size'] != len(data):
+            raise ValueError('existing release asset size mismatch: ' + asset['name'])
         assets.append({'name': asset['name'], 'data': data})
     checksum = next((asset['data'].decode('utf-8') for asset in assets if asset['name'] == 'SHA256SUMS.txt'), None)
     manifest = None
@@ -144,7 +196,10 @@ def github_release_decision(repository, version, current_sha, token):
             manifest = json.loads(manifest_asset)
         except (ValueError, UnicodeDecodeError) as error:
             raise ValueError('existing release manifest is invalid') from error
-    release_data = {'tag_sha': tag_sha, 'manifest': manifest}
+    release_data = {'tag_sha': tag_sha, 'manifest': manifest,
+                    'tag_name': release.get('tag_name'),
+                    'prerelease': release.get('prerelease'),
+                    'draft': release.get('draft')}
     decision = existing_release_decision(version, current_sha, tag_sha, release_data, assets)
     if checksum is None:
         raise ValueError('existing release has no checksum asset')
@@ -176,17 +231,27 @@ def github_release_decision(repository, version, current_sha, token):
             for asset in assets:
                 (directory / asset['name']).write_bytes(asset['data'])
             release_assets.verify(directory, version, tag_sha)
-    return decision
+    return {'decision': decision, 'published_sha': tag_sha if decision == 'noop' else None}
+
+
+def github_release_decision(repository, version, current_sha, token):
+    """Compatibility wrapper returning only publish/noop for existing callers."""
+    return github_release_state(repository, version, current_sha, token)['decision']
 
 
 if __name__ == '__main__':
     import argparse
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository', required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--current-sha', required=True)
+    parser.add_argument('--json', action='store_true',
+                        help='print the decision and immutable published SHA as JSON')
     args = parser.parse_args()
     try:
-        print(github_release_decision(args.repository, args.version, args.current_sha, os.environ['GH_TOKEN']))
-    except (ValueError, KeyError) as error:
+        state = github_release_state(args.repository, args.version, args.current_sha,
+                                     os.environ['GH_TOKEN'])
+        print(json.dumps(state, sort_keys=True) if args.json else state['decision'])
+    except (ValueError, KeyError, UnicodeDecodeError) as error:
         parser.error(str(error))

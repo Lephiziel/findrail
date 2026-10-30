@@ -114,15 +114,16 @@ runs are historical, not beta evidence.
 
 ## Freeze and next decision
 
-Finish TASK 34's explicit-publisher protection before TASK 35/A changes
-`VERSION`: today a main push sets `PUBLISH`, and the current version mismatch
-only happens to skip publication. After the version bump that guard would no
-longer protect the push. Freeze one exact main SHA, run required candidate CI
-and final technical evidence on it, then present the handoff, remaining human
-pending categories, asset hashes, limitations, and release-note body/hash to the
-owner. If matching human reports arrive later, refresh intake/readiness and the
-outer handoff fingerprint without repeating measurements; show the changed
-fingerprint again.
+TASK 34 implements the explicit-publisher protection and must be integrated
+before TASK 35/A changes `VERSION`. Once integrated, a main push stays read-only
+even when the candidate and `VERSION` match; publication requires a separate
+owner-only canonical-main dispatch with the exact accepted handoff, run attempts,
+and the accepted root artifact digest. Freeze one exact main SHA, run required
+candidate CI and final technical evidence on it, then present the handoff,
+remaining human pending categories, all eight asset hashes, limitations, and
+release-note body/hash to the owner. If matching human reports arrive later,
+refresh intake/readiness and the root handoff artifact digest without repeating
+measurements; show the changed digest and refreshed owner packet.
 
 Only a separate explicit owner decision followed by the guarded publisher can
 change the public download. Alpha.5 remains current until beta.1 is actually
