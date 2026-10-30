@@ -94,11 +94,11 @@ Apple Silicon, or voluntary-use evidence.
 ## Preparation, freeze, decision, and publication
 
 1. **Prepare the policy and tooling.** TASK 31–34 are pre-beta work. TASK 34
-   must be integrated before TASK 35/A changes `VERSION`. At this revision,
-   [`alpha-release.yml`](../.github/workflows/alpha-release.yml) sets `PUBLISH` for a main push; a version mismatch is the
-   current guard that skips publication. Once `VERSION` matches the beta
-   candidate, that guard no longer protects the push. TASK 34 must remove this
-   automatic-publication path before any version bump. Do not change `VERSION`
+   must be integrated before TASK 35/A changes `VERSION`. The candidate workflow
+   now leaves publication disabled for every PR, fork, main push, and ordinary
+   dispatch; a matching candidate and `VERSION` never select a publisher. Only
+   the explicit owner-only canonical-main beta promotion path can write, and
+   only after it revalidates the exact accepted handoff. Do not change `VERSION`
    as part of this policy task.
 2. **Freeze one candidate.** After the required pre-beta work and TASK 34 are
    merged, TASK 35/A may prepare the version change and finalize

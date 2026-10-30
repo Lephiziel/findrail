@@ -371,6 +371,22 @@ def validate_trusted_metadata(metadata, candidate_sha, candidate_version):
                 previous_artifact.get("name") == expected_name and
                 previous_artifact == _artifact_by_name(previous_run, expected_name),
                 "previous_handoff_metadata_invalid")
+    promotion_run = metadata.get("promotion_handoff_run")
+    promotion_artifact = metadata.get("promotion_handoff_artifact")
+    require((promotion_run is None) == (promotion_artifact is None),
+            "promotion_handoff_metadata_invalid")
+    if promotion_run is not None:
+        _validate_normalized_run(promotion_run, "handoff", candidate_sha)
+        expected_name = (f"beta-evidence-handoff-{promotion_run['run_id']}-"
+                         f"{promotion_run['run_attempt']}")
+        _validate_artifacts(promotion_run, {expected_name})
+        require(promotion_run["workflow_path"] == ".github/workflows/beta-evidence.yml" and
+                promotion_run["event"] == "workflow_dispatch" and
+                promotion_run["head_sha"] == candidate_sha and
+                type(promotion_artifact) is dict and
+                promotion_artifact.get("name") == expected_name and
+                promotion_artifact == _artifact_by_name(promotion_run, expected_name),
+                "promotion_handoff_metadata_invalid")
     return metadata
 
 
@@ -1756,6 +1772,57 @@ def _verify_reports_zip(root, zip_path):
         raise EvidenceError("reports_zip_invalid") from None
 
 
+def _verify_promotion_handoff_artifact(artifact_dir, handoff_dir, reports_zip,
+                                       sha, version):
+    root = pathlib.Path(artifact_dir)
+    files = safe_tree(root, max_files=MAX_INPUT_FILES + 8,
+                      max_total=MAX_HANDOFF_TREE + MAX_REPORTS_ZIP + (1 << 20),
+                      max_file=MAX_REPORTS_ZIP)
+    paths = {name: path for name, path, _ in files}
+    expected = {"result.json", "diagnostics.json", "beta-evidence-reports.zip"}
+    expected.update("handoff/" + name for name, _, _ in safe_tree(
+        handoff_dir, max_files=MAX_INPUT_FILES, max_total=MAX_HANDOFF_TREE,
+        max_file=MAX_FILE))
+    require(set(paths) == expected, "promotion_handoff_artifact_layout_invalid")
+    result, _ = load_json(paths["result.json"], 1 << 20)
+    diagnostics, _ = load_json(paths["diagnostics.json"], 1 << 20)
+    reports_sha = file_digest(reports_zip, MAX_REPORTS_ZIP)
+    require(type(result) is dict and
+            set(result) == {"result_version", "status", "candidate_sha",
+                            "candidate_version", "report_zip_sha256"} and
+            (result.get("result_version"), result.get("status"),
+             result.get("candidate_sha"), result.get("candidate_version"),
+             result.get("report_zip_sha256")) == (1, "passed", sha, version, reports_sha),
+            "promotion_handoff_result_invalid")
+    require(type(diagnostics) is dict and
+            set(diagnostics) == {"diagnostic_version", "status", "error_code",
+                                 "candidate_sha", "candidate_version", "report_zip_sha256"} and
+            (diagnostics.get("diagnostic_version"), diagnostics.get("status"),
+             diagnostics.get("error_code"), diagnostics.get("candidate_sha"),
+             diagnostics.get("candidate_version"), diagnostics.get("report_zip_sha256")) ==
+            (1, "passed", "none", sha, version, reports_sha),
+            "promotion_handoff_diagnostics_invalid")
+
+
+def _verify_promotion_source_metadata(index, metadata, sha):
+    validate_trusted_metadata(metadata, sha, VERSION)
+    source_runs = index.get("source_runs", {})
+    candidate = metadata["candidate_run"]
+    performance = metadata["performance_run"]
+    _run_identity_matches(source_runs.get("candidate"), candidate)
+    _run_identity_matches(source_runs.get("performance"), performance)
+    _artifact_inventory_matches(
+        source_runs.get("candidate_artifacts"), candidate,
+        {f"release-assets-{sha}", f"release-verification-{sha}",
+         f"release-package-{sha}-linux-amd64"})
+    _artifact_inventory_matches(
+        source_runs.get("performance_artifacts"), performance,
+        {f"performance-series-{sha}-{performance['run_id']}",
+         f"performance-soak-{sha}-{performance['run_id']}"})
+    require(index.get("candidate", {}).get("candidate_delivery_url") ==
+            metadata.get("candidate_delivery_url"), "candidate_delivery_url_invalid")
+
+
 def _tree_digests(root, *, max_total=MAX_REPORT_TREE, max_file=MAX_FILE):
     files = safe_tree(root, max_files=MAX_INPUT_FILES, max_total=max_total,
                       max_file=max_file)
@@ -2068,6 +2135,16 @@ def verify(args):
                               args.candidate_sha, args.candidate_version)
     zip_path = _regular_file(args.reports_zip, MAX_REPORTS_ZIP)
     _verify_reports_zip(args.handoff_dir, zip_path)
+    metadata_path = getattr(args, "trusted_run_metadata", None)
+    if metadata_path is not None:
+        metadata, _ = load_json(metadata_path, 16 << 20)
+        index, _ = load_json(pathlib.Path(args.handoff_dir) / "evidence-index.json", 4 << 20)
+        _verify_promotion_source_metadata(index, metadata, args.candidate_sha)
+    artifact_dir = getattr(args, "handoff_artifact_dir", None)
+    if artifact_dir is not None:
+        _verify_promotion_handoff_artifact(artifact_dir, args.handoff_dir,
+                                           args.reports_zip, args.candidate_sha,
+                                           args.candidate_version)
     return {"result_version": 1, "status": "passed",
             "candidate_sha": args.candidate_sha,
             "candidate_version": args.candidate_version,
@@ -2178,6 +2255,8 @@ def main(argv=None):
     verify_parser.add_argument("--assets-dir", required=True, type=pathlib.Path)
     verify_parser.add_argument("--handoff-dir", required=True, type=pathlib.Path)
     verify_parser.add_argument("--reports-zip", required=True, type=pathlib.Path)
+    verify_parser.add_argument("--trusted-run-metadata", type=pathlib.Path)
+    verify_parser.add_argument("--handoff-artifact-dir", type=pathlib.Path)
     result_parser = sub.add_parser("mark-diagnostics")
     result_parser.add_argument("--output", required=True, type=pathlib.Path)
     result_parser.add_argument("--status", choices=("failed", "incomplete"), default="failed")

@@ -82,8 +82,9 @@ collect voluntary matching reports separately.
 
 After a successful rehearsal, the owner must separately decide whether to change
 the shipped version and authorize a future release workflow. This document does
-not authorize that action. TASK 34's explicit-publisher protection must be
-integrated before TASK 35/A changes `VERSION`; a version mismatch is only the
-current guard against main-push publication. The current download remains
-alpha.5 until actual beta publication. Any planning target around mid-December
-for 1.0 is a planning assumption, not a promised release date.
+not authorize that action. TASK 34 implements the explicit-publisher protection
+and must be integrated before TASK 35/A changes `VERSION`; once integrated, a
+main-push publication is disabled regardless of whether `VERSION` matches the
+candidate. The current download remains alpha.5 until actual beta publication.
+Any planning target around mid-December for 1.0 is a planning assumption, not a
+promised release date.

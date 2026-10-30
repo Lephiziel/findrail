@@ -1,19 +1,43 @@
 # Release candidate pipeline
 
-The alpha release workflow is a preparation pipeline until the repository owner
-intentionally changes `build/package/VERSION` on `main`. A push to `main` runs
-the full reusable CI, five native package jobs, a real packaged browser journey,
-installed VSIX checks, exact-set aggregation, reusable verification, and a
-read-only published-release state check. Only after every
-gate succeeds can the final job create a release. Pull requests rehearse the
-same gates with publication disabled. `build/package/VERSION` remains alpha.5;
-the explicitly allowed preparation candidate is beta.1. On main, the preview
-can differ from the immutable release version: publishing stays skipped, while
-the read-only release-state gate checks alpha.5 from VERSION and returns no-op.
-See the [beta candidate contract](beta-candidate.md).
-Publication is restricted to the canonical repository's main push or explicit main dispatch;
-PR and fork previews have read-only permissions. Alpha.4
-archives include native desktop launchers and target-specific install
+Candidate production and publication are separate operations. Pull requests
+(including forks), ordinary pushes to `main`, and workflow dispatches without an
+explicit promotion request run the required CI/native/browser/VSIX/verification
+gates in read-only mode. A push remains useful when `VERSION` and the candidate
+both say beta.1: it cannot create or change a release or tag. This workflow has no
+`workflow_run` trigger.
+
+The only write path is the final job of an explicit `workflow_dispatch` on the
+canonical repository's `main`, requested by owner `Lephiziel`, with
+`publish=true`, `scope=limited-desktop-beta`, the exact current 40-character
+candidate SHA, `candidate_version=0.1.0-beta.1`, and `VERSION=0.1.0-beta.1`.
+It also requires exact candidate/performance/evidence run IDs and attempts plus
+the reviewed evidence, notes, and eight-asset fingerprints described below.
+Every input defaults to non-publishing/empty. A valid dispatch with
+`publish=false` is a read-only dry-run; no draft or tag is created. A failed or
+missing fingerprint, unknown scope/version, stale main, fork run, or different
+run attempt blocks before the write sink.
+
+The explicit path downloads the named successful artifacts by GitHub artifact
+ID, rechecks repository/run/job/attempt metadata and API payload digests, runs
+`scripts/beta_evidence.py verify`, `release_assets.verify`, and the existing
+strict native/browser/VSIX/recovery/scale/series/soak validators. It promotes the
+approved eight asset bytes; it does not rebuild or reassemble the application.
+The release notes are the exact `publication-notes.md` bytes from that handoff.
+The final job alone has contents write permission. It creates an internal draft
+only inside the explicitly requested operation, checks all eight uploaded bytes
+and notes before the public transition, then publishes a GitHub prerelease with
+`make_latest=false`. It never clobbers, deletes, or recreates a tag/release.
+
+The read-only release-state check runs for candidate previews too. A complete
+published beta.1 after later documentation-only `main` movement is a no-op tied
+to its historical tag and bytes; the summary names the published SHA and never
+moves the tag to current `main`. A draft, partial release, tag/release mismatch,
+asset collision, checksum/manifest/embedded identity mismatch, or non-404 API
+error fails closed and is not automatically repaired. `VERSION` remains
+alpha.5 in this task; beta.1 remains a preparation candidate until a separately
+reviewed version change. See the [beta candidate contract](beta-candidate.md).
+Alpha.4 archives include native desktop launchers and target-specific install
 resources; these are archive members, not additional release assets.
 The current public alpha.5 uses schema 8 after migration 008; historical alpha.4
 remains schema 7. See the [published alpha.5 verification](release-alpha5-verification.md).
@@ -175,19 +199,36 @@ extension; Findrail must load from the installed extension directory.
 
 ## Gates and immutable-release behavior
 
-Publication requires the exact same workflow run's full CI (including three-OS
-Go checks, race and UI tests), five native package jobs, packaged browser journey,
-installed VSIX checks, aggregate verification, and reusable final verification.
+Candidate runs require the full reusable CI (including three-OS Go checks, race
+and UI tests), five native package jobs, packaged browser journey, installed
+VSIX checks, exact-set aggregation, recovery, and reusable final verification.
 The generic CI workflow is additional evidence, not a substitute for these
-required jobs. `release-state` has read-only contents permission and rejects API
-errors, a tag without a release, an incomplete asset set, or a mismatched
-tag/manifest revision. For the new contract, existing archives' embedded
-BUILD-INFO and the VSIX identity are also verified before accepting a no-op.
-A complete historical alpha.2 release is a no-op when
-main advances with VERSION unchanged; its established contract is five archives
-plus `SHA256SUMS.txt`, without a VSIX or manifest. The publisher has write
-permission only in the final job, rechecks that the tag does not already exist,
-and refuses to replace or move an existing tag/release.
+required jobs. Ordinary `main` pushes run those jobs with read-only release
+state; matching `VERSION` and candidate versions do not select a publisher.
+
+The separate beta promotion requires the exact successful candidate `push`,
+performance `workflow_dispatch`, and refreshed evidence-handoff
+`workflow_dispatch` runs. Their current API run attempts, required job sets,
+artifact IDs, source SHA, and GitHub artifact digests are rechecked before bytes
+are accepted. The handoff is independently verified against the selected
+candidate assets and raw technical proofs: five native targets and installer
+cases, browser/VSIX/MCP/upgrade/restore, recovery, individual 10k/100k scale,
+full series, and soak must pass. Only the human categories permitted by the
+limited scope can remain pending; `readiness.py` remains `final_release=false`
+and pending. A decision card or a JSON field such as `approved=true` is not
+authorization, authentication, or a write token. The owner makes the separate
+decision and then explicitly dispatches the workflow; TASK 36/B remains subject
+to a direct owner instruction.
+
+For the new contract, remote archives' embedded BUILD-INFO and VSIX identity are
+verified before accepting a no-op. A complete historical alpha.2 release is a
+no-op when main advances with VERSION unchanged; its established contract is
+five archives plus `SHA256SUMS.txt`, without a VSIX or manifest. Alpha.3–alpha.5
+retain their pinned schemas and checks. Beta.1 is pinned independently to schema
+8, Client API 1, VSIX 0.1.0, five native archives and exactly eight release
+files. The gate whitelists the version before interpreting paired 404 responses;
+unknown beta.2/stable/v1 versions never become a publish decision. Only the
+explicit final job has contents write permission.
 
 A complete alpha.4 or alpha.5 release is a no-op after main moves. The gate checks
 schema 7 for alpha.4 or schema 8 for alpha.5, the exact eight-file set, all remote
@@ -196,15 +237,68 @@ provenance and the VSIX identity against the release's tag revision, rather
 than today's main revision or a later source schema. The historical alpha.3
 SHA/schema contract remains unchanged.
 
-The beta.1 preparation candidate uses the same eight staging assets and five
-targets, but does not widen `release-state`: its read-only query is keyed from
-`VERSION` (alpha.5). On a main push with beta.1 preview and alpha.5 VERSION, the
-existing release is verified as a no-op and the publisher is skipped. An
-explicit publish request with a mismatched version fails validation. The
-published alpha.5 Linux archive is separately pinned for the beta-only
-same-schema compatibility case; it is not mixed into beta manifests. Historical
-alpha.5 journey summaries retain 19 root cases; beta.1 requires those 19 plus
-the same-schema case (20). See [beta candidate](beta-candidate.md).
+The beta.1 candidate uses the same eight staging assets and five targets.
+Ordinary push release-state checks the immutable `VERSION`; a promotion dispatch
+checks the beta.1 contract. A valid promotion does not use new builds from that
+dispatch: the eight files come from the exact `release-assets-<sha>` artifact
+named in the accepted handoff. The published alpha.5 Linux archive is separately
+pinned for the beta-only same-schema compatibility case; it is not mixed into
+beta manifests. Historical alpha.5 journey summaries retain 19 root cases;
+beta.1 requires those 19 plus the same-schema case (20). See
+[beta candidate](beta-candidate.md).
+
+## Explicit promotion inputs (future frozen candidate only)
+
+Do not use these example values now. A real dry-run or publish is valid only
+after the future beta.1 `VERSION`/candidate SHA is frozen, all required runs and
+the refreshed handoff exist, the handoff passes verification, and the owner has
+reviewed that exact packet. The current task creates no tag, release, or draft.
+
+In **Actions → Alpha release candidate → Run workflow**, select `main` and
+provide these exact values from that accepted handoff/card:
+
+| Input | Required value |
+|---|---|
+| `candidate_sha` | Exact 40-character frozen main SHA; it must equal dispatch SHA and live `main` before writing. |
+| `candidate_version` | `0.1.0-beta.1` |
+| `scope` | `limited-desktop-beta` |
+| `candidate_run_id`, `candidate_run_attempt` | Exact successful candidate push run and attempt. |
+| `performance_run_id`, `performance_run_attempt` | Exact successful performance run and attempt. |
+| `handoff_run_id`, `handoff_run_attempt` | Exact successful refreshed beta-evidence handoff run and attempt. |
+| `expected_handoff_artifact_digest` | Exact `sha256:<64 lowercase hex>` from that handoff's Actions artifact metadata. |
+| `expected_reports_zip_sha256` | Completed reports ZIP SHA-256. |
+| `expected_package_manifest_sha256` | `PACKAGE-MANIFEST.json` SHA-256. |
+| `expected_evidence_index_sha256` | `evidence-index.json` SHA-256. |
+| `expected_publication_notes_sha256` | Exact `publication-notes.md` body SHA-256. |
+| `expected_manifest_sha256`, `expected_checksums_sha256` | Exact release manifest and checksum-file SHA-256 values. |
+| `expected_asset_inventory_sha256` | SHA-256 of the canonical sorted eight-record inventory (basename, byte size, SHA-256). |
+
+After downloading the exact candidate assets and successful handoff artifact,
+verify the handoff with `scripts/beta_evidence.py verify`, then print the
+dispatch fingerprint fields with:
+
+```sh
+python3 scripts/release_gate.py handoff-fingerprints \
+  --candidate-sha "$CANDIDATE_SHA" \
+  --assets-dir /abs/accepted/release-assets \
+  --handoff-dir /abs/accepted/handoff \
+  --reports-zip /abs/accepted/beta-evidence-reports.zip \
+  --handoff-artifact-digest 'sha256:<digest-from-the-GitHub-run-summary>'
+```
+
+The handoff artifact digest is taken from that exact successful refreshed
+handoff run's Actions artifact metadata/job summary. The command independently
+verifies local release assets and evidence before printing values; it performs
+no network calls or writes. Candidate/performance/handoff run attempts remain
+explicit workflow inputs and must match the accepted card/run records.
+
+First run with `publish=false` to verify all inputs and proofs without a write.
+Only after a separate owner decision on the unchanged fingerprints may the owner
+repeat the same inputs with `publish=true`. No `approved` JSON is consumed. The
+publisher refuses an old/fork/short SHA, a newer `main`, a mismatched attempt,
+an expired artifact, changed bytes, failed/invalid evidence, or any missing
+technical proof. If main moves before publication, freeze and review a new
+candidate; do not reuse the old decision.
 
 ## Intentional alpha.5 publication
 

@@ -114,10 +114,11 @@ runs are historical, not beta evidence.
 
 ## Freeze and next decision
 
-Finish TASK 34's explicit-publisher protection before TASK 35/A changes
-`VERSION`: today a main push sets `PUBLISH`, and the current version mismatch
-only happens to skip publication. After the version bump that guard would no
-longer protect the push. Freeze one exact main SHA, run required candidate CI
+TASK 34 implements the explicit-publisher protection and must be integrated
+before TASK 35/A changes `VERSION`. Once integrated, a main push stays read-only
+even when the candidate and `VERSION` match; publication requires a separate
+owner-only canonical-main dispatch with the exact accepted handoff, run attempts,
+and reviewed fingerprints. Freeze one exact main SHA, run required candidate CI
 and final technical evidence on it, then present the handoff, remaining human
 pending categories, asset hashes, limitations, and release-note body/hash to the
 owner. If matching human reports arrive later, refresh intake/readiness and the

@@ -16,12 +16,74 @@ on:
         default: 0.1.0-beta.1
         type: string
       publish:
-        description: Publish only if every gate passes (normally leave false for preparation)
+        description: Publish only through the explicit owner-only beta.1 promotion path
         required: true
         default: false
         type: boolean
+      scope:
+        description: Promotion scope; leave none for ordinary read-only candidate runs
+        required: true
+        default: none
+        type: string
+      candidate_run_id:
+        description: Exact successful candidate push run ID from the accepted handoff
+        required: false
+        type: string
+      candidate_run_attempt:
+        description: Exact candidate workflow run attempt
+        required: false
+        type: string
+      performance_run_id:
+        description: Exact successful performance run ID from the accepted handoff
+        required: false
+        type: string
+      performance_run_attempt:
+        description: Exact performance workflow run attempt
+        required: false
+        type: string
+      handoff_run_id:
+        description: Exact successful refreshed beta evidence handoff run ID
+        required: false
+        type: string
+      handoff_run_attempt:
+        description: Exact evidence handoff run attempt
+        required: false
+        type: string
+      expected_handoff_artifact_digest:
+        description: Expected GitHub artifact digest (sha256:...) from the accepted handoff
+        required: false
+        type: string
+      expected_reports_zip_sha256:
+        description: Expected completed reports ZIP SHA-256
+        required: false
+        type: string
+      expected_package_manifest_sha256:
+        description: Expected PACKAGE-MANIFEST.json SHA-256
+        required: false
+        type: string
+      expected_evidence_index_sha256:
+        description: Expected evidence-index.json SHA-256
+        required: false
+        type: string
+      expected_publication_notes_sha256:
+        description: Expected exact publication-notes.md body SHA-256
+        required: false
+        type: string
+      expected_manifest_sha256:
+        description: Expected release-manifest.json SHA-256
+        required: false
+        type: string
+      expected_checksums_sha256:
+        description: Expected SHA256SUMS.txt SHA-256
+        required: false
+        type: string
+      expected_asset_inventory_sha256:
+        description: Expected canonical fingerprint of all eight approved asset records
+        required: false
+        type: string
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: alpha-release-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -33,21 +95,24 @@ jobs:
       version: ${{ steps.source.outputs.version }}
       release_version: ${{ steps.source.outputs.release_version }}
       publish: ${{ steps.source.outputs.publish }}
+      promotion_mode: ${{ steps.source.outputs.promotion_mode }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - id: source
         env:
           INPUT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
           INPUT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_version || '' }}
           REQUEST_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish || false }}
+          SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'none' }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$INPUT_SHA"
+          SOURCE_SHA="$GITHUB_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then SOURCE_SHA="$INPUT_SHA"; fi
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]
-          if [[ "$GITHUB_EVENT_NAME" != pull_request ]]; then test "$INPUT_SHA" = "$GITHUB_SHA"; fi
           if [[ "$GITHUB_EVENT_NAME" != push && "$GITHUB_EVENT_NAME" != workflow_dispatch && "$GITHUB_EVENT_NAME" != pull_request ]]; then
             echo "Unsupported release upstream event: $GITHUB_EVENT_NAME" >&2; exit 1
           fi
@@ -60,28 +125,37 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then VERSION="$INPUT_VERSION"; fi
           [[ "$VERSION" == 0.1.0-alpha.5 || "$VERSION" == 0.1.0-beta.1 ]]
           PUBLISH=false
-          if [[ "$GITHUB_EVENT_NAME" == push || "$REQUEST_PUBLISH" == true ]]; then PUBLISH=true; fi
-          if [[ "$REQUEST_PUBLISH" == true && "$VERSION" != "$RELEASE_VERSION" ]]; then
-            python3 - "$VERSION" "$RELEASE_VERSION" <<'PY'
-          import sys
-          sys.path.insert(0, 'scripts')
-          import release_gate
-          release_gate.validate_publication_version(sys.argv[1], sys.argv[2], True)
-          PY
+          PROMOTION_MODE=false
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            if [[ "$REQUEST_PUBLISH" == true ]]; then PUBLISH=true; fi
+            if [[ "$REQUEST_PUBLISH" == true || "$SCOPE" != none ]]; then
+              PROMOTION_MODE=true
+              test "$GITHUB_REPOSITORY" = 'Lephiziel/findrail'
+              test "$GITHUB_REF" = 'refs/heads/main'
+              test "$VERSION" = '0.1.0-beta.1'
+              test "$RELEASE_VERSION" = '0.1.0-beta.1'
+              test "$SCOPE" = 'limited-desktop-beta'
+              if [[ "$REQUEST_PUBLISH" == true ]]; then test "$GITHUB_ACTOR" = 'Lephiziel'; fi
+            else
+              test "$INPUT_SHA" = "$GITHUB_SHA"
+            fi
           fi
           {
             echo "sha=$INPUT_SHA"
             echo "version=$VERSION"
             echo "release_version=$RELEASE_VERSION"
             echo "publish=$PUBLISH"
+            echo "promotion_mode=$PROMOTION_MODE"
           } >> "$GITHUB_OUTPUT"
   source-checks:
     needs: validate-source
+    if: needs.validate-source.outputs.promotion_mode != 'true'
     uses: ./.github/workflows/ci.yml
     with:
       candidate_sha: ${{ needs.validate-source.outputs.candidate_sha }}
   native-packages:
     needs: validate-source
+    if: needs.validate-source.outputs.promotion_mode != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -239,6 +313,7 @@ jobs:
           retention-days: 30
   installed-vsix:
     needs: [validate-source, native-packages]
+    if: needs.validate-source.outputs.promotion_mode != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -310,6 +385,7 @@ jobs:
           retention-days: 30
   packaged-browser-journey:
     needs: [validate-source, native-packages]
+    if: needs.validate-source.outputs.promotion_mode != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -422,6 +498,7 @@ jobs:
           retention-days: 30
   aggregate-and-verify:
     needs: [validate-source, source-checks, native-packages, installed-vsix, packaged-browser-journey]
+    if: needs.validate-source.outputs.promotion_mode != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -482,77 +559,180 @@ jobs:
           retention-days: 30
   reusable-final-verification:
     needs: [validate-source, aggregate-and-verify]
+    if: needs.validate-source.outputs.promotion_mode != 'true'
     uses: ./.github/workflows/release-asset-verification.yml
     with:
       candidate_sha: ${{ needs.validate-source.outputs.candidate_sha }}
       candidate_version: ${{ needs.validate-source.outputs.version }}
   release-state:
-    needs: [validate-source, reusable-final-verification]
-    # Run the existing-release no-op check on previews too. Its token is
-    # read-only; PR publication remains false and the publisher stays skipped.
-    if: needs.validate-source.outputs.publish == 'true' || github.event_name == 'pull_request' || github.event_name == 'push'
+    needs: validate-source
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
       decision: ${{ steps.decision.outputs.decision }}
+      published_sha: ${{ steps.decision.outputs.published_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate-source.outputs.candidate_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - id: decision
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.validate-source.outputs.release_version }}
-          CANDIDATE_SHA: ${{ needs.validate-source.outputs.candidate_sha }}
+          VERSION: ${{ needs.validate-source.outputs.promotion_mode == 'true' && needs.validate-source.outputs.version || needs.validate-source.outputs.release_version }}
+          CURRENT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          result=$(python3 scripts/release_gate.py --repository "$GITHUB_REPOSITORY" --version "$VERSION" --current-sha "$CANDIDATE_SHA")
-          echo "decision=$result" >> "$GITHUB_OUTPUT"
-  publish:
-    needs: [validate-source, source-checks, native-packages, installed-vsix, packaged-browser-journey, aggregate-and-verify, reusable-final-verification, release-state]
-    if: needs.validate-source.outputs.publish == 'true' && needs.release-state.outputs.decision == 'publish' && needs.validate-source.outputs.version == needs.validate-source.outputs.release_version
+          test "$(git rev-parse HEAD)" = "$CURRENT_SHA"
+          result=$(python3 scripts/release_gate.py --repository "$GITHUB_REPOSITORY" --version "$VERSION" --current-sha "$CURRENT_SHA" --json)
+          python3 - "$result" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, pathlib, sys
+          state=json.loads(sys.argv[1])
+          pathlib.Path(sys.argv[2]).write_text(
+              f"decision={state['decision']}\npublished_sha={state.get('published_sha') or ''}\n",
+              encoding='utf-8')
+          if state['decision'] == 'noop':
+              message=f"Immutable release is complete; no write. Published tag SHA: `{state['published_sha']}`.\n"
+          else:
+              message="No release/tag exists for this contract. Read-only state check; this job cannot publish.\n"
+          pathlib.Path(sys.argv[3]).write_text('## Release state\n\n'+message, encoding='utf-8')
+          PY
+  promotion-preflight:
+    needs: [validate-source, release-state]
+    if: needs.validate-source.outputs.promotion_mode == 'true' && needs.release-state.outputs.decision == 'publish'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      actions: read
+    env:
+      CANDIDATE_SHA: ${{ needs.validate-source.outputs.candidate_sha }}
+      CANDIDATE_VERSION: ${{ needs.validate-source.outputs.version }}
+      RELEASE_VERSION: ${{ needs.validate-source.outputs.release_version }}
+      PROMOTION_SCOPE: ${{ inputs.scope }}
+      PUBLISH: ${{ inputs.publish }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+      PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
+      PERFORMANCE_RUN_ATTEMPT: ${{ inputs.performance_run_attempt }}
+      HANDOFF_RUN_ID: ${{ inputs.handoff_run_id }}
+      HANDOFF_RUN_ATTEMPT: ${{ inputs.handoff_run_attempt }}
+      EXPECTED_HANDOFF_ARTIFACT_DIGEST: ${{ inputs.expected_handoff_artifact_digest }}
+      EXPECTED_REPORTS_ZIP_SHA256: ${{ inputs.expected_reports_zip_sha256 }}
+      EXPECTED_PACKAGE_MANIFEST_SHA256: ${{ inputs.expected_package_manifest_sha256 }}
+      EXPECTED_EVIDENCE_INDEX_SHA256: ${{ inputs.expected_evidence_index_sha256 }}
+      EXPECTED_PUBLICATION_NOTES_SHA256: ${{ inputs.expected_publication_notes_sha256 }}
+      EXPECTED_MANIFEST_SHA256: ${{ inputs.expected_manifest_sha256 }}
+      EXPECTED_CHECKSUMS_SHA256: ${{ inputs.expected_checksums_sha256 }}
+      EXPECTED_ASSET_INVENTORY_SHA256: ${{ inputs.expected_asset_inventory_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.validate-source.outputs.candidate_sha }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Recheck exact GitHub runs and download exact candidate/evidence artifact IDs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 scripts/beta_evidence_github.py preflight \
+            --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" \
+            --candidate-run-id "$CANDIDATE_RUN_ID" --candidate-run-attempt "$CANDIDATE_RUN_ATTEMPT" \
+            --performance-run-id "$PERFORMANCE_RUN_ID" --performance-run-attempt "$PERFORMANCE_RUN_ATTEMPT" \
+            --handoff-run-id "$HANDOFF_RUN_ID" --handoff-run-attempt "$HANDOFF_RUN_ATTEMPT" \
+            --expected-handoff-artifact-digest "$EXPECTED_HANDOFF_ARTIFACT_DIGEST" \
+            --require-main-head \
+            --download-dir "$RUNNER_TEMP/beta-promotion-downloads" \
+            --metadata "$RUNNER_TEMP/beta-promotion-metadata.json"
+      - name: Verify technical proofs, pending categories, and every accepted fingerprint
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$PUBLISH" == true ]]; then args+=(--stage-directory "$RUNNER_TEMP/promotion-ready"); fi
+          python3 scripts/release_gate.py promotion-verify \
+            --assets-dir "$RUNNER_TEMP/beta-promotion-downloads/assets" \
+            --handoff-artifact-dir "$RUNNER_TEMP/beta-promotion-downloads/handoff-bundle" \
+            --run-metadata "$RUNNER_TEMP/beta-promotion-metadata.json" \
+            "${args[@]}" | tee "$RUNNER_TEMP/promotion-verification.json"
+          if [[ "$PUBLISH" == true ]]; then
+            echo 'Verified promotion package staged from the exact accepted artifact; no release or tag was written in preflight.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Explicit limited-desktop-beta dry-run passed. No release, draft, or tag was written.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v7.0.2
+        if: needs.validate-source.outputs.publish == 'true'
+        with:
+          name: promotion-ready-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/promotion-ready/
+          if-no-files-found: error
+          retention-days: 1
+  promotion-publish:
+    needs: [validate-source, release-state, promotion-preflight]
+    if: >-
+      needs.validate-source.outputs.publish == 'true' &&
+      needs.release-state.outputs.decision == 'publish' &&
+      needs.promotion-preflight.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      CANDIDATE_SHA: ${{ needs.validate-source.outputs.candidate_sha }}
+      CANDIDATE_VERSION: ${{ needs.validate-source.outputs.version }}
+      RELEASE_VERSION: ${{ needs.validate-source.outputs.release_version }}
+      PROMOTION_SCOPE: ${{ inputs.scope }}
+      PUBLISH: ${{ inputs.publish }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+      PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
+      PERFORMANCE_RUN_ATTEMPT: ${{ inputs.performance_run_attempt }}
+      HANDOFF_RUN_ID: ${{ inputs.handoff_run_id }}
+      HANDOFF_RUN_ATTEMPT: ${{ inputs.handoff_run_attempt }}
+      EXPECTED_HANDOFF_ARTIFACT_DIGEST: ${{ inputs.expected_handoff_artifact_digest }}
+      EXPECTED_REPORTS_ZIP_SHA256: ${{ inputs.expected_reports_zip_sha256 }}
+      EXPECTED_PACKAGE_MANIFEST_SHA256: ${{ inputs.expected_package_manifest_sha256 }}
+      EXPECTED_EVIDENCE_INDEX_SHA256: ${{ inputs.expected_evidence_index_sha256 }}
+      EXPECTED_PUBLICATION_NOTES_SHA256: ${{ inputs.expected_publication_notes_sha256 }}
+      EXPECTED_MANIFEST_SHA256: ${{ inputs.expected_manifest_sha256 }}
+      EXPECTED_CHECKSUMS_SHA256: ${{ inputs.expected_checksums_sha256 }}
+      EXPECTED_ASSET_INVENTORY_SHA256: ${{ inputs.expected_asset_inventory_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
-          name: release-assets-${{ needs.validate-source.outputs.candidate_sha }}
-          path: ${{ runner.temp }}/release-assets
-      - name: Recheck exact candidate and publish immutable release
+          name: promotion-ready-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/promotion-ready
+      - name: Recheck live metadata for exact source runs, attempts, and handoff artifact
         env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.validate-source.outputs.version }}
-          CANDIDATE_SHA: ${{ needs.validate-source.outputs.candidate_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REPOSITORY" = 'Lephiziel/findrail'
-          test "$GITHUB_REF" = 'refs/heads/main'
-          if [[ "$GITHUB_EVENT_NAME" != push && "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
-            echo "Unsupported publisher event: $GITHUB_EVENT_NAME" >&2; exit 1
-          fi
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          python3 scripts/release_assets.py verify --directory "$RUNNER_TEMP/release-assets" --version "$VERSION" --revision "$CANDIDATE_SHA"
-          TAG="v$VERSION"
-          decision=$(python3 scripts/release_gate.py --repository "$GITHUB_REPOSITORY" --version "$VERSION" --current-sha "$CANDIDATE_SHA")
-          if [[ "$decision" != publish ]]; then
-            echo "Release/tag state changed after read-only gate ($decision); refusing to replace it." >&2; exit 1
-          fi
-          mapfile -t INSTALL_ASSETS < <(python3 - "$RUNNER_TEMP/release-assets/release-manifest.json" <<'PY'
-          import json, sys
-          manifest=json.load(open(sys.argv[1], encoding='utf-8'))
-          print('\n'.join(sorted([item['basename'] for item in manifest['assets']] + ['release-manifest.json','SHA256SUMS.txt'])))
-          PY
-          )
-          files=()
-          for name in "${INSTALL_ASSETS[@]}"; do
-            test -f "$RUNNER_TEMP/release-assets/$name"
-            files+=("$RUNNER_TEMP/release-assets/$name")
-          done
-          gh release create "$TAG" "${files[@]}" --target "$CANDIDATE_SHA" --prerelease --title "Findrail $TAG" --notes-file docs/release-notes.md
+          python3 scripts/beta_evidence_github.py promotion-metadata \
+            --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" \
+            --candidate-run-id "$CANDIDATE_RUN_ID" --candidate-run-attempt "$CANDIDATE_RUN_ATTEMPT" \
+            --performance-run-id "$PERFORMANCE_RUN_ID" --performance-run-attempt "$PERFORMANCE_RUN_ATTEMPT" \
+            --handoff-run-id "$HANDOFF_RUN_ID" --handoff-run-attempt "$HANDOFF_RUN_ATTEMPT" \
+            --expected-handoff-artifact-digest "$EXPECTED_HANDOFF_ARTIFACT_DIGEST" \
+            --metadata "$RUNNER_TEMP/fresh-promotion-metadata.json"
+      - name: Verify again and publish approved bytes through the single promotion path
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/promotion-audit"
+          python3 scripts/release_gate.py promotion-publish \
+            --assets-dir "$RUNNER_TEMP/promotion-ready/release-assets" \
+            --handoff-artifact-dir "$RUNNER_TEMP/promotion-ready/handoff-artifact" \
+            --run-metadata "$RUNNER_TEMP/fresh-promotion-metadata.json" \
+            --audit-file "$RUNNER_TEMP/promotion-audit/promotion-audit.json"
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: promotion-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/promotion-audit/promotion-audit.json
+          if-no-files-found: ignore
+          retention-days: 90
