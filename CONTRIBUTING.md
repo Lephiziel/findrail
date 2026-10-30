@@ -28,6 +28,23 @@ supports it. Run focused package tests while iterating, for example
 `go test ./internal/extract/docx`; see CI for the complete platform matrix. There
 is no need to download modules separately: Go resolves the declared module graph.
 
+## Language and tooling
+
+Findrail's application and general-purpose development tools use Go by default.
+This includes new development CLIs, binary/API integration tests, packaging, and
+archive, manifest, or evidence validation. Prefer the standard library and reuse
+existing packages to keep the toolchain small.
+
+For a new Python tool or a substantial expansion, explain the Python-specific
+requirement and which existing helpers it reuses in the PR. Focused correctness
+fixes to existing Python tooling are welcome. Browser and client code can use
+the languages and tooling appropriate to those clients.
+
+Keep tooling migrations bounded: preserve report/archive contracts, retain
+relevant boundary and failure coverage, update callers, and remove the replaced
+implementation in the same PR. Keep development tools separate from the shipped
+runtime commands and retain relevant release checks throughout a migration.
+
 ## Pull requests
 
 Describe the user-visible problem, resulting behaviour, and relevant validation
