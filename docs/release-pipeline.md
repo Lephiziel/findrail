@@ -215,6 +215,10 @@ VSIX checks, exact-set aggregation, recovery, and reusable final verification.
 The generic CI workflow is additional evidence, not a substitute for these
 required jobs. Ordinary `main` pushes run those jobs with read-only release
 state; matching `VERSION` and candidate versions do not select a publisher.
+Evidence intake pins the exact current job graph: only `promotion-preflight` and
+`promotion-publish` may be skipped on a read-only candidate. A separately listed
+historical graph is accepted for already-produced handoffs; unknown, missing, or
+unexpectedly executed write jobs fail closed.
 
 The separate beta promotion requires the exact successful candidate `push`,
 performance `workflow_dispatch`, and refreshed evidence-handoff
@@ -321,6 +325,11 @@ transition. There is no API transaction across the `main` ref and release edit;
 the final guard narrows but cannot eliminate that concurrent-update window. If
 `main` moves, the draft remains private for manual owner review and the tool
 stops without publishing or automatically repairing it.
+An unpublished GitHub draft may not yet have a Git tag ref. In that state the
+draft's API `target_commitish` must equal the accepted candidate SHA, and only a
+specific 404 for that exact tag ref is treated as expected absence. Other API
+errors or a mismatched existing ref block the upload/transition; after the public
+transition, the exact tag ref must exist and resolve to the candidate SHA.
 
 ## Intentional alpha.5 publication
 

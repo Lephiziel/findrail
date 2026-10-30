@@ -2,6 +2,7 @@ package betapromotion
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,14 +19,27 @@ type recordedCommand struct {
 }
 
 type recordingRunner struct {
-	calls []recordedCommand
-	body  string
+	calls        []recordedCommand
+	body         string
+	apiErrors    map[string]error
+	apiResponses map[string][]byte
 }
 
 func (r *recordingRunner) Run(_ context.Context, program string, args []string, _ string, _ map[string]string, outputLimit int) ([]byte, error) {
 	r.calls = append(r.calls, recordedCommand{program: program, args: append([]string(nil), args...), limit: outputLimit})
+	if len(args) == 2 && args[0] == "api" {
+		if err := r.apiErrors[args[1]]; err != nil {
+			return nil, err
+		}
+		if response, ok := r.apiResponses[args[1]]; ok {
+			return response, nil
+		}
+		if strings.Contains(args[1], "/git/ref/tags/") {
+			return []byte(fmt.Sprintf(`{"object":{"type":"commit","sha":%q}}`, testSHA)), nil
+		}
+	}
 	if len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "/releases?per_page=100") {
-		return []byte(fmt.Sprintf(`[{"id":77,"tag_name":"v%s","name":"Findrail v%s","draft":true,"prerelease":true,"body":%q}]`, Version, Version, r.body)), nil
+		return []byte(fmt.Sprintf(`[{"id":77,"tag_name":"v%s","target_commitish":%q,"name":"Findrail v%s","draft":true,"prerelease":true,"body":%q}]`, Version, testSHA, Version, r.body)), nil
 	}
 	return []byte("ok\n"), nil
 }
@@ -46,7 +60,7 @@ func TestGitHubCLIUsesExplicitDraftUploadAndPublishCommands(t *testing.T) {
 	runner := &recordingRunner{body: "approved notes\n"}
 	cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
 	draft, err := cli.CreateDraft(context.Background(), "v"+Version, testSHA, notes)
-	if err != nil || !validDraft(draft, "v"+Version, "approved notes\n") {
+	if err != nil || !validDraft(draft, "v"+Version, testSHA, "approved notes\n") {
 		t.Fatalf("draft command did not return exact draft identity: %+v, %v", draft, err)
 	}
 	create := runner.calls[0]
@@ -86,6 +100,57 @@ func TestGitHubCLIUsesExplicitDraftUploadAndPublishCommands(t *testing.T) {
 		!hasAllArgs(publish.args, "--draft=false", "--prerelease", "--latest=false") {
 		t.Fatalf("public transition is not an explicit prerelease: %+v", publish.args)
 	}
+}
+
+func TestGitHubCLIDraftTargetAndTag404AreProviderFaithful(t *testing.T) {
+	tagPath := "repos/" + Repository + "/git/ref/tags/v" + Version
+	releasePath := "repos/" + Repository + "/releases/77"
+	t.Run("draft target is decoded", func(t *testing.T) {
+		runner := &recordingRunner{body: "notes"}
+		cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+		draft, err := cli.CreateDraft(context.Background(), "v"+Version, testSHA, filepath.Join(t.TempDir(), "notes"))
+		if err != nil || draft.TargetCommitish != testSHA {
+			t.Fatalf("draft target_commitish was not retained: %+v err=%v", draft, err)
+		}
+	})
+	t.Run("only exact tag-ref 404 is absence", func(t *testing.T) {
+		notFound := failure{code: "command_failed", output: "gh: Not Found (HTTP 404)\n"}
+		runner := &recordingRunner{apiErrors: map[string]error{
+			tagPath:     notFound,
+			releasePath: notFound,
+			"repos/" + Repository + "/git/ref/tags/v" + Version + "-unexpected": notFound,
+		}}
+		cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+		if _, err := cli.TagSHA(context.Background(), "v"+Version); !errors.Is(err, errTagNotFound) {
+			t.Fatalf("expected missing tag sentinel, got %v", err)
+		}
+		if _, err := cli.Release(context.Background(), 77); err == nil || errors.Is(err, errTagNotFound) {
+			t.Fatalf("release 404 was incorrectly treated as a missing tag: %v", err)
+		}
+		if _, err := cli.TagSHA(context.Background(), "v"+Version+"-unexpected"); err == nil || errors.Is(err, errTagNotFound) {
+			t.Fatalf("404 for a different tag was incorrectly treated as expected absence: %v", err)
+		}
+	})
+	for _, status := range []int{403, 500} {
+		t.Run(fmt.Sprintf("HTTP %d is not absence", status), func(t *testing.T) {
+			runner := &recordingRunner{apiErrors: map[string]error{
+				tagPath: failure{code: "command_failed", output: fmt.Sprintf("gh: provider error (HTTP %d)\n", status)},
+			}}
+			cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+			if _, err := cli.TagSHA(context.Background(), "v"+Version); err == nil || errors.Is(err, errTagNotFound) {
+				t.Fatalf("HTTP %d was treated as missing tag: %v", status, err)
+			}
+		})
+	}
+	t.Run("malformed 404 output is not absence", func(t *testing.T) {
+		runner := &recordingRunner{apiErrors: map[string]error{
+			tagPath: failure{code: "command_failed", output: "HTTP 404\nprovider detail"},
+		}}
+		cli := NewGitHubCLI(runner, Config{RepoRoot: t.TempDir()})
+		if _, err := cli.TagSHA(context.Background(), "v"+Version); err == nil || errors.Is(err, errTagNotFound) {
+			t.Fatalf("untrusted 404 text was treated as absence: %v", err)
+		}
+	})
 }
 
 func TestGitHubCLIRejectsAmbiguousReleaseListAndUnexpectedOutput(t *testing.T) {

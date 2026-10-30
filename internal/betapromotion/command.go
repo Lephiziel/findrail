@@ -35,7 +35,7 @@ func runExec(ctx context.Context, program string, args []string, directory strin
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil, fail("command_canceled")
 		}
-		return nil, fail("command_failed")
+		return nil, failure{code: "command_failed", output: string(output.result())}
 	}
 	return output.result(), nil
 }

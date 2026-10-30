@@ -3,9 +3,11 @@ package betapromotion
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -14,6 +16,27 @@ var invalidAPIPath = regexp.MustCompile(`[^A-Za-z0-9_./?=&-]`)
 type GitHubCLI struct {
 	runner CommandRunner
 	config Config
+}
+
+func commandHTTPStatus(err error) int {
+	var commandErr failure
+	if !errors.As(err, &commandErr) || commandErr.code != "command_failed" {
+		return 0
+	}
+	line := strings.TrimSpace(commandErr.output)
+	if strings.ContainsAny(line, "\r\n") || !strings.HasPrefix(line, "gh: ") {
+		return 0
+	}
+	marker := " (HTTP "
+	index := strings.LastIndex(line, marker)
+	if index <= len("gh:") || !strings.HasSuffix(line, ")") {
+		return 0
+	}
+	status, err := strconv.Atoi(line[index+len(marker) : len(line)-1])
+	if err != nil || status < 100 || status > 599 {
+		return 0
+	}
+	return status
 }
 
 func NewGitHubCLI(runner CommandRunner, config Config) *GitHubCLI {
@@ -234,6 +257,9 @@ func (g *GitHubCLI) apiJSON(ctx context.Context, path string, target any) error 
 	}
 	output, err := g.run(ctx, []string{"api", path}, 2*time.Minute, maxCommandOutput)
 	if err != nil {
+		if path == "repos/"+Repository+"/git/ref/tags/v"+Version && commandHTTPStatus(err) == 404 {
+			return errTagNotFound
+		}
 		return fail("github_api_failed")
 	}
 	if json.Unmarshal(output, target) != nil {
@@ -258,16 +284,18 @@ func runFileBounded(parent context.Context, runner FileCommandRunner, program st
 }
 
 type releaseWire struct {
-	ID         int64  `json:"id"`
-	TagName    string `json:"tag_name"`
-	Name       string `json:"name"`
-	Draft      bool   `json:"draft"`
-	Prerelease bool   `json:"prerelease"`
-	Body       string `json:"body"`
+	ID              int64  `json:"id"`
+	TagName         string `json:"tag_name"`
+	TargetCommitish string `json:"target_commitish"`
+	Name            string `json:"name"`
+	Draft           bool   `json:"draft"`
+	Prerelease      bool   `json:"prerelease"`
+	Body            string `json:"body"`
 }
 
 func (r releaseWire) release() Release {
-	return Release{ID: r.ID, TagName: r.TagName, Name: r.Name, Draft: r.Draft, Prerelease: r.Prerelease, Body: r.Body}
+	return Release{ID: r.ID, TagName: r.TagName, TargetCommitish: r.TargetCommitish,
+		Name: r.Name, Draft: r.Draft, Prerelease: r.Prerelease, Body: r.Body}
 }
 
 type assetWire struct {

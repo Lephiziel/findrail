@@ -143,6 +143,9 @@ type fakeGateway struct {
 	changeTagAfterDownload bool
 	tagMoved               bool
 	changeAssetIDOnFinal   bool
+	tagOnDraft             bool
+	wrongDraftTarget       bool
+	tagNotFoundCalls       int
 }
 
 func newFakeGateway(request Request) *fakeGateway {
@@ -182,8 +185,14 @@ func (g *fakeGateway) CreateDraft(_ context.Context, tag, targetSHA, notesFile s
 	if err != nil {
 		return Release{}, err
 	}
-	g.release = Release{ID: 77, TagName: tag, Name: "Findrail " + tag, Draft: true, Prerelease: true, Body: string(notes)}
-	g.tagSHA = targetSHA
+	if g.wrongDraftTarget {
+		targetSHA = strings.Repeat("d", 40)
+	}
+	g.release = Release{ID: 77, TagName: tag, TargetCommitish: targetSHA,
+		Name: "Findrail " + tag, Draft: true, Prerelease: true, Body: string(notes)}
+	if g.tagOnDraft {
+		g.tagSHA = targetSHA
+	}
 	return g.release, nil
 }
 
@@ -246,6 +255,10 @@ func (g *fakeGateway) TagSHA(context.Context, string) (string, error) {
 	if g.changeTag || g.tagMoved {
 		return strings.Repeat("d", 40), nil
 	}
+	if g.tagSHA == "" {
+		g.tagNotFoundCalls++
+		return "", errTagNotFound
+	}
 	return g.tagSHA, nil
 }
 
@@ -277,6 +290,7 @@ func (g *fakeGateway) Publish(context.Context, string) error {
 	g.events = append(g.events, "publish")
 	g.publishCalls++
 	g.release.Draft = false
+	g.tagSHA = g.release.TargetCommitish
 	return nil
 }
 
@@ -393,6 +407,9 @@ func TestPublishRechecksAndPublishesExactEightAssets(t *testing.T) {
 	if gateway.createCalls != 1 || gateway.uploadCalls != 1 || gateway.publishCalls != 1 {
 		t.Fatalf("unexpected write counts: create=%d upload=%d publish=%d", gateway.createCalls, gateway.uploadCalls, gateway.publishCalls)
 	}
+	if gateway.tagNotFoundCalls != 2 {
+		t.Fatalf("draft absence was not distinguished from a published tag: missing reads=%d", gateway.tagNotFoundCalls)
+	}
 	if len(gateway.assets) != 8 || len(result.AssetInventory) != 8 {
 		t.Fatalf("did not promote exact eight assets: remote=%d inventory=%d", len(gateway.assets), len(result.AssetInventory))
 	}
@@ -446,6 +463,34 @@ func TestMainMovementBeforeDraftAndDuringUploadOrFinalVerificationBlocksTransiti
 	}
 }
 
+func TestDraftMayExposeOnlyAnExactPinnedTargetOrAnExactExistingTag(t *testing.T) {
+	t.Run("provider creates tag with draft", func(t *testing.T) {
+		request := validRequest()
+		runner := &fakeRunner{request: request}
+		gateway := newFakeGateway(request)
+		gateway.tagOnDraft = true
+		result, err, _ := runTest(t, request, PublishMode, runner, gateway, context.Background())
+		if err != nil || result.Decision != "published" || gateway.tagNotFoundCalls != 0 {
+			t.Fatalf("exact existing tag was not accepted: result=%+v missing=%d err=%v",
+				result, gateway.tagNotFoundCalls, err)
+		}
+	})
+
+	t.Run("draft target is not the accepted SHA", func(t *testing.T) {
+		request := validRequest()
+		runner := &fakeRunner{request: request}
+		gateway := newFakeGateway(request)
+		gateway.wrongDraftTarget = true
+		_, err, config := runTest(t, request, PublishMode, runner, gateway, context.Background())
+		if err == nil || errorCode(err) != "draft_identity_invalid" ||
+			gateway.uploadCalls != 0 || gateway.publishCalls != 0 {
+			t.Fatalf("wrong draft target was not blocked before upload: upload=%d publish=%d err=%v",
+				gateway.uploadCalls, gateway.publishCalls, err)
+		}
+		assertAuditStatus(t, config.AuditFile, "partial", true)
+	})
+}
+
 func TestDraftTamperingNotesPartialStateAndAPIErrorNeverPublish(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -455,6 +500,7 @@ func TestDraftTamperingNotesPartialStateAndAPIErrorNeverPublish(t *testing.T) {
 		{"extra asset", func(g *fakeGateway) { g.extraAsset = true }},
 		{"notes changed", func(g *fakeGateway) { g.changeNotes = true }},
 		{"tag target changed", func(g *fakeGateway) { g.changeTag = true }},
+		{"wrong target commitish", func(g *fakeGateway) { g.wrongDraftTarget = true }},
 		{"tag target changed during final verification", func(g *fakeGateway) { g.changeTagAfterDownload = true }},
 		{"asset IDs changed during final verification", func(g *fakeGateway) { g.changeAssetIDOnFinal = true }},
 		{"partial upload", func(g *fakeGateway) { g.partialUpload = true }},

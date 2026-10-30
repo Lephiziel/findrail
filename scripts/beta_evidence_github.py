@@ -391,7 +391,10 @@ def preflight(candidate_sha, candidate_version, candidate_run_id,
         "candidate_run": candidate, "performance_run": performance,
         "candidate_delivery_url": assets_artifact["url"],
     }
-    if previous_handoff is not None:
+    if promotion:
+        metadata["promotion_handoff_run"] = handoff
+        metadata["promotion_handoff_artifact"] = handoff_artifact
+    elif previous_handoff is not None:
         metadata["previous_handoff_run"] = previous_handoff
         metadata["previous_handoff_artifact"] = previous_artifact
     try:

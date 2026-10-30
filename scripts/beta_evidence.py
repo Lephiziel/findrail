@@ -80,9 +80,14 @@ CANDIDATE_JOB_NAMES = {
     "aggregate-and-verify",
     "reusable-final-verification / verify-assets",
     "release-state",
-    "publish",
+    "promotion-preflight",
+    "promotion-publish",
     *(f"native-packages ({target}, {runner})" for target, runner in CANDIDATE_TARGET_RUNNERS.items()),
 }
+CANDIDATE_REQUIRED_JOB_NAMES = CANDIDATE_JOB_NAMES - {
+    "promotion-preflight", "promotion-publish",
+}
+CANDIDATE_LEGACY_JOB_NAMES = CANDIDATE_REQUIRED_JOB_NAMES | {"publish"}
 PERFORMANCE_JOB_NAMES = {"series", "soak"}
 
 
@@ -416,11 +421,23 @@ def _validate_normalized_run(run, kind, candidate_sha):
         by_name[job["name"]] = job
         require(job.get("run_attempt") == run["run_attempt"] and
                 job.get("status") == "completed", f"{kind}_attempt_mismatch")
-        if kind == "candidate" and job["name"] == "publish":
-            require(job.get("conclusion") in ("success", "skipped"), "candidate_job_failed")
+    if kind == "candidate":
+        names = set(by_name)
+        require(names in (CANDIDATE_JOB_NAMES, CANDIDATE_LEGACY_JOB_NAMES),
+                "candidate_jobs_incomplete")
+        if names == CANDIDATE_JOB_NAMES:
+            for name in ("promotion-preflight", "promotion-publish"):
+                require(by_name[name].get("conclusion") == "skipped",
+                        "candidate_write_job_unexpectedly_ran")
         else:
+            require(by_name["publish"].get("conclusion") in ("success", "skipped"),
+                    "candidate_job_failed")
+        for name in names - {"promotion-preflight", "promotion-publish", "publish"}:
+            require(by_name[name].get("conclusion") == "success", "candidate_job_failed")
+    else:
+        require(set(by_name) == required_jobs, f"{kind}_jobs_incomplete")
+        for job in by_name.values():
             require(job.get("conclusion") == "success", f"{kind}_job_failed")
-    require(set(by_name) == required_jobs, f"{kind}_jobs_incomplete")
     artifacts = run.get("artifacts")
     require(type(artifacts) is list, f"{kind}_artifacts_invalid")
 

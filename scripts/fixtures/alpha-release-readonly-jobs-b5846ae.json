@@ -1,0 +1,25 @@
+{
+  "source_run_id": 41010257185,
+  "source_head_sha": "b5846ae8c890b9a9eba912518a569a0670d98222",
+  "source_event": "pull_request",
+  "jobs": [
+    {"name": "validate-source", "conclusion": "success"},
+    {"name": "release-state", "conclusion": "success"},
+    {"name": "native-packages (darwin-arm64, macos-14)", "conclusion": "success"},
+    {"name": "native-packages (linux-arm64, ubuntu-24.04-arm)", "conclusion": "success"},
+    {"name": "native-packages (windows-amd64, windows-latest)", "conclusion": "success"},
+    {"name": "native-packages (darwin-amd64, macos-15-intel)", "conclusion": "success"},
+    {"name": "native-packages (linux-amd64, ubuntu-latest)", "conclusion": "success"},
+    {"name": "source-checks / check (macos-latest)", "conclusion": "success"},
+    {"name": "source-checks / ui", "conclusion": "success"},
+    {"name": "source-checks / check (ubuntu-latest)", "conclusion": "success"},
+    {"name": "source-checks / check (windows-latest)", "conclusion": "success"},
+    {"name": "source-checks / race", "conclusion": "success"},
+    {"name": "promotion-publish", "conclusion": "skipped"},
+    {"name": "promotion-preflight", "conclusion": "skipped"},
+    {"name": "installed-vsix", "conclusion": "success"},
+    {"name": "packaged-browser-journey", "conclusion": "success"},
+    {"name": "aggregate-and-verify", "conclusion": "success"},
+    {"name": "reusable-final-verification / verify-assets", "conclusion": "success"}
+  ]
+}

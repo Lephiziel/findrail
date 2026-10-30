@@ -31,9 +31,10 @@ const (
 )
 
 var (
-	shaPattern    = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	runIDPattern  = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
-	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	shaPattern     = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	runIDPattern   = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
+	digestPattern  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	errTagNotFound = errors.New("tag_not_found")
 )
 
 type Mode string
@@ -88,12 +89,13 @@ type RemoteState struct {
 }
 
 type Release struct {
-	ID         int64
-	TagName    string
-	Name       string
-	Draft      bool
-	Prerelease bool
-	Body       string
+	ID              int64
+	TagName         string
+	TargetCommitish string
+	Name            string
+	Draft           bool
+	Prerelease      bool
+	Body            string
 }
 
 type RemoteAsset struct {
@@ -141,7 +143,8 @@ type Result struct {
 }
 
 type failure struct {
-	code string
+	code   string
+	output string
 }
 
 func (e failure) Error() string { return e.code }
@@ -454,11 +457,10 @@ func Run(ctx context.Context, request Request, config Config, mode Mode, deps De
 		return Result{}, fail("draft_creation_failed")
 	}
 	audit.ReleaseID = draft.ID
-	if !validDraft(draft, "v"+Version, string(notesBytes)) {
+	if !validDraft(draft, "v"+Version, request.CandidateSHA, string(notesBytes)) {
 		return Result{}, fail("draft_identity_invalid")
 	}
-	tagSHA, err := deps.Gateway.TagSHA(ctx, draft.TagName)
-	if err != nil || tagSHA != request.CandidateSHA {
+	if err := verifyDraftTag(ctx, deps.Gateway, draft.TagName, request.CandidateSHA); err != nil {
 		return Result{}, fail("draft_tag_target_mismatch")
 	}
 	audit.Status = "draft_created"
@@ -496,15 +498,14 @@ func Run(ctx context.Context, request Request, config Config, mode Mode, deps De
 	}
 
 	current, err := deps.Gateway.Release(ctx, draft.ID)
-	if err != nil || !validDraft(current, "v"+Version, string(notesBytes)) || current.ID != draft.ID {
+	if err != nil || !validDraft(current, "v"+Version, request.CandidateSHA, string(notesBytes)) || current.ID != draft.ID {
 		return Result{}, fail("draft_changed_before_publish")
 	}
 	finalAssets, err := deps.Gateway.Assets(ctx, draft.ID)
 	if err != nil || verifyRemoteAssets(finalAssets, inventory) != nil || !sameRemoteAssets(firstAssets, finalAssets) {
 		return Result{}, fail("draft_asset_inventory_changed")
 	}
-	tagSHA, err = deps.Gateway.TagSHA(ctx, draft.TagName)
-	if err != nil || tagSHA != request.CandidateSHA {
+	if err := verifyDraftTag(ctx, deps.Gateway, draft.TagName, request.CandidateSHA); err != nil {
 		return Result{}, fail("draft_tag_target_mismatch")
 	}
 	// This is the last read before the only public transition.
@@ -516,10 +517,10 @@ func Run(ctx context.Context, request Request, config Config, mode Mode, deps De
 		return Result{}, fail("public_transition_failed")
 	}
 	current, err = deps.Gateway.Release(ctx, draft.ID)
-	if err != nil || current.ID != draft.ID || !validPublished(current, "v"+Version, string(notesBytes)) {
+	if err != nil || current.ID != draft.ID || !validPublished(current, "v"+Version, request.CandidateSHA, string(notesBytes)) {
 		return Result{}, fail("published_release_invalid")
 	}
-	tagSHA, err = deps.Gateway.TagSHA(ctx, draft.TagName)
+	tagSHA, err := deps.Gateway.TagSHA(ctx, draft.TagName)
 	if err != nil || tagSHA != request.CandidateSHA {
 		return Result{}, fail("published_tag_target_mismatch")
 	}
@@ -718,14 +719,27 @@ func sameRemoteAssets(left, right []RemoteAsset) bool {
 	return true
 }
 
-func validDraft(release Release, tag, notes string) bool {
-	return release.ID > 0 && release.TagName == tag && release.Name == "Findrail "+tag &&
-		release.Draft && release.Prerelease && release.Body == notes
+func verifyDraftTag(ctx context.Context, gateway Gateway, tag, targetSHA string) error {
+	tagSHA, err := gateway.TagSHA(ctx, tag)
+	if errors.Is(err, errTagNotFound) {
+		// An unpublished GitHub draft may have no ref. Its exact target is checked
+		// by validDraft before this absence is accepted.
+		return nil
+	}
+	if err != nil || tagSHA != targetSHA {
+		return fail("draft_tag_target_mismatch")
+	}
+	return nil
 }
 
-func validPublished(release Release, tag, notes string) bool {
+func validDraft(release Release, tag, targetSHA, notes string) bool {
 	return release.ID > 0 && release.TagName == tag && release.Name == "Findrail "+tag &&
-		!release.Draft && release.Prerelease && release.Body == notes
+		release.TargetCommitish == targetSHA && release.Draft && release.Prerelease && release.Body == notes
+}
+
+func validPublished(release Release, tag, targetSHA, notes string) bool {
+	return release.ID > 0 && release.TagName == tag && release.Name == "Findrail "+tag &&
+		release.TargetCommitish == targetSHA && !release.Draft && release.Prerelease && release.Body == notes
 }
 
 func readRegularBounded(path string, max int64) ([]byte, error) {
