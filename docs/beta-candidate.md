@@ -1,8 +1,11 @@
 # Beta.1 candidate rehearsal (not a release)
 
-`0.1.0-beta.1` is an explicitly supported **preparation-only** candidate on
-schema 8. It does not change `build/package/VERSION` (`0.1.0-alpha.5`), create a
-tag/release, or authorize publication. Unknown beta/stable versions fail closed.
+`0.1.0-beta.1` is a limited desktop beta candidate on schema 8. TASK 35/A sets
+`build/package/VERSION` to `0.1.0-beta.1` so candidate packages carry their
+intended version; that metadata change does not create a tag or release, or
+authorize publication. Pull requests and pushes to `main` remain read-only even
+when `VERSION` equals `CANDIDATE_VERSION`. Unknown beta/stable versions fail
+closed.
 The canonical platform, readiness, and owner-decision policy is
 [beta support](beta-support.md); the offline evidence handoff is specified in
 [beta evidence](beta-evidence.md).
@@ -80,11 +83,11 @@ The generated reports start at `not_run`; they do not constitute OS or usage
 evidence. Share kits only through the candidate's actual artifact channel and
 collect voluntary matching reports separately.
 
-After a successful rehearsal, the owner must separately decide whether to change
-the shipped version and authorize a future release workflow. This document does
-not authorize that action. TASK 34 implements the explicit-publisher protection
-and must be integrated before TASK 35/A changes `VERSION`; once integrated, a
-main-push publication is disabled regardless of whether `VERSION` matches the
-candidate. The current download remains alpha.5 until actual beta publication.
+After the successful exact-SHA technical handoff, the owner must separately
+decide whether to authorize publication. TASK 34's explicit-publisher protection
+is integrated; only its owner-only promotion path can publish after revalidating
+the accepted evidence. This document and the TASK 35/A version change do not
+authorize that action. The current download remains alpha.5 until actual beta
+publication and independent verification of its public bytes.
 Any planning target around mid-December for 1.0 is a planning assumption, not a
 promised release date.

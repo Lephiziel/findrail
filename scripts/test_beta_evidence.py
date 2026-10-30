@@ -862,6 +862,7 @@ class BetaEvidenceTests(unittest.TestCase):
         self.assertNotIn("manual status remains pending", text)
         self.assertNotIn("This base text does not assert matching beta.1 manual", text)
         self.assertIn("Apple Silicon first-run and voluntary-use evidence remain pending", text)
+        self.assertIn("Historical alpha.5 Linux observations are not beta.1 evidence", text)
 
     def test_dispatch_report_inputs_are_read_from_event_file_without_echoing_json(self):
         with tempfile.TemporaryDirectory() as temp:

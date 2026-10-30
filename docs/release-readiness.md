@@ -114,11 +114,11 @@ runs are historical, not beta evidence.
 
 ## Freeze and next decision
 
-TASK 34 implements the explicit-publisher protection and must be integrated
-before TASK 35/A changes `VERSION`. Once integrated, a main push stays read-only
-even when the candidate and `VERSION` match; publication requires a separate
-owner-only canonical-main dispatch with the exact accepted handoff, run attempts,
-and the accepted root artifact digest. Freeze one exact main SHA, run required
+TASK 34's explicit-publisher protection is integrated. After TASK 35/A,
+`VERSION` is beta.1 for candidate builds. A main push stays read-only even when
+the candidate and `VERSION` match; publication requires a separate owner-only
+canonical-main dispatch with the exact accepted handoff, run attempts, and the
+accepted root artifact digest. Freeze one exact main SHA, run required
 candidate CI and final technical evidence on it, then present the handoff,
 remaining human pending categories, all eight asset hashes, limitations, and
 release-note body/hash to the owner. If matching human reports arrive later,
@@ -129,5 +129,5 @@ Only a separate explicit owner decision followed by the guarded publisher can
 change the public download. Alpha.5 remains current until beta.1 is actually
 published and its public bytes are independently verified. This process is not
 a broad/stable/v1 release path. A completed code PR may merge while release
-evidence remains pending; this policy leaves VERSION, tags, and historical
-releases unchanged.
+evidence remains pending; the version change alone does not create a tag, modify
+historical releases, or authorize publication.

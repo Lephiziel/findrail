@@ -1,11 +1,12 @@
 # Beta.1 platform support and release policy
 
-This page is the canonical platform and readiness policy for the prospective
-`0.1.0-beta.1` limited desktop beta. It describes preparation, not a published
-product. Until a separately authorized publication is complete, the current
-download remains [alpha.5](release-alpha5-verification.md). The candidate
-contract remains schema 8, Client API 1 and VSIX 0.1.0; this policy does not
-change `VERSION`, the publisher, or any release assets.
+This page is the canonical platform and readiness policy for the
+`0.1.0-beta.1` limited desktop beta. It describes the candidate, not a published
+product. The current download remains [alpha.5](release-alpha5-verification.md)
+until a separately authorized publication is complete. TASK 35/A sets the
+candidate `VERSION` to beta.1; that metadata change does not publish the product
+or change any release assets. The contract remains schema 8, Client API 1 and
+VSIX 0.1.0.
 
 ## Platform promises
 
@@ -93,15 +94,15 @@ Apple Silicon, or voluntary-use evidence.
 
 ## Preparation, freeze, decision, and publication
 
-1. **Prepare the policy and tooling.** TASK 31–34 are pre-beta work. TASK 34
-   must be integrated before TASK 35/A changes `VERSION`. The candidate workflow
-   now leaves publication disabled for every PR, fork, main push, and ordinary
-   dispatch; a matching candidate and `VERSION` never select a publisher. Only
-   the explicit owner-only canonical-main beta promotion path can write, and
-   only after it revalidates the exact accepted handoff. Do not change `VERSION`
-   as part of this policy task.
-2. **Freeze one candidate.** After the required pre-beta work and TASK 34 are
-   merged, TASK 35/A may prepare the version change and finalize
+1. **Prepare the policy and tooling.** TASK 31–34 are pre-beta work and are
+   integrated. TASK 35/A sets `VERSION` to beta.1 after those guards are in
+   place. The candidate workflow leaves publication disabled for every PR,
+   fork, main push, and ordinary dispatch; a matching candidate and `VERSION`
+   never select a publisher. Only the explicit owner-only canonical-main beta
+   promotion path can write, and only after it revalidates the exact accepted
+   handoff. This policy does not itself authorize publication.
+2. **Freeze one candidate.** With the required pre-beta work and TASK 34
+   integrated, TASK 35/A sets the candidate version and finalizes
    [`release-notes-beta1.md`](release-notes-beta1.md). Freeze the resulting
    exact main SHA. TASK 35/B runs the full canonical candidate workflow and the
    final heavy measurements once against that SHA, then creates the verified

@@ -134,10 +134,11 @@ validation. Recommend closing #48 as completed; do not reimplement the labels.
 
 ## Current release boundaries
 
-The published release is **0.1.0-alpha.5**, with schema 8, Client API 1 and VSIX
-0.1.0. The source package version remains `0.1.0-alpha.5`. See
-`docs/release-alpha5-verification.md` for the recorded evidence and limitations.
-Automated GUI journeys are not manual Finder/Windows experience, and owner smoke
-tests are not independent user reviews. Do not infer beta support, OCR, semantic
-search, private/cloud/team/auth features, automatic updates or telemetry from
-these contributor tasks.
+The current published release remains **0.1.0-alpha.5**, with schema 8, Client
+API 1 and VSIX 0.1.0; see `docs/release-alpha5-verification.md` for its recorded
+evidence and limitations. The source package version is now `0.1.0-beta.1` for
+limited-beta candidate preparation, not a published download. Automated GUI
+journeys are not manual Finder/Windows experience, and owner smoke tests are not
+independent user reviews. See `docs/beta-support.md` for the candidate's evidence
+boundary. OCR, semantic search, private/cloud/team/auth features, automatic
+updates and telemetry are not included.
