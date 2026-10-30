@@ -11,23 +11,33 @@ The only write path is the final job of an explicit `workflow_dispatch` on the
 canonical repository's `main`, requested by owner `Lephiziel`, with
 `publish=true`, `scope=limited-desktop-beta`, the exact current 40-character
 candidate SHA, `candidate_version=0.1.0-beta.1`, and `VERSION=0.1.0-beta.1`.
-It also requires exact candidate/performance/evidence run IDs and attempts plus
-the reviewed evidence, notes, and eight-asset fingerprints described below.
-Every input defaults to non-publishing/empty. A valid dispatch with
-`publish=false` is a read-only dry-run; no draft or tag is created. A failed or
-missing fingerprint, unknown scope/version, stale main, fork run, or different
-run attempt blocks before the write sink.
+It also requires the exact candidate, performance, and evidence-handoff run
+identities (`ID/ATTEMPT`) plus the accepted root handoff artifact digest. Every
+input defaults to non-publishing/empty. A dispatch with `publish=false` can run
+the read-only Go `verify` path; no draft or tag is created. A missing/mismatched
+artifact digest, unknown scope/version, stale main, fork run, or different run
+attempt blocks before any write.
 
-The explicit path downloads the named successful artifacts by GitHub artifact
-ID, rechecks repository/run/job/attempt metadata and API payload digests, runs
-`scripts/beta_evidence.py verify`, `release_assets.verify`, and the existing
-strict native/browser/VSIX/recovery/scale/series/soak validators. It promotes the
-approved eight asset bytes; it does not rebuild or reassemble the application.
-The release notes are the exact `publication-notes.md` bytes from that handoff.
-The final job alone has contents write permission. It creates an internal draft
-only inside the explicitly requested operation, checks all eight uploaded bytes
-and notes before the public transition, then publishes a GitHub prerelease with
-`make_latest=false`. It never clobbers, deletes, or recreates a tag/release.
+The small `cmd/beta-promote` Go maintainer tool drives the path. It reuses the
+bounded `beta_evidence_github.py preflight`, `beta_evidence.py verify`,
+`release_assets.py verify`, and the read-only `release_gate.py` contract; the
+Go tool owns request validation, temporary staging, and the only write path.
+Run IDs, attempts, required jobs, artifact IDs/digests/expiry, and the approved
+root artifact digest are checked before promotion. Technical native,
+browser/VSIX/MCP/upgrade/restore/recovery/scale/series/soak proofs must pass.
+Human evidence may remain pending and `final_release=false`; failures or missing
+technical proof block. The owner packet must show the exact notes/body SHA-256
+and all eight asset names, sizes, and SHA-256 values printed by `verify`.
+
+The tool promotes the accepted eight asset bytes without rebuilding or
+reassembling the application. Notes are the exact `publication-notes.md` bytes
+from the verified handoff. The final job alone has contents write permission. It
+creates a draft with no assets, uploads only the eight explicit filenames,
+downloads and verifies their bytes/IDs/digests/notes/tag target, then rechecks
+live `main` immediately before the public transition. Publication uses
+`make_latest=false`; it never clobbers, deletes, or recreates a release/tag.
+Partial writes remain as drafts and are recorded in the audit artifact; there is
+no automatic repair or cleanup of remote state.
 
 The read-only release-state check runs for candidate previews too. A complete
 published beta.1 after later documentation-only `main` movement is a no-op tied
@@ -254,51 +264,63 @@ after the future beta.1 `VERSION`/candidate SHA is frozen, all required runs and
 the refreshed handoff exist, the handoff passes verification, and the owner has
 reviewed that exact packet. The current task creates no tag, release, or draft.
 
-In **Actions → Alpha release candidate → Run workflow**, select `main` and
-provide these exact values from that accepted handoff/card:
+In **Actions → Alpha release candidate → Run workflow**, select `main` and set
+these exact values from the accepted handoff/card:
 
 | Input | Required value |
 |---|---|
 | `candidate_sha` | Exact 40-character frozen main SHA; it must equal dispatch SHA and live `main` before writing. |
 | `candidate_version` | `0.1.0-beta.1` |
 | `scope` | `limited-desktop-beta` |
-| `candidate_run_id`, `candidate_run_attempt` | Exact successful candidate push run and attempt. |
-| `performance_run_id`, `performance_run_attempt` | Exact successful performance run and attempt. |
-| `handoff_run_id`, `handoff_run_attempt` | Exact successful refreshed beta-evidence handoff run and attempt. |
-| `expected_handoff_artifact_digest` | Exact `sha256:<64 lowercase hex>` from that handoff's Actions artifact metadata. |
-| `expected_reports_zip_sha256` | Completed reports ZIP SHA-256. |
-| `expected_package_manifest_sha256` | `PACKAGE-MANIFEST.json` SHA-256. |
-| `expected_evidence_index_sha256` | `evidence-index.json` SHA-256. |
-| `expected_publication_notes_sha256` | Exact `publication-notes.md` body SHA-256. |
-| `expected_manifest_sha256`, `expected_checksums_sha256` | Exact release manifest and checksum-file SHA-256 values. |
-| `expected_asset_inventory_sha256` | SHA-256 of the canonical sorted eight-record inventory (basename, byte size, SHA-256). |
+| `candidate_run` | Exact successful candidate push as `ID/ATTEMPT`. |
+| `performance_run` | Exact successful performance workflow as `ID/ATTEMPT`. |
+| `handoff_run` | Exact successful refreshed evidence handoff as `ID/ATTEMPT`. |
+| `handoff_artifact_digest` | Exact `sha256:<64 lowercase hex>` root Actions artifact digest from that handoff. |
 
-After downloading the exact candidate assets and successful handoff artifact,
-verify the handoff with `scripts/beta_evidence.py verify`, then print the
-dispatch fingerprint fields with:
+The read-only interface is:
 
 ```sh
-python3 scripts/release_gate.py handoff-fingerprints \
-  --candidate-sha "$CANDIDATE_SHA" \
-  --assets-dir /abs/accepted/release-assets \
-  --handoff-dir /abs/accepted/handoff \
-  --reports-zip /abs/accepted/beta-evidence-reports.zip \
-  --handoff-artifact-digest 'sha256:<digest-from-the-GitHub-run-summary>'
+go run ./cmd/beta-promote verify \
+  --candidate-run '<candidate-run-id>/<attempt>' \
+  --performance-run '<performance-run-id>/<attempt>' \
+  --handoff-run '<handoff-run-id>/<attempt>' \
+  --handoff-artifact-digest 'sha256:<accepted-root-artifact-digest>'
 ```
 
-The handoff artifact digest is taken from that exact successful refreshed
-handoff run's Actions artifact metadata/job summary. The command independently
-verifies local release assets and evidence before printing values; it performs
-no network calls or writes. Candidate/performance/handoff run attempts remain
-explicit workflow inputs and must match the accepted card/run records.
+In the workflow, `GITHUB_*`, candidate/version/scope, `PUBLISH`, and read-only
+GitHub tokens are supplied by Actions. The command downloads the exact artifacts,
+checks run and artifact provenance/expiry, re-verifies the full handoff and all
+eight assets, and prints the reviewed notes hash and per-asset hashes/sizes. The
+root digest binds those nested bytes, so there are no duplicate notes/manifest/
+checksums/inventory hash inputs. The output is review evidence, not authorization.
 
-First run with `publish=false` to verify all inputs and proofs without a write.
-Only after a separate owner decision on the unchanged fingerprints may the owner
-repeat the same inputs with `publish=true`. No `approved` JSON is consumed. The
-publisher refuses an old/fork/short SHA, a newer `main`, a mismatched attempt,
-an expired artifact, changed bytes, failed/invalid evidence, or any missing
-technical proof. If main moves before publication, freeze and review a new
-candidate; do not reuse the old decision.
+The workflow's final job invokes the same interface as `publish`, with the same
+four reviewed values and an audit destination:
+
+```sh
+go run ./cmd/beta-promote publish \
+  --candidate-run '<candidate-run-id>/<attempt>' \
+  --performance-run '<performance-run-id>/<attempt>' \
+  --handoff-run '<handoff-run-id>/<attempt>' \
+  --handoff-artifact-digest 'sha256:<accepted-root-artifact-digest>' \
+  --audit-file "$RUNNER_TEMP/promotion-audit/promotion-audit.json"
+```
+
+That subcommand additionally requires the workflow's `PUBLISH=true`, owner actor,
+canonical `workflow_dispatch` context, and the final job's scoped write token.
+This task does not invoke it against GitHub.
+
+Run the workflow with `publish=false` first to verify inputs and proofs without
+a write. After a separate owner decision on that exact packet, the final job uses
+the same run identities and digest with `publish=true`. No `approved` JSON is
+consumed. The Go tool refuses an old/fork/short SHA, a moved `main`, mismatched
+attempts, expired artifacts, changed bytes/notes, failed/invalid evidence, or any
+missing technical proof. It checks `main` once before draft creation and again
+after upload/download/final draft verification, immediately before the public
+transition. There is no API transaction across the `main` ref and release edit;
+the final guard narrows but cannot eliminate that concurrent-update window. If
+`main` moves, the draft remains private for manual owner review and the tool
+stops without publishing or automatically repairing it.
 
 ## Intentional alpha.5 publication
 

@@ -23,7 +23,6 @@ import beta_evidence_github as github
 import candidate_record
 import manual_evidence
 import readiness
-import release_gate
 import release_assets
 import resource_series
 import test_acceptance_kit
@@ -479,33 +478,6 @@ class BetaEvidenceTests(unittest.TestCase):
                 trusted_run_metadata=promotion_metadata_path,
                 handoff_artifact_dir=promotion_bundle))
             self.assertEqual(promoted_verify["status"], "passed")
-            promotion_fingerprints = release_gate.handoff_fingerprints(
-                SHA, fixture["assets"], promotion_bundle / "handoff",
-                promotion_bundle / "beta-evidence-reports.zip",
-                promotion_run["artifacts"][0]["digest"])
-            promotion_request = {
-                "repository": evidence.REPOSITORY, "event": "workflow_dispatch",
-                "ref": "refs/heads/main", "actor": "Lephiziel",
-                "workflow_sha": SHA, "candidate_sha": SHA,
-                "candidate_version": evidence.VERSION,
-                "release_version": evidence.VERSION, "scope": "limited-desktop-beta",
-                "publish": False,
-                "candidate_run_id": "110", "candidate_run_attempt": "2",
-                "performance_run_id": "120", "performance_run_attempt": "2",
-                "handoff_run_id": "130", "handoff_run_attempt": "2",
-                **promotion_fingerprints,
-            }
-            promotion_result = release_gate.verify_promotion_bundle(
-                promotion_request, fixture["assets"], promotion_bundle,
-                promotion_metadata_path)
-            self.assertEqual(promotion_result["status"], "verified")
-            self.assertFalse(promotion_result["readiness"]["final_release"])
-            mismatch_request = dict(promotion_request,
-                                    expected_publication_notes_sha256="0" * 64)
-            with self.assertRaisesRegex(ValueError, "fingerprint mismatch"):
-                release_gate.verify_promotion_bundle(
-                    mismatch_request, fixture["assets"], promotion_bundle,
-                    promotion_metadata_path)
             failed_result = dict(assembled, status="failed")
             evidence.write_json(promotion_bundle / "result.json", failed_result)
             with self.assertRaisesRegex(evidence.EvidenceError, "promotion_handoff_result_invalid"):

@@ -25,60 +25,20 @@ on:
         required: true
         default: none
         type: string
-      candidate_run_id:
-        description: Exact successful candidate push run ID from the accepted handoff
+      candidate_run:
+        description: Exact successful candidate push run identity as ID/ATTEMPT
         required: false
         type: string
-      candidate_run_attempt:
-        description: Exact candidate workflow run attempt
+      performance_run:
+        description: Exact successful performance run identity as ID/ATTEMPT
         required: false
         type: string
-      performance_run_id:
-        description: Exact successful performance run ID from the accepted handoff
+      handoff_run:
+        description: Exact successful evidence handoff run identity as ID/ATTEMPT
         required: false
         type: string
-      performance_run_attempt:
-        description: Exact performance workflow run attempt
-        required: false
-        type: string
-      handoff_run_id:
-        description: Exact successful refreshed beta evidence handoff run ID
-        required: false
-        type: string
-      handoff_run_attempt:
-        description: Exact evidence handoff run attempt
-        required: false
-        type: string
-      expected_handoff_artifact_digest:
-        description: Expected GitHub artifact digest (sha256:...) from the accepted handoff
-        required: false
-        type: string
-      expected_reports_zip_sha256:
-        description: Expected completed reports ZIP SHA-256
-        required: false
-        type: string
-      expected_package_manifest_sha256:
-        description: Expected PACKAGE-MANIFEST.json SHA-256
-        required: false
-        type: string
-      expected_evidence_index_sha256:
-        description: Expected evidence-index.json SHA-256
-        required: false
-        type: string
-      expected_publication_notes_sha256:
-        description: Expected exact publication-notes.md body SHA-256
-        required: false
-        type: string
-      expected_manifest_sha256:
-        description: Expected release-manifest.json SHA-256
-        required: false
-        type: string
-      expected_checksums_sha256:
-        description: Expected SHA256SUMS.txt SHA-256
-        required: false
-        type: string
-      expected_asset_inventory_sha256:
-        description: Expected canonical fingerprint of all eight approved asset records
+      handoff_artifact_digest:
+        description: Accepted root GitHub artifact digest (sha256:...) from that handoff
         required: false
         type: string
 permissions:
@@ -602,6 +562,7 @@ jobs:
     needs: [validate-source, release-state]
     if: needs.validate-source.outputs.promotion_mode == 'true' && needs.release-state.outputs.decision == 'publish'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: read
@@ -611,62 +572,33 @@ jobs:
       RELEASE_VERSION: ${{ needs.validate-source.outputs.release_version }}
       PROMOTION_SCOPE: ${{ inputs.scope }}
       PUBLISH: ${{ inputs.publish }}
-      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
-      CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
-      PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
-      PERFORMANCE_RUN_ATTEMPT: ${{ inputs.performance_run_attempt }}
-      HANDOFF_RUN_ID: ${{ inputs.handoff_run_id }}
-      HANDOFF_RUN_ATTEMPT: ${{ inputs.handoff_run_attempt }}
-      EXPECTED_HANDOFF_ARTIFACT_DIGEST: ${{ inputs.expected_handoff_artifact_digest }}
-      EXPECTED_REPORTS_ZIP_SHA256: ${{ inputs.expected_reports_zip_sha256 }}
-      EXPECTED_PACKAGE_MANIFEST_SHA256: ${{ inputs.expected_package_manifest_sha256 }}
-      EXPECTED_EVIDENCE_INDEX_SHA256: ${{ inputs.expected_evidence_index_sha256 }}
-      EXPECTED_PUBLICATION_NOTES_SHA256: ${{ inputs.expected_publication_notes_sha256 }}
-      EXPECTED_MANIFEST_SHA256: ${{ inputs.expected_manifest_sha256 }}
-      EXPECTED_CHECKSUMS_SHA256: ${{ inputs.expected_checksums_sha256 }}
-      EXPECTED_ASSET_INVENTORY_SHA256: ${{ inputs.expected_asset_inventory_sha256 }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run }}
+      PERFORMANCE_RUN: ${{ inputs.performance_run }}
+      HANDOFF_RUN: ${{ inputs.handoff_run }}
+      HANDOFF_ARTIFACT_DIGEST: ${{ inputs.handoff_artifact_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Recheck exact GitHub runs and download exact candidate/evidence artifact IDs
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Verify exact run identities and accepted technical evidence (read-only)
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          python3 scripts/beta_evidence_github.py preflight \
-            --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" \
-            --candidate-run-id "$CANDIDATE_RUN_ID" --candidate-run-attempt "$CANDIDATE_RUN_ATTEMPT" \
-            --performance-run-id "$PERFORMANCE_RUN_ID" --performance-run-attempt "$PERFORMANCE_RUN_ATTEMPT" \
-            --handoff-run-id "$HANDOFF_RUN_ID" --handoff-run-attempt "$HANDOFF_RUN_ATTEMPT" \
-            --expected-handoff-artifact-digest "$EXPECTED_HANDOFF_ARTIFACT_DIGEST" \
-            --require-main-head \
-            --download-dir "$RUNNER_TEMP/beta-promotion-downloads" \
-            --metadata "$RUNNER_TEMP/beta-promotion-metadata.json"
-      - name: Verify technical proofs, pending categories, and every accepted fingerprint
-        run: |
-          set -euo pipefail
-          args=()
-          if [[ "$PUBLISH" == true ]]; then args+=(--stage-directory "$RUNNER_TEMP/promotion-ready"); fi
-          python3 scripts/release_gate.py promotion-verify \
-            --assets-dir "$RUNNER_TEMP/beta-promotion-downloads/assets" \
-            --handoff-artifact-dir "$RUNNER_TEMP/beta-promotion-downloads/handoff-bundle" \
-            --run-metadata "$RUNNER_TEMP/beta-promotion-metadata.json" \
-            "${args[@]}" | tee "$RUNNER_TEMP/promotion-verification.json"
-          if [[ "$PUBLISH" == true ]]; then
-            echo 'Verified promotion package staged from the exact accepted artifact; no release or tag was written in preflight.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'Explicit limited-desktop-beta dry-run passed. No release, draft, or tag was written.' >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - uses: actions/upload-artifact@v7.0.2
-        if: needs.validate-source.outputs.publish == 'true'
-        with:
-          name: promotion-ready-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/promotion-ready/
-          if-no-files-found: error
-          retention-days: 1
+          go run ./cmd/beta-promote verify \
+            --candidate-run "$CANDIDATE_RUN" \
+            --performance-run "$PERFORMANCE_RUN" \
+            --handoff-run "$HANDOFF_RUN" \
+            --handoff-artifact-digest "$HANDOFF_ARTIFACT_DIGEST" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo 'Read-only verification only: no release, draft, or tag was written.' >> "$GITHUB_STEP_SUMMARY"
   promotion-publish:
     needs: [validate-source, release-state, promotion-preflight]
     if: >-
@@ -674,6 +606,7 @@ jobs:
       needs.release-state.outputs.decision == 'publish' &&
       needs.promotion-preflight.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: write
       actions: read
@@ -683,52 +616,34 @@ jobs:
       RELEASE_VERSION: ${{ needs.validate-source.outputs.release_version }}
       PROMOTION_SCOPE: ${{ inputs.scope }}
       PUBLISH: ${{ inputs.publish }}
-      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
-      CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
-      PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
-      PERFORMANCE_RUN_ATTEMPT: ${{ inputs.performance_run_attempt }}
-      HANDOFF_RUN_ID: ${{ inputs.handoff_run_id }}
-      HANDOFF_RUN_ATTEMPT: ${{ inputs.handoff_run_attempt }}
-      EXPECTED_HANDOFF_ARTIFACT_DIGEST: ${{ inputs.expected_handoff_artifact_digest }}
-      EXPECTED_REPORTS_ZIP_SHA256: ${{ inputs.expected_reports_zip_sha256 }}
-      EXPECTED_PACKAGE_MANIFEST_SHA256: ${{ inputs.expected_package_manifest_sha256 }}
-      EXPECTED_EVIDENCE_INDEX_SHA256: ${{ inputs.expected_evidence_index_sha256 }}
-      EXPECTED_PUBLICATION_NOTES_SHA256: ${{ inputs.expected_publication_notes_sha256 }}
-      EXPECTED_MANIFEST_SHA256: ${{ inputs.expected_manifest_sha256 }}
-      EXPECTED_CHECKSUMS_SHA256: ${{ inputs.expected_checksums_sha256 }}
-      EXPECTED_ASSET_INVENTORY_SHA256: ${{ inputs.expected_asset_inventory_sha256 }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run }}
+      PERFORMANCE_RUN: ${{ inputs.performance_run }}
+      HANDOFF_RUN: ${{ inputs.handoff_run }}
+      HANDOFF_ARTIFACT_DIGEST: ${{ inputs.handoff_artifact_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@v8
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          name: promotion-ready-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/promotion-ready
-      - name: Recheck live metadata for exact source runs, attempts, and handoff artifact
+          go-version: '1.27.x'
+          cache: true
+      - name: Verify again and promote the exact accepted bytes
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python3 scripts/beta_evidence_github.py promotion-metadata \
-            --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" \
-            --candidate-run-id "$CANDIDATE_RUN_ID" --candidate-run-attempt "$CANDIDATE_RUN_ATTEMPT" \
-            --performance-run-id "$PERFORMANCE_RUN_ID" --performance-run-attempt "$PERFORMANCE_RUN_ATTEMPT" \
-            --handoff-run-id "$HANDOFF_RUN_ID" --handoff-run-attempt "$HANDOFF_RUN_ATTEMPT" \
-            --expected-handoff-artifact-digest "$EXPECTED_HANDOFF_ARTIFACT_DIGEST" \
-            --metadata "$RUNNER_TEMP/fresh-promotion-metadata.json"
-      - name: Verify again and publish approved bytes through the single promotion path
-        env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           mkdir -p "$RUNNER_TEMP/promotion-audit"
-          python3 scripts/release_gate.py promotion-publish \
-            --assets-dir "$RUNNER_TEMP/promotion-ready/release-assets" \
-            --handoff-artifact-dir "$RUNNER_TEMP/promotion-ready/handoff-artifact" \
-            --run-metadata "$RUNNER_TEMP/fresh-promotion-metadata.json" \
-            --audit-file "$RUNNER_TEMP/promotion-audit/promotion-audit.json"
+          go run ./cmd/beta-promote publish \
+            --candidate-run "$CANDIDATE_RUN" \
+            --performance-run "$PERFORMANCE_RUN" \
+            --handoff-run "$HANDOFF_RUN" \
+            --handoff-artifact-digest "$HANDOFF_ARTIFACT_DIGEST" \
+            --audit-file "$RUNNER_TEMP/promotion-audit/promotion-audit.json" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:

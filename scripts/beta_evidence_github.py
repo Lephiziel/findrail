@@ -449,7 +449,7 @@ def preflight(candidate_sha, candidate_version, candidate_run_id,
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("preflight", "promotion-metadata"))
+    parser.add_argument("command", choices=("preflight",))
     parser.add_argument("--candidate-sha", required=True)
     parser.add_argument("--candidate-version", required=True)
     parser.add_argument("--candidate-run-id", required=True)
@@ -465,20 +465,6 @@ def main(argv=None):
     parser.add_argument("--metadata", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
     try:
-        if args.command == 'promotion-metadata':
-            metadata = promotion_metadata(
-                args.candidate_sha, args.candidate_version, args.candidate_run_id,
-                args.candidate_run_attempt, args.performance_run_id,
-                args.performance_run_attempt, args.handoff_run_id,
-                args.handoff_run_attempt, args.expected_handoff_artifact_digest,
-                require_main_head=True)
-            args.metadata.parent.mkdir(parents=True, exist_ok=True)
-            beta_evidence.write_json(args.metadata, metadata)
-            print(json.dumps({'status': 'metadata_verified',
-                              'candidate_run_id': str(args.candidate_run_id),
-                              'performance_run_id': str(args.performance_run_id),
-                              'handoff_run_id': str(args.handoff_run_id)}, sort_keys=True))
-            return 0
         if args.download_dir is None:
             raise PreflightError('download_dir_missing')
         result = preflight(args.candidate_sha, args.candidate_version,

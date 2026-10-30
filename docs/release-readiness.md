@@ -118,12 +118,12 @@ TASK 34 implements the explicit-publisher protection and must be integrated
 before TASK 35/A changes `VERSION`. Once integrated, a main push stays read-only
 even when the candidate and `VERSION` match; publication requires a separate
 owner-only canonical-main dispatch with the exact accepted handoff, run attempts,
-and reviewed fingerprints. Freeze one exact main SHA, run required candidate CI
-and final technical evidence on it, then present the handoff, remaining human
-pending categories, asset hashes, limitations, and release-note body/hash to the
-owner. If matching human reports arrive later, refresh intake/readiness and the
-outer handoff fingerprint without repeating measurements; show the changed
-fingerprint again.
+and the accepted root artifact digest. Freeze one exact main SHA, run required
+candidate CI and final technical evidence on it, then present the handoff,
+remaining human pending categories, all eight asset hashes, limitations, and
+release-note body/hash to the owner. If matching human reports arrive later,
+refresh intake/readiness and the root handoff artifact digest without repeating
+measurements; show the changed digest and refreshed owner packet.
 
 Only a separate explicit owner decision followed by the guarded publisher can
 change the public download. Alpha.5 remains current until beta.1 is actually
