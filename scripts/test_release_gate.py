@@ -16,6 +16,25 @@ import test_release_assets
 
 
 class ReleaseGateTests(unittest.TestCase):
+    def test_matching_main_versions_do_not_enable_publication(self):
+        root = pathlib.Path(__file__).parents[1]
+        version = (root / 'build/package/VERSION').read_text().strip()
+        candidate_version = (root / 'build/package/CANDIDATE_VERSION').read_text().strip()
+        self.assertEqual(version, candidate_version)
+
+        workflow = (root / '.github/workflows/alpha-release.yml').read_text()
+        source = workflow.split('      - id: source', 1)[1].split('  source-checks:', 1)[0]
+        dispatch_guard = 'if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then'
+        self.assertIn('PUBLISH=false', source)
+        self.assertIn('PROMOTION_MODE=false', source)
+        self.assertIn(dispatch_guard, source)
+        self.assertEqual(source.count('PUBLISH=true'), 1)
+        self.assertGreater(source.index('PUBLISH=true'), source.index(dispatch_guard))
+
+        publisher = workflow.split('  promotion-publish:', 1)[1]
+        self.assertIn("needs.validate-source.outputs.publish == 'true'", publisher)
+        self.assertIn("needs.promotion-preflight.result == 'success'", publisher)
+
     def test_publish_version_mismatch_is_rejected_not_downgraded(self):
         self.assertFalse(release_gate.validate_publication_version('0.1.0-beta.1', '0.1.0-alpha.5', False))
         with self.assertRaisesRegex(ValueError, 'match'):

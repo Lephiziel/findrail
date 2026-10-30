@@ -44,9 +44,11 @@ published beta.1 after later documentation-only `main` movement is a no-op tied
 to its historical tag and bytes; the summary names the published SHA and never
 moves the tag to current `main`. A draft, partial release, tag/release mismatch,
 asset collision, checksum/manifest/embedded identity mismatch, or non-404 API
-error fails closed and is not automatically repaired. `VERSION` remains
-alpha.5 in this task; beta.1 remains a preparation candidate until a separately
-reviewed version change. See the [beta candidate contract](beta-candidate.md).
+error fails closed and is not automatically repaired. After TASK 35/A,
+`VERSION` is beta.1 for candidate builds, but beta.1 remains unpublished until a
+separately authorized promotion. The public download remains alpha.5 until that
+promotion is completed and verified. See the
+[beta candidate contract](beta-candidate.md).
 Alpha.4 archives include native desktop launchers and target-specific install
 resources; these are archive members, not additional release assets.
 The current public alpha.5 uses schema 8 after migration 008; historical alpha.4

@@ -2,11 +2,11 @@
 
 ## A limited desktop beta across Linux, Windows and macOS
 
-The planned `0.1.0-beta.1` distribution keeps the same local desktop application
-and functional core across its native builds. It is intended as a limited
-desktop beta, not a stable release or a v1 readiness claim. The release contract
-is schema 8, Client API 1, and VSIX 0.1.0, and keeps all five native archives and
-all eight release assets; see the
+The `0.1.0-beta.1` distribution keeps the same local desktop application and
+functional core across its native builds. It is a limited desktop beta, not a
+stable release or a v1 readiness claim. The release contract is schema 8,
+Client API 1, and VSIX 0.1.0, and keeps all five native archives and all eight
+release assets; see the
 [platform support policy](beta-support.md) for the exact per-target boundaries.
 
 - **Linux amd64:** primary beta path. Any manual outcome must be tied to the
@@ -21,12 +21,14 @@ all eight release assets; see the
   here. Linux amd64 evidence does not establish Linux arm64 coverage, and
   macOS Finder/Gatekeeper behavior is not inferred from CI.
 
-This base text does not assert matching beta.1 manual or voluntary-use outcomes.
-Automated package, browser, or installer checks are not human first-run or
-voluntary-use reports. Matching observations must be tied to the exact candidate
-and archive; if they are accepted after this source text is frozen, the
-publication-notes copy and hash must be updated and reviewed against that
-evidence before use.
+At the time these notes were frozen, no matching independent beta.1
+Windows or Apple Silicon first-run or voluntary-use report had been accepted.
+The planned Windows VM first-run remains pending. Historical alpha.5 Linux
+observations are not beta.1 evidence. Automated package, browser, or installer
+checks are not human first-run or voluntary-use reports. Matching observations
+must be tied to the exact candidate and archive.
+If matching evidence is accepted after these notes are frozen, update the
+publication-notes copy and hash and review them against that evidence before use.
 
 ## Product and operational limits
 

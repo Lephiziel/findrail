@@ -51,6 +51,8 @@ Python are only development tools.
 > [0.1.0-alpha.5](https://github.com/Lephiziel/findrail/releases/tag/v0.1.0-alpha.5),
 > with passage windows, paged results and explicit source/evidence transfer.
 > [What's new](#new-in-alpha5) · [Verified release](docs/release-alpha5-verification.md).
+> Beta.1 preparation: [limited-beta release notes](docs/release-notes-beta1.md)
+> (preparation only; not a download or published release).
 > Upgrading an existing index? [Stop and back up the whole data directory first](build/package/INSTALL.txt).
 > Alpha.5 uses schema 8. Earlier binaries cannot open an index upgraded to
 > schema 8; rollback requires the complete stopped pre-upgrade backup.

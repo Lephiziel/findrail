@@ -1030,11 +1030,13 @@ def _publication_notes(source_path, manual):
             "details and free-form observations were not independently verified or "
             "retained. This is not a release decision.")
         text = _replace_markdown_block(
-            text, "This base text does not assert matching beta.1 manual or voluntary-use outcomes.",
+            text, "At the time these notes were frozen, no matching independent beta.1",
             "\n\n## Product and operational limits",
             "The matching Windows first-run report is included as sanitized, candidate-bound "
             "evidence in this handoff. Apple Silicon first-run and voluntary-use evidence "
-            "remain pending. This supplement does not authorize publication.")
+            "remain pending. Historical alpha.5 Linux observations are not beta.1 evidence. "
+            "Automated candidate checks are not human first-run or voluntary-use reports. "
+            "This supplement does not authorize publication.")
     additions = []
     if manual.get("windows_outcome") == "incomplete":
         additions.append("- Windows amd64 first-run: a matching report was received but remains incomplete; readiness is pending.")
