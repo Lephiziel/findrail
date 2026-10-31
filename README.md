@@ -9,9 +9,11 @@ index while the app runs. Keyword search needs no AI account and uploads no
 documents. Connected services and optional semantic retrieval are the next
 product stages.
 
-**Status: local alpha, `0.1.0-alpha.1`.** It is ready for testing, not a stable
-release. GitHub ingestion, OCR, DOCX, semantic search, desktop launching and MCP
-remain on the roadmap.
+**Status: limited desktop beta, `0.1.0-beta.1`.** It is ready for testing, not a
+stable release. The limited beta covers Linux amd64, Windows amd64 and macOS with
+honest per-platform manual evidence; semantic search, desktop launching, MCP and
+wider platform coverage remain on the roadmap. GitHub ingestion, OCR, DOCX,
+semantic search and MCP remain outside this candidate.
 
 [Releases](https://github.com/Lephiziel/findrail/releases) ·
 [Product](docs/product.md) · [Architecture](docs/architecture.md) ·
@@ -22,7 +24,7 @@ remain on the roadmap.
 
 [Try the three-document demo](docs/demo.md) ·
 [Watch / download the 37-second video](docs/assets/demo.mp4) ·
-[Give alpha feedback](https://github.com/Lephiziel/findrail/issues/3)
+[Give beta feedback](https://github.com/Lephiziel/findrail/issues/3)
 
 [Try the synthetic Turkish and English search evaluation](docs/search-evaluation.md).
 
@@ -33,11 +35,13 @@ The GIF is a short preview; use the MP4 for the full recording and larger text.
 ## Install and try
 
 Download the archive for Linux, macOS or Windows from
-[Releases](https://github.com/Lephiziel/findrail/releases), compare it against
-`SHA256SUMS.txt`, and extract it. Go and an external database are not required.
-These alpha binaries are unsigned; macOS may require an explicit allowance in
-Privacy & Security. Each archive contains installation instructions and license
-notices.
+[Releases](https://github.com/Lephiziel/findrail/releases) or the published limited
+desktop beta
+[release](https://github.com/Lephiziel/findrail/releases/tag/v0.1.0-beta.1),
+compare it against `SHA256SUMS.txt`, and extract it. Go and an external database are
+not required. These beta binaries are unsigned; macOS may require an explicit
+allowance in Privacy & Security. Each archive contains installation instructions
+and license notices.
 
 ```bash
 # Linux / macOS, inside the extracted directory:
@@ -89,7 +93,7 @@ value for index, search and serve.
 - CLI / JSON output, loopback web UI and a read-only HTTP API.
 - Logical source removal, leaving original files untouched.
 
-See [alpha behaviour and limits](docs/local-alpha.md) and the
+See [beta behaviour and limits](docs/beta-start-here.md) and the
 [validation report](docs/validation.md).
 
 ## Indexing and privacy
@@ -137,7 +141,7 @@ Linux; `~/Library/Application Support/Findrail` on macOS;
 
 ## Product growth
 
-| Capability | Local alpha | Next stages |
+| Capability | Limited beta | Next stages |
 |---|---|---|
 | Documents | Text / Markdown / code / PDF text | DOCX, optional OCR |
 | Sources | Local folders | Read-only GitHub, bookmarks, work tools |
