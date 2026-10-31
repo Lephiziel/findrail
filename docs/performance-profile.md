@@ -109,7 +109,8 @@ a replacement can preserve the exact 512 KiB response budget more cheaply.
 Per-operation allocation figures in the table are the more direct steady-state
 comparison. No production optimization was made: there is no measured before /
 after production win to justify changing response sizing, query behavior, or
-reader lifecycle.
+reader lifecycle. TASK 41 selected a separate ranked-query hot path; its
+measured comparison is recorded below.
 
 Synthetic `EXPLAIN QUERY PLAN` observations:
 
@@ -126,14 +127,49 @@ transport scheduling, concurrent request contention, filesystem extraction, or
 production corpus distributions; its timings must not be extrapolated to HTTP
 p95.
 
+### 2026-10-31 TASK 41 ranked-score follow-up
+
+This is a same-host Store benchmark comparison between the fetched `main`
+source `4c0c94e1663804344b1ae1cbcdc3a346208e688a` and candidate
+`b8377d8dfd941c99c64c77435a4ae2a91f22a52b`. Both used Go `go1.27.3`
+(`linux/amd64`), CGO enabled, `GOMAXPROCS=1`, the same synthetic 1,000-document
+fixture and `-benchtime=2s -count=5`. The host was Linux
+`adc-sandbox`, Intel Xeon Platinum 8370C @ 2.80 GHz. Baseline/candidate
+`sqlite.test` SHA-256 values were
+`45e038a750d34f8f3bcea1e990703028d0b33e6cd0af7e332175b7c4498bd17b` /
+`8113b294bd3b67088846a7e3460e18ccdc2b4f4b91f68b0db9646c58810967eb`.
+The candidate CLI SHA-256 was
+`cb46fd8fed98355649611b1c9d2f5599da6911b367eceac35f95722323a5e0f8`.
+
+The production change uses the selected `-bm25(...)` value as a SQL alias and
+orders by that alias descending, preserving the previous relevance direction
+and document-ID tie-break in both `Search` and `SearchPage`. Median results
+from the five samples were:
+
+| Workload | Baseline | Candidate | Difference |
+|---|---:|---:|---:|
+| `Search` common | 2.363 ms | 2.339 ms | -1.0% |
+| `Search` rare | 0.458 ms | 0.439 ms | -4.1% |
+| `SearchPage` first common | 2.689 ms | 2.523 ms | -6.2% |
+| `SearchPage` next common | 2.664 ms | 2.655 ms | -0.3% |
+| `SearchPage` PDF attribution | 4.815 ms | 4.992 ms | +3.7% |
+
+This is a bounded Store-level signal, not an HTTP p95 claim; PDF attribution
+did not improve and no broad speedup is claimed. Allocations were unchanged
+for the compared page workloads. Correctness checks covered exact totals,
+stable IDs/order, legacy parity, filters, PDF page-local provenance, cursor
+contracts and the diagnostic query-plan probe. Raw benchmark outputs remain
+outside git; their SHA-256 values are recorded in the task handoff artifacts.
+
 ## Correctness and limits
 
-No production code, ranking weights, query grammar, schema, API, cursor limit,
-or response cap changed. Existing Store and HTTP tests exercise stable tie order,
+No ranking weights, query grammar, schema, API, cursor limit, or response cap
+changed. The production query only reuses the already selected BM25 score for
+ordering. Existing Store and HTTP tests exercise stable tie order,
 title-only PDF page 0, multi-page PDF attribution and provenance, advanced
 positive/negative branches, cursor refresh fences, cancellation/Close cleanup,
 the 1,000-result window, and result boundaries. The new synthetic performance
 test additionally checks that `%` and `_` in path filters are literal and emits
 the query plans above. Large fixture profiles are opt-in; profile artifacts are
-local-only. No A/B binary series was run because this PR makes no production
-change; the benchmark-only code is not claimed to improve user latency.
+local-only. The A/B series was limited to the ranked query path; it is not an
+HTTP p95 or broad user-latency claim.
