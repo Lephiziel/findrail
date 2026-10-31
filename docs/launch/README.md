@@ -1,5 +1,9 @@
 # English launch
 
+For the current published limited beta, use the [feedback and triage
+handoff](../feedback-triage.md). The launch copy, tracker and raw reports
+remain operator materials outside the product repository.
+
 The first audience hypothesis is developers who keep local Markdown notes,
 source repositories and technical PDFs. The first useful promise is finding a
 remembered word, inspecting the match and recovering its original location.
