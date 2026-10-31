@@ -627,10 +627,10 @@ func (s *Store) Search(ctx context.Context, request search.Request) (search.Resp
 		return response, err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT d.id,d.title,d.uri,d.path,d.source_id,s.name,s.kind,
-        snippet(documents_fts,1,'[',']','…',32),-bm25(documents_fts,4.0,1.0)
+	        snippet(documents_fts,1,'[',']','…',32),-bm25(documents_fts,4.0,1.0) AS score
 	        ,d.media_type,d.page_count,s.registration_token,s.revision,d.content_hash
         FROM documents_fts JOIN documents d ON d.rowid=documents_fts.rowid JOIN sources s ON s.id=d.source_id
-        WHERE `+where+` ORDER BY bm25(documents_fts,4.0,1.0),d.id LIMIT ?`, append(args, request.Limit)...)
+	        WHERE `+where+` ORDER BY score DESC,d.id LIMIT ?`, append(args, request.Limit)...)
 	if err != nil {
 		return response, err
 	}
