@@ -169,10 +169,12 @@ jobs:
           BINARY="$RUNNER_TEMP/install space 📦/findrail_${VERSION}_${{ matrix.target }}/findrail"
           [[ '${{ matrix.target }}' != windows-* ]] || BINARY="$RUNNER_TEMP/install space 📦/findrail_${VERSION}_${{ matrix.target }}/findrail.exe"
           "$PY" scripts/smoke.py --expected-version "$VERSION" "$BINARY"
-          "$PY" scripts/search_smoke.py "$BINARY"
+          go build -o "$RUNNER_TEMP/findrail-smoke" ./cmd/findrail-smoke
+          SMOKE_TOOL="$RUNNER_TEMP/findrail-smoke"; [[ '${{ matrix.target }}' == windows-* ]] && SMOKE_TOOL="$SMOKE_TOOL.exe"
+          "$SMOKE_TOOL" search-smoke "$BINARY"
           "$PY" scripts/mcp_smoke.py "$BINARY"
           "$PY" scripts/portable_smoke.py "$BINARY"
-          "$PY" scripts/diagnostics_smoke.py "$BINARY"
+          "$SMOKE_TOOL" diagnostics-smoke "$BINARY"
           if [[ '${{ matrix.target }}' == windows-* ]]; then
             DESKTOP="$RUNNER_TEMP/install space 📦/findrail_${VERSION}_${{ matrix.target }}/findrail-desktop.exe"
             test "$("$DESKTOP" version)" = "findrail $VERSION"
@@ -441,6 +443,8 @@ jobs:
           npx --yes @puppeteer/browsers@2.10.6 install chromedriver@139.0.7258.66 --path "$RUNNER_TEMP/chrome-for-testing"
       - name: Prepare the offline synthetic GitHub fixture writer (not the application)
         run: go build -o "$RUNNER_TEMP/evidence-collection-fixture" ./scripts/evidence_collection_fixture.go
+      - name: Build development smoke helper
+        run: go build -o "$RUNNER_TEMP/findrail-smoke" ./cmd/findrail-smoke
       - name: Fresh start, UI folder, evidence export, restart, and upgrade on the candidate
         env:
           FINDRAIL_CHROME: ${{ runner.temp }}/chrome-for-testing/chrome/linux-139.0.7258.66/chrome-linux64/chrome
@@ -448,7 +452,7 @@ jobs:
         run: |
           args=(--alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY")
           if [[ "$CANDIDATE_VERSION" == 0.1.0-beta.1 ]]; then args+=(--alpha5-binary "$ALPHA5_BINARY"); fi
-          python3 scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" "${args[@]}" --evidence-fixture "$RUNNER_TEMP/evidence-collection-fixture" --report "$RUNNER_TEMP/packaged-journey-report.json"
+          python3 scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" "${args[@]}" --smoke-tool "$RUNNER_TEMP/findrail-smoke" --evidence-fixture "$RUNNER_TEMP/evidence-collection-fixture" --report "$RUNNER_TEMP/packaged-journey-report.json"
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
