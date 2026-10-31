@@ -56,6 +56,8 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: go build ./cmd/findrail
+      - name: Build development smoke helper
+        run: go build -o findrail-smoke ./cmd/findrail-smoke
       - name: Compiled alpha smoke (Unix)
         if: runner.os != 'Windows'
         run: python3 scripts/smoke.py ./findrail
@@ -64,10 +66,10 @@ jobs:
         run: python scripts/smoke.py ./findrail.exe
       - name: Compiled search query smoke (Unix)
         if: runner.os != 'Windows'
-        run: python3 scripts/search_smoke.py ./findrail
+        run: ./findrail-smoke search-smoke ./findrail
       - name: Compiled search query smoke (Windows)
         if: runner.os == 'Windows'
-        run: python scripts/search_smoke.py ./findrail.exe
+        run: .\findrail-smoke.exe search-smoke .\findrail.exe
       - name: Compiled MCP smoke (Unix)
         if: runner.os != 'Windows'
         run: python3 scripts/mcp_smoke.py ./findrail
@@ -82,10 +84,10 @@ jobs:
         run: python scripts/portable_smoke.py ./findrail.exe
       - name: Compiled indexing diagnostics smoke (Unix)
         if: runner.os != 'Windows'
-        run: python3 scripts/diagnostics_smoke.py ./findrail
+        run: ./findrail-smoke diagnostics-smoke ./findrail
       - name: Compiled indexing diagnostics smoke (Windows)
         if: runner.os == 'Windows'
-        run: python scripts/diagnostics_smoke.py ./findrail.exe
+        run: .\findrail-smoke.exe diagnostics-smoke .\findrail.exe
   race:
     runs-on: ubuntu-latest
     steps:

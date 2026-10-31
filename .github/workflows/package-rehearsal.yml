@@ -102,10 +102,12 @@ jobs:
             BINARY="$RUNNER_TEMP/install 📦/findrail_${CANDIDATE_VERSION}_${{ matrix.target }}/findrail"
           fi
           "$PYTHON" scripts/smoke.py --expected-version "$CANDIDATE_VERSION" "$BINARY"
-          "$PYTHON" scripts/search_smoke.py "$BINARY"
+          go build -o "$RUNNER_TEMP/findrail-smoke" ./cmd/findrail-smoke
+          SMOKE_TOOL="$RUNNER_TEMP/findrail-smoke"; [[ '${{ matrix.target }}' == windows-* ]] && SMOKE_TOOL="$SMOKE_TOOL.exe"
+          "$SMOKE_TOOL" search-smoke "$BINARY"
           "$PYTHON" scripts/mcp_smoke.py "$BINARY"
           "$PYTHON" scripts/portable_smoke.py "$BINARY"
-          "$PYTHON" scripts/diagnostics_smoke.py "$BINARY"
+          "$SMOKE_TOOL" diagnostics-smoke "$BINARY"
           if [[ '${{ matrix.target }}' == windows-* ]]; then
             DESKTOP="$RUNNER_TEMP/install 📦/findrail_${CANDIDATE_VERSION}_${{ matrix.target }}/findrail-desktop.exe"
             test "$("$DESKTOP" version)" = "findrail $CANDIDATE_VERSION"
