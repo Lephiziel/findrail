@@ -301,7 +301,13 @@ def execute(args):
             cases.run("evaluate", lambda: evaluate(binary, scratch))
             cases.run("doctor_integrity_stopped_directory", lambda: doctor_integrity(binary, scratch))
             for smoke in ("search_smoke.py", "mcp_smoke.py", "portable_smoke.py", "diagnostics_smoke.py", "ignore_policy_smoke.py"):
-                cases.run(smoke, lambda smoke=smoke: command([sys.executable, str(ROOT / "scripts" / smoke), str(binary)], timeout=300))
+                smoke_tool = getattr(args, "smoke_tool", None)
+                if smoke_tool and smoke in ("search_smoke.py", "diagnostics_smoke.py"):
+                    smoke_args = [str(smoke_tool.resolve(strict=True)),
+                                  smoke.removesuffix(".py").replace("_", "-"), str(binary)]
+                else:
+                    smoke_args = [sys.executable, str(ROOT / "scripts" / smoke), str(binary)]
+                cases.run(smoke, lambda smoke_args=smoke_args: command(smoke_args, timeout=300))
             cases.run("schema2_schema6_published_alpha4_schema7_upgrade_restore_rollback", lambda: command(
                 [sys.executable, str(ROOT / "scripts/upgrade_smoke.py"), str(binary),
                  "--alpha3-binary", str(args.alpha3_binary.resolve(strict=True)),
@@ -380,6 +386,8 @@ def main():
     parser.add_argument("--report", type=pathlib.Path, help="write per-case JSON report, also on failure")
     parser.add_argument("--evidence-fixture", type=pathlib.Path,
                         help="explicit prebuilt offline fixture writer; required for full browser acceptance")
+    parser.add_argument("--smoke-tool", type=pathlib.Path,
+                        help="compiled development smoke helper for search and diagnostics cases")
     parser.add_argument("--skip-browser", action="store_true", help="record browser cases as skipped; not full acceptance")
     args = parser.parse_args()
     if args.candidate_version == "0.1.0-beta.1" and args.alpha5_binary is None:

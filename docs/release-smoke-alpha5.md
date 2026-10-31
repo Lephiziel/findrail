@@ -90,6 +90,20 @@ Explicit `--skip-browser` lists every browser case as skipped and reports
 failure. Child smoke groups are drained after success, failure and timeout so
 servers/drivers cannot cross case boundaries.
 
+The compiled CLI/HTTP acceptance cases use the development-only `findrail-smoke`
+Go tool. Build it once from the checkout and run it against the already
+verified candidate; it is not included in native archives:
+
+```sh
+go build -o findrail-smoke ./cmd/findrail-smoke
+./findrail-smoke search-smoke /path/to/verified/findrail
+./findrail-smoke diagnostics-smoke /path/to/verified/findrail
+```
+
+The packaged report retains the historical case IDs `search_smoke.py` and
+`diagnostics_smoke.py`; the caller maps them to the corresponding Go
+subcommands.
+
 The additional integrated transfer can also be run directly:
 
 ```sh
