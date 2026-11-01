@@ -1,0 +1,90 @@
+name: Evidence collection
+
+on:
+  pull_request:
+    paths:
+      - 'internal/transport/http/server.go'
+      - 'internal/transport/http/evidence_asset_test.go'
+      - 'internal/transport/http/web/index.html'
+      - 'internal/transport/http/web/collections_ui.mjs'
+      - 'internal/transport/http/web/bundle_import*_test.mjs'
+      - 'internal/transport/http/web/evidence_collection*'
+      - 'scripts/evidence_bundle_browser_smoke.py'
+      - 'scripts/search_preset_browser_smoke.py'
+      - 'scripts/snapshot_browser_smoke.py'
+      - 'internal/transport/http/web/snapshot_ui_test.mjs'
+      - 'docs/portable-snapshots.md'
+      - 'internal/transport/http/web/search_ui.mjs'
+      - 'internal/transport/http/web/search_preset_test.mjs'
+      - 'internal/transport/http/web/source_management_test.mjs'
+      - 'docs/search-query.md'
+      - 'docs/evidence-bundles.md'
+      - 'scripts/evidence_collection_smoke.py'
+      - 'scripts/persistent_collection_smoke.py'
+      - 'scripts/evidence_collection_fixture.go'
+      - 'docs/evidence-collections.md'
+      - '.github/workflows/evidence-collection.yml'
+      - 'go.mod'
+      - 'go.sum'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/transport/http/server.go'
+      - 'internal/transport/http/evidence_asset_test.go'
+      - 'internal/transport/http/web/index.html'
+      - 'internal/transport/http/web/collections_ui.mjs'
+      - 'internal/transport/http/web/bundle_import*_test.mjs'
+      - 'internal/transport/http/web/evidence_collection*'
+      - 'scripts/evidence_bundle_browser_smoke.py'
+      - 'scripts/search_preset_browser_smoke.py'
+      - 'scripts/snapshot_browser_smoke.py'
+      - 'internal/transport/http/web/snapshot_ui_test.mjs'
+      - 'docs/portable-snapshots.md'
+      - 'internal/transport/http/web/search_ui.mjs'
+      - 'internal/transport/http/web/search_preset_test.mjs'
+      - 'internal/transport/http/web/source_management_test.mjs'
+      - 'docs/search-query.md'
+      - 'docs/evidence-bundles.md'
+      - 'scripts/evidence_collection_smoke.py'
+      - 'scripts/persistent_collection_smoke.py'
+      - 'scripts/evidence_collection_fixture.go'
+      - 'docs/evidence-collections.md'
+      - '.github/workflows/evidence-collection.yml'
+      - 'go.mod'
+      - 'go.sum'
+permissions:
+  contents: read
+
+jobs:
+  browser-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install matched Chrome for Testing and pinned browser tools
+        run: |
+          npm install --prefix /tmp/browser-tools --no-save @puppeteer/browsers@2.10.6
+          /tmp/browser-tools/node_modules/.bin/browsers install chrome@stable --path /tmp/browser-cache
+          /tmp/browser-tools/node_modules/.bin/browsers install chromedriver@stable --path /tmp/browser-cache
+          python -m pip install selenium==4.35.0
+          echo "FINDRAIL_CHROME=$(find /tmp/browser-cache/chrome -type f -name chrome | head -n 1)" >> "$GITHUB_ENV"
+          echo "FINDRAIL_CHROMEDRIVER=$(find /tmp/browser-cache/chromedriver -type f -name chromedriver | head -n 1)" >> "$GITHUB_ENV"
+      - name: Native module tests
+        run: node --test internal/transport/http/web/*_test.mjs
+      - name: Static asset and embedded server checks
+        run: go test ./internal/transport/http
+      - name: Compile server and run real browser journey
+        run: |
+          go build -o /tmp/findrail ./cmd/findrail
+          python scripts/evidence_collection_smoke.py /tmp/findrail
+          python scripts/persistent_collection_smoke.py /tmp/findrail
+          python scripts/evidence_bundle_browser_smoke.py /tmp/findrail
+          python scripts/search_preset_browser_smoke.py /tmp/findrail
+          python scripts/snapshot_browser_smoke.py /tmp/findrail

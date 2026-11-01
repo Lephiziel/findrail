@@ -1,0 +1,32 @@
+name: Folder ignore policy
+on:
+  push:
+    branches: [feat/folder-ignore-policy]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+      - run: go test ./...
+      - run: go build -o findrail ./cmd/findrail
+      - run: python3 scripts/ignore_policy_smoke.py ./findrail
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+      - run: go test -race ./internal/ignorepolicy ./internal/connectors/filesystem ./internal/cli ./internal/sync
+      - run: go test ./internal/ignorepolicy -run '^$' -fuzz FuzzParseAndMatch -fuzztime=2s

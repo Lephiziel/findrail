@@ -1,35 +1,157 @@
-Findrail local alpha — https://github.com/Lephiziel/findrail
+Findrail local desktop application — https://github.com/Lephiziel/findrail
 
-1. Extract the archive into a directory you own. Go is not required.
-2. Open a terminal in the extracted directory.
-3. Register a folder, then start the local search interface:
+PACKAGE IDENTITY
+Read BUILD-INFO.json for the exact application version, source revision, target
+and SQLite schema. A source-built or CI/rehearsal archive is not a published
+release; download public packages and checksums only from the actual GitHub
+release page. The currently published alpha.5 and the beta.1 candidate use
+schema 8; alpha.4 uses schema 7 and alpha.3 uses schema 6. Alpha.4 binaries
+cannot open schema 8. The public release tag,
+manifest and checksums identify the published bytes; a later source/CI build is
+not a replacement for that immutable release.
 
-   Linux / macOS:
-     ./findrail index /absolute/path/to/notes
-     ./findrail serve
+INSTALL A PUBLISHED STANDALONE ARCHIVE
+1. From the GitHub Releases page, download the archive for your OS/CPU and the
+   SHA256SUMS.txt from that same release. Match the exact archive basename.
+2. Verify the checksum before extraction:
+   Linux:   sha256sum "findrail_<version>_<target>.tar.gz"
+   macOS:   shasum -a 256 "findrail_<version>_<target>.tar.gz"
+   Windows PowerShell:
+     (Get-FileHash -Algorithm SHA256 -LiteralPath ".\findrail_<version>_<target>.zip").Hash
+   Compare the printed hash with the matching row in SHA256SUMS.txt. Stop if it
+   differs. Checksums detect transfer errors; they are not a publisher signature.
+3. Extract the archive into a directory owned by your account. Paths may contain
+   spaces; quote them in commands. Go, Python, a database server and an installed
+   service are not required at runtime.
 
-   Windows (PowerShell):
-     .\findrail.exe index "C:\Users\YOU\Documents\Notes"
-     .\findrail.exe serve
+ALPHA.2 FIRST RUN
+Published alpha.2 lacks the new Sources panel and evidence collections. With
+that archive, use ./findrail demo (Windows: .\findrail.exe demo), or start an
+explicit folder: ./findrail start "/absolute/path/to/notes" (Windows:
+.\findrail.exe start "C:\Users\YOU\Documents\Notes"). The following steps
+    describe alpha.3 and later; published alpha.2 has fewer features.
 
-4. Open http://127.0.0.1:7766 in your browser.
-   Keep the server running for automatic refresh. Ctrl+C stops it.
+FIRST RUN (AFTER VERIFYING THIS ARCHIVE)
+4. Start Findrail with no source selected yet, then add only the folder you choose.
+   Without --data-dir it uses the default location below and resumes an existing
+   index there. For an isolated fresh start, use a new --data-dir (spaces are OK):
+   Linux/macOS, from the extracted folder:
+      ./findrail start --data-dir "$HOME/Findrail test data" --no-open
+   Windows PowerShell, from the extracted folder:
+      .\findrail.exe start --data-dir "$env:USERPROFILE\Findrail test data" --no-open
+   Open the loopback URL printed in the terminal (normally
+   http://127.0.0.1:7766). In Sources choose Add folder and enter the absolute
+   path on the machine running Findrail. A browser picker cannot select a
+   server-side path. Keep the terminal process running; Ctrl+C stops it.
+ 5. Search for a remembered word in a technical note or text PDF. Open Preview;
+    confirm a PDF result's actual page. In alpha.4, alpha.5 and beta.1
+    start/desktop, select exact passages, explicitly Save a named collection and
+    notes/order, then restart
+    using the same data directory and confirm restoration. Alpha.3 and read-only
+    serve/demo use only a temporary in-tab collection.
 
-Keyword search, PDF text extraction and preview work without an AI account.
-Scanned / image-only PDFs require OCR, which is not included. PDFs are limited
-by default to 16 MiB, 500 pages and 1 MiB extracted text; extraction has a 10s
-deadline. The child process has a soft Go memory target, not an OS sandbox.
+DESKTOP LAUNCHER (alpha.4, alpha.5 and beta.1 archives)
+The five platform archives include the ordinary `findrail` CLI and the
+separate `findrail-desktop` launcher. It acquires ownership of the chosen data
+directory before opening SQLite. Starting it again opens the verified existing
+loopback endpoint rather than creating a second server. Closing a browser tab does
+not stop Findrail; use the UI Quit action or stop the owning process.
 
-On macOS, an unsigned downloaded binary may require opening Privacy & Security
-and explicitly allowing this application according to your system policy.
-These alpha binaries are not notarized or code-signed.
+Install for the current user from the extracted archive:
+  Linux: launcher/linux/install-user.sh; remove the menu entry with
+    launcher/linux/uninstall-user.sh.
+  macOS: launcher/macos/install-user.sh copies Findrail.app to ~/Applications;
+    launcher/macos/uninstall-user.sh removes that app.
+    The macOS app requires macOS 13 or newer, matching its Go 1.27 build.
+  Windows: run launcher/windows/install-user.ps1 in PowerShell; remove its
+    Start-menu shortcut with launcher/windows/uninstall-user.ps1.
+These scripts do not delete indexed data. On Linux and Windows, the desktop
+launcher can also be run directly. On macOS, launch Findrail.app. Uninstalling
+the app is separate from deleting the data directory.
+Install/update replaces only a Findrail resource recognized as Findrail-owned;
+an unrelated file, symlink, or app/shortcut is left untouched and causes a
+refusal. Linux and macOS installers stage the new resource before publishing it.
+Existing alpha.4 Linux menu entries and macOS bundles are recognized by their
+Findrail identity. An older unmarked Windows shortcut is recognized only when
+its target and working directory match the packaged Findrail launcher layout.
+If ownership cannot be established, inspect the resource and remove or rename it
+yourself before retrying. Uninstall is safe to repeat and removes only a
+recognized Findrail launcher resource; it never removes indexed data or source
+documents. Platform menu caches may update asynchronously; installation is not
+a transaction with the OS shell.
 
-Use the same --data-dir DIR for index, search and serve if overriding defaults.
-Sources from the original foundation remain text-only until you re-run index.
-The index stores plaintext copies of extracted text. Select folders deliberately.
-findrail forget SOURCE_ID removes that source from the index and leaves originals.
+For Linux/macOS, an extracted path with spaces works as, for example:
+  "/home/alex/Apps/Findrail alpha"/findrail start --no-open
+  "/Users/Alex/Applications/Findrail alpha"/findrail start --no-open
+On Windows PowerShell:
+  & "$env:USERPROFILE\Apps\Findrail alpha\findrail.exe" start --no-open
 
-Options precede the folder or query. Run findrail --help for all commands.
-No background daemon is installed; stopping serve or watch stops refresh.
-To uninstall, stop Findrail and remove the executable. See docs/data-handling.md
-in the repository for default index directories and optional index removal.
+The index contains plaintext extracted text and source paths and is not encrypted
+at rest. There is no runtime telemetry. Protect the data directory like your
+documents. The app binds to loopback; do not expose it to a network.
+
+DATA LOCATION
+Default data directory:
+  Linux:   $XDG_DATA_HOME/findrail, or ~/.local/share/findrail
+  macOS:   ~/Library/Application Support/Findrail
+  Windows: %LOCALAPPDATA%\Findrail
+If you configured --data-dir, use that exact directory for backup and restore.
+The index is separate from the extracted application directory.
+
+UPGRADE / BACKUP / ROLLBACK
+The older alpha.2 binary uses schema 2. Published alpha.3 uses schema 6; the
+alpha.4 uses schema 7 with forward migrations 1–7 (001_init,
+002_local_alpha, 003_github_snapshots, 004_docx_policy, 005_archive_sources,
+006_indexing_reports, 007_evidence_collections). Migrations run forward on the new binary's first write;
+there are no reverse migrations. Legacy schema-2 sources keep DOCX disabled by
+default; enable it explicitly per source before rescanning if desired.
+Alpha.5 added migration 008 and uses schema 8, adding saved passage-window
+offsets to collections. Beta.1 keeps schema 8 and adds no migration. Opening a
+schema-7 alpha.4 index with an alpha.5 or beta.1 binary migrates it forward; the
+alpha.4 binary must not be used on
+that upgraded directory. The upgrade path is tested against a real alpha.4
+binary and a complete stopped backup. Restore that backup with its matching
+binary if rollback is needed.
+
+Before any upgrade, stop every Findrail process that could open this index. Stop
+the server with Ctrl+C; also close any other CLI/client process using that data
+directory. Then copy the COMPLETE data directory to a separate location, keeping
+all files including findrail.db, findrail.db-wal and findrail.db-shm when present.
+Use the actual configured path if it differs from the defaults. Examples:
+  Linux:
+    cp -a "$HOME/.local/share/findrail" "$HOME/findrail backup"
+  macOS:
+    cp -a "$HOME/Library/Application Support/Findrail" "$HOME/Findrail backup"
+  Windows PowerShell:
+    Copy-Item -LiteralPath "$env:LOCALAPPDATA\Findrail" -Destination "$env:USERPROFILE\Findrail backup" -Recurse
+Do not put the backup inside the data directory being copied. Check that the
+backup contains the database and any WAL/SHM files before opening the new binary.
+
+Never point an older binary at a newer schema: alpha.2/schema 2 cannot open
+schema 6, published alpha.3/schema 6 cannot open schema 7, and published
+alpha.4/schema 7 cannot open schema 8. For rollback, stop
+every Findrail process, preserve the upgraded directory separately, and restore
+the WHOLE pre-upgrade backup to a different directory. Run the older compatible
+binary against that restored copy (set --data-dir to that copy if needed). Do not
+copy only the main SQLite database, mix backup files with the upgraded directory,
+or expect a downgrade migration. Reverse migrations do not exist.
+
+STOP AND UNINSTALL
+Stop the running server with Ctrl+C and close all other Findrail processes. No
+daemon or service is installed. Remove the extracted application directory using
+your file manager (or the exact directory you chose). To remove indexed copies,
+separately delete the data directory only after confirming its path and that you
+no longer need it. This does not delete, change or uninstall your original files.
+Keep or delete a rollback backup deliberately; it contains plaintext indexed
+content and provenance.
+
+PLATFORM / FEATURE LIMITS
+Archives are unsigned. On macOS, Gatekeeper may warn or block first launch; use
+only the app-specific option offered by macOS Privacy & Security if you choose to
+allow this binary. Do not disable Gatekeeper or other system-wide protections.
+This does not claim notarization, Gatekeeper approval, or Finder certification.
+Scanned/image-only PDFs have no OCR. Search is lexical, not semantic. Public
+GitHub refresh is manual. The optional VS Code VSIX is distributed separately
+from the application archive; use the asset listed on the release page.
+Marketplace/Open VSX publication is not included. The VSIX requires a compatible
+Findrail server/client API v1; it is not needed for the first-run web workflow.

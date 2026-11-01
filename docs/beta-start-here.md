@@ -1,24 +1,45 @@
 # Desktop first use and optional feedback
 
-**Intended audience:** Linux amd64 users trying Findrail's desktop workflow.
-This page does not announce a beta: beta packaging is being prepared, and no
-public beta download is available yet. The current public download remains
-[Findrail 0.1.0-alpha.5](https://github.com/Lephiziel/findrail/releases/tag/v0.1.0-alpha.5).
-Windows and macOS downloads remain available too; experimental builds are not a
-restriction on trying the product or sending feedback.
+**Current download:** [Findrail 0.1.0-beta.1](https://github.com/Lephiziel/findrail/releases/tag/v0.1.0-beta.1),
+a limited desktop beta published from
+`4c0c94e1663804344b1ae1cbcdc3a346208e688a`.
+Linux, Windows and macOS receive the same functional application core.
+Linux amd64 is the primary beta path. Windows amd64 is a primary target; its
+matching first-run report was received but remains incomplete. Linux arm64,
+Apple Silicon and Intel macOS are experimental without matching independent
+manual coverage. Native CI is not a human first-run report. See the
+[platform support policy](beta-support.md); experimental archives remain
+available for trying the product and sending optional feedback.
 
 ## Download, verify, and try
 
-Download the Linux amd64 archive and `SHA256SUMS.txt` from the same release.
-Before extracting, run `sha256sum` on the exact archive and compare the complete
-64-character result with its row in `SHA256SUMS.txt`. Stop if it differs. Extract
-the archive, enter its folder, and read its included `INSTALL.txt`.
+Download the archive for your OS/CPU and `SHA256SUMS.txt` from that same public
+release. It offers Linux amd64/arm64, macOS Intel/Apple Silicon, Windows amd64,
+the optional read-only VSIX, `release-manifest.json`, and `SHA256SUMS.txt`.
+The manifest records schema 8, Client API 1 and VSIX 0.1.0. Source builds and
+Actions artifacts are separate from these published packages.
 
-Start the desktop launcher from the extracted folder:
+Before extracting, run `sha256sum` (Linux), `shasum -a 256` (macOS), or
+`Get-FileHash -Algorithm SHA256 -LiteralPath .\findrail_0.1.0-beta.1_windows-amd64.zip`
+(PowerShell) on the exact archive. Compare the complete 64-character result
+with its matching row in `SHA256SUMS.txt`; stop if it differs. Extract the
+archive into a directory you own and read its included `INSTALL.txt`.
+
+Start from the extracted folder:
 
 ```sh
-./findrail-desktop
+./findrail-desktop # Linux
+open Findrail.app  # macOS
 ```
+
+```powershell
+.\findrail-desktop.exe # Windows
+```
+
+The packages are unsigned and macOS apps are not notarized. Use only any
+app-specific allowance offered by your OS; do not disable OS protections
+globally. A first-run failure or security prompt is useful feedback, not a
+reason to claim a successful test.
 
 In the local interface choose **Sources → Add folder** and select only a folder
 you want Findrail to index. Search a word you remember, open **Preview**, and
@@ -36,7 +57,7 @@ read-only; its in-tab collection does not persist across restart.
 Before upgrading, stop every Findrail process using the index and copy the **whole
 data directory**, including SQLite WAL/SHM files when present. By default it is
 `$XDG_DATA_HOME/findrail` or `~/.local/share/findrail`; use your configured
-`--data-dir` if different. For example:
+`--data-dir` if different. The following example is for Linux:
 
 ```sh
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/findrail" # replace with your configured --data-dir if different
@@ -49,9 +70,11 @@ Keep the backup outside the directory being copied. Read the new archive's
 forward-only: do not open an upgraded index with an older binary. Restore a full
 stopped pre-upgrade backup with its matching binary if rollback is needed.
 
-The included Linux per-user installer adds a menu entry; its matching
-uninstaller removes that entry, not the application archive or index. No Go,
-Python, Docker, token, or app account is needed to run Findrail.
+On macOS the default is `~/Library/Application Support/Findrail`; on Windows
+it is `%LOCALAPPDATA%\Findrail`. Follow the included `INSTALL.txt` for each
+platform's backup example and per-user installer/uninstaller. Uninstalling a
+launcher does not delete indexed data or your original files. No Go, Python,
+Docker, token, or app account is needed to run Findrail.
 
 ## Privacy and optional feedback
 

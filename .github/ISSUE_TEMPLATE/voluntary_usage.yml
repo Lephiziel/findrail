@@ -1,0 +1,86 @@
+name: Voluntary Findrail usage report
+description: Optional, privacy-preserving report about installation and remembered-word retrieval
+title: "[Voluntary usage] "
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Participation is optional. Report the version and (if known) release or
+        candidate SHA and download source. Do not include private documents,
+        their text, queries, local paths, screenshots containing private content,
+        device identifiers, or credentials. You may instead keep a report locally
+        and provide its SHA-256 reference. Reports are never uploaded automatically.
+        You do not need to find a Git SHA; unknown identity remains useful feedback,
+        but cannot match a candidate as release evidence. First use is not a return:
+        choose “Not yet” until you actually come back later. Leave skipped searches
+        or restarts as “Not tried”; found/not-found and restored/not-restored are
+        actual outcomes.
+  - type: input
+    id: version
+    attributes:
+      label: Version or release (optional)
+      description: Version or download source if already known. Do not look up a Git SHA; unknown identity is fine for qualitative feedback.
+  - type: dropdown
+    id: evidence_type
+    attributes:
+      label: Evidence type
+      options: [Manual, Automated]
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+    validations:
+      required: true
+  - type: textarea
+    id: install
+    attributes:
+      label: Install outcome
+      description: "Optional: installation outcome and obstacle, without private paths."
+    validations:
+      required: true
+  - type: dropdown
+    id: retrieval_one
+    attributes:
+      label: Remembered-word task 1
+      description: Did you find the passage? Do not provide the query or document. Not tried is incomplete, not a success.
+      options: [Found, Not found, Not tried]
+    validations:
+      required: true
+  - type: dropdown
+    id: retrieval_two
+    attributes:
+      label: Remembered-word task 2
+      description: Did you find the passage? Do not provide the query or document. Not tried is incomplete, not a success.
+      options: [Found, Not found, Not tried]
+    validations:
+      required: true
+  - type: dropdown
+    id: collection_restart
+    attributes:
+      label: Collection after restart
+      description: Did the saved collection return after restarting Findrail? Not tried is incomplete.
+      options: [Restored, Not restored, Not tried]
+    validations:
+      required: true
+  - type: textarea
+    id: refresh
+    attributes:
+      label: Optional obstacle or failure
+      description: Qualitative feedback only; no logs, queries, paths, or document content.
+  - type: dropdown
+    id: return_use
+    attributes:
+      label: Did you return and use Findrail again later?
+      options: ["Not yet", "No", "Yes"]
+    validations:
+      required: true
+  - type: textarea
+    id: obstacle
+    attributes:
+      label: One main obstacle
+      description: Describe one usability or reliability obstacle without private content.
+    validations:
+      required: true

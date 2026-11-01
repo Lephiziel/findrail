@@ -1,0 +1,47 @@
+name: README media (published alpha.3)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, docs/readme-refresh-alpha4]
+    paths:
+      - .github/workflows/readme-media.yml
+      - scripts/readme_media.py
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare browser driver
+        run: python3 -m pip install --disable-pip-version-check selenium==4.35.0
+      - name: Download, verify and safely extract published alpha.3
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/findrail_0.1.0-alpha.3_linux-amd64.tar.gz"
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error \
+            https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.3/findrail_0.1.0-alpha.3_linux-amd64.tar.gz -o "$archive"
+          echo 'b8e9d606e6487745a9f96d4453114e7ef6ec74fcde242a7da20a059462b3b9e9  '"$archive" | sha256sum --check --status
+          python3 - "$archive" "$RUNNER_TEMP/readme-install" <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import package
+          archive, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          package.verify_archive(archive, 'linux-amd64', '0.1.0-alpha.3', 6)
+          root = package.extract_verified(archive, out)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'FINDRAIL_MEDIA_BINARY={root / "findrail"}\n')
+          PY
+      - name: Capture real search and PDF page evidence
+        run: python3 scripts/readme_media.py "$FINDRAIL_MEDIA_BINARY" --output "$RUNNER_TEMP/readme-media"
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: readme-media-alpha3
+          path: ${{ runner.temp }}/readme-media/
+          if-no-files-found: error
+          retention-days: 14

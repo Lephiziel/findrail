@@ -4,6 +4,8 @@ package sync
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"sort"
 	"sync"
@@ -11,21 +13,39 @@ import (
 
 	"github.com/Lephiziel/findrail/internal/connectors/filesystem"
 	"github.com/Lephiziel/findrail/internal/ingest"
+	"github.com/Lephiziel/findrail/internal/sourcecoord"
 	"github.com/Lephiziel/findrail/internal/store/sqlite"
 	"github.com/Lephiziel/findrail/pkg/connector"
 	"github.com/fsnotify/fsnotify"
 )
 
 type Status struct {
-	SourceID      string `json:"source_id"`
-	State         string `json:"state"`
-	Mode          string `json:"mode"`
-	LastStartedAt string `json:"last_started_at,omitempty"`
-	LastSuccessAt string `json:"last_success_at,omitempty"`
-	LastError     string `json:"last_error,omitempty"`
-	WatchWarning  string `json:"watch_warning,omitempty"`
-	Skipped       int    `json:"skipped"`
-	SkippedPDF    int    `json:"skipped_pdf,omitempty"`
+	SourceID         string   `json:"source_id"`
+	State            string   `json:"state"`
+	Mode             string   `json:"mode"`
+	LastStartedAt    string   `json:"last_started_at,omitempty"`
+	LastSuccessAt    string   `json:"last_success_at,omitempty"`
+	LastError        string   `json:"last_error,omitempty"`
+	WatchWarning     string   `json:"watch_warning,omitempty"`
+	WatchWarningCode string   `json:"watch_warning_code,omitempty"`
+	LastErrorCode    string   `json:"last_error_code,omitempty"`
+	Skipped          int      `json:"skipped"`
+	SkippedPDF       int      `json:"skipped_pdf,omitempty"`
+	SkippedDOCX      int      `json:"skipped_docx,omitempty"`
+	Progress         Progress `json:"progress"`
+}
+type Progress struct {
+	AttemptID          string `json:"attempt_id"`
+	Sequence           uint64 `json:"sequence"`
+	Phase              string `json:"phase"`
+	ProcessedDocuments int    `json:"processed_documents"`
+	SkippedEntries     int    `json:"skipped_entries"`
+	ElapsedMillis      int64  `json:"elapsed_millis"`
+	Partial            bool   `json:"partial"`
+	Committed          bool   `json:"committed"`
+	ReportID           string `json:"report_id,omitempty"`
+	FailureCode        string `json:"failure_code,omitempty"`
+	updatedAt          time.Time
 }
 type Config struct {
 	Interval          time.Duration
@@ -33,15 +53,53 @@ type Config struct {
 	Debounce          time.Duration
 	PollOnly          bool
 	Factory           func(connector.Source) (*filesystem.Connector, error)
+	Coordinator       *sourcecoord.Locks
+	WatcherFactory    func() (Watcher, error)
 }
+
+// Watcher is the notification surface consumed by a source worker. Config can
+// supply an implementation for deterministic recovery testing; production uses
+// fsnotify without changing the reconciliation contract.
+type Watcher interface {
+	Add(string) error
+	Remove(string) error
+	WatchList() []string
+	Close() error
+	Events() <-chan fsnotify.Event
+	Errors() <-chan error
+}
+
+type fsnotifyWatcher struct{ watcher *fsnotify.Watcher }
+
+func (w fsnotifyWatcher) Add(path string) error         { return w.watcher.Add(path) }
+func (w fsnotifyWatcher) Remove(path string) error      { return w.watcher.Remove(path) }
+func (w fsnotifyWatcher) WatchList() []string           { return w.watcher.WatchList() }
+func (w fsnotifyWatcher) Close() error                  { return w.watcher.Close() }
+func (w fsnotifyWatcher) Events() <-chan fsnotify.Event { return w.watcher.Events }
+func (w fsnotifyWatcher) Errors() <-chan error          { return w.watcher.Errors }
+
 type Manager struct {
-	store  *sqlite.Store
-	config Config
-	mu     sync.RWMutex
-	status map[string]Status
+	store          *sqlite.Store
+	config         Config
+	mu             sync.RWMutex
+	status         map[string]Status
+	generations    map[string]uint64
+	nextGeneration uint64
 }
 
 func New(store *sqlite.Store, config Config) *Manager {
+	if config.WatcherFactory == nil {
+		config.WatcherFactory = func() (Watcher, error) {
+			watcher, err := fsnotify.NewWatcher()
+			if err != nil {
+				return nil, err
+			}
+			return fsnotifyWatcher{watcher: watcher}, nil
+		}
+	}
+	if config.Coordinator == nil {
+		config.Coordinator = sourcecoord.New()
+	}
 	if config.Interval <= 0 {
 		config.Interval = 5 * time.Minute
 	}
@@ -51,7 +109,7 @@ func New(store *sqlite.Store, config Config) *Manager {
 	if config.Debounce <= 0 {
 		config.Debounce = 350 * time.Millisecond
 	}
-	return &Manager{store: store, config: config, status: make(map[string]Status)}
+	return &Manager{store: store, config: config, status: make(map[string]Status), generations: make(map[string]uint64)}
 }
 func (m *Manager) Status() []Status {
 	m.mu.RLock()
@@ -63,18 +121,55 @@ func (m *Manager) Status() []Status {
 	sort.Slice(result, func(i, j int) bool { return result[i].SourceID < result[j].SourceID })
 	return result
 }
-func (m *Manager) update(id string, change func(*Status)) {
+func (m *Manager) update(ctx context.Context, id string, generation uint64, change func(*Status)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if ctx.Err() != nil || m.generations[id] != generation {
+		return
+	}
 	s := m.status[id]
 	s.SourceID = id
 	change(&s)
 	m.status[id] = s
 }
 
+func (m *Manager) progress(ctx context.Context, id string, generation uint64, attempt string, start time.Time, processed, skipped int, flush bool, phase string, committed bool, reportID, failureCode string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ctx.Err() != nil || m.generations[id] != generation {
+		return
+	}
+	s, ok := m.status[id]
+	if !ok || s.Progress.AttemptID != attempt {
+		return
+	}
+	now := time.Now().UTC()
+	if !flush && !s.Progress.updatedAt.IsZero() && now.Sub(s.Progress.updatedAt) < 200*time.Millisecond {
+		return
+	}
+	if processed < s.Progress.ProcessedDocuments {
+		processed = s.Progress.ProcessedDocuments
+	}
+	if skipped < s.Progress.SkippedEntries {
+		skipped = s.Progress.SkippedEntries
+	}
+	s.Progress.Sequence++
+	s.Progress.Phase = phase
+	s.Progress.ProcessedDocuments = processed
+	s.Progress.SkippedEntries = skipped
+	s.Progress.ElapsedMillis = now.Sub(start).Milliseconds()
+	s.Progress.Partial = !committed
+	s.Progress.Committed = committed
+	s.Progress.ReportID = reportID
+	s.Progress.FailureCode = failureCode
+	s.Progress.updatedAt = now
+	m.status[id] = s
+}
+
 type worker struct {
-	source connector.Source
-	cancel context.CancelFunc
+	source     connector.Source
+	cancel     context.CancelFunc
+	generation uint64
 }
 
 // Run blocks until cancellation and waits for every writer to roll back or finish.
@@ -105,17 +200,29 @@ func (m *Manager) Run(ctx context.Context) {
 			if ok {
 				old.cancel()
 			}
+			m.mu.Lock()
+			m.nextGeneration++
+			generation := m.nextGeneration
+			m.generations[s.ID] = generation
+			m.status[s.ID] = Status{SourceID: s.ID, State: "starting", Mode: "polling"}
+			m.mu.Unlock()
 			child, cancel := context.WithCancel(ctx)
-			active[s.ID] = worker{s.Source, cancel}
+			active[s.ID] = worker{source: s.Source, cancel: cancel, generation: generation}
 			wg.Add(1)
-			go func(source connector.Source) { defer wg.Done(); m.runSource(child, source) }(s.Source)
+			go func(source connector.Source, generation uint64) {
+				defer wg.Done()
+				m.runSource(child, source, generation)
+			}(s.Source, generation)
 		}
 		for id, w := range active {
 			if !wanted[id] {
 				w.cancel()
 				delete(active, id)
 				m.mu.Lock()
-				delete(m.status, id)
+				if m.generations[id] == w.generation {
+					delete(m.status, id)
+					delete(m.generations, id)
+				}
 				m.mu.Unlock()
 			}
 		}
@@ -133,7 +240,7 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-func (m *Manager) runSource(ctx context.Context, source connector.Source) {
+func (m *Manager) runSource(ctx context.Context, source connector.Source, generation uint64) {
 	eventConnector, _ := m.config.Factory(source)
 	events := make(chan struct{}, 1)
 	signal := func() {
@@ -142,45 +249,73 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 		default:
 		}
 	}
-	var watcher *fsnotify.Watcher
-	if !m.config.PollOnly {
-		var err error
-		watcher, err = fsnotify.NewWatcher()
-		if err != nil {
-			m.update(source.ID, func(s *Status) { s.WatchWarning = err.Error() })
-		}
-	}
-	mode := "polling"
-	if watcher != nil {
-		mode = "events"
-	}
-	m.update(source.ID, func(s *Status) { s.State = "starting"; s.Mode = mode })
-	if watcher != nil {
-		done := make(chan struct{})
+	var watcher Watcher
+	var watcherDone chan struct{}
+	startWatching := func(w Watcher) {
+		watcherDone = make(chan struct{})
+		done := watcherDone
 		go func() {
-			defer close(done)
+			defer func() {
+				if ctx.Err() == nil {
+					m.update(ctx, source.ID, generation, func(s *Status) {
+						s.Mode = "polling"
+						s.WatchWarning = "File change notifications are unavailable; periodic refresh remains active."
+						s.WatchWarningCode = "watch_unavailable"
+					})
+					signal()
+				}
+				close(done)
+			}()
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case event, ok := <-watcher.Events:
+				case event, ok := <-w.Events():
 					if !ok {
 						return
 					}
 					if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove|fsnotify.Rename) != 0 && (eventConnector == nil || eventConnector.RelevantPath(event.Name)) {
 						signal()
 					}
-				case err, ok := <-watcher.Errors:
+				case _, ok := <-w.Errors():
 					if !ok {
 						return
 					}
-					m.update(source.ID, func(s *Status) { s.WatchWarning = err.Error() })
+					m.update(ctx, source.ID, generation, func(s *Status) {
+						s.Mode = "polling"
+						s.WatchWarning = "File change notifications are degraded; periodic refresh remains active."
+						s.WatchWarningCode = "watch_degraded"
+					})
 					signal()
 				}
 			}
 		}()
-		defer func() { watcher.Close(); <-done }()
 	}
+	if !m.config.PollOnly {
+		var err error
+		watcher, err = m.config.WatcherFactory()
+		if err != nil {
+			m.update(ctx, source.ID, generation, func(s *Status) {
+				s.WatchWarning = "File change notifications are unavailable; periodic refresh remains active."
+				s.WatchWarningCode = "watch_unavailable"
+			})
+		} else {
+			startWatching(watcher)
+		}
+	}
+	mode := "polling"
+	if watcher != nil {
+		mode = "events"
+	}
+	m.update(ctx, source.ID, generation, func(s *Status) { s.State = "starting"; s.Mode = mode })
+	defer func() {
+		if watcher != nil {
+			_ = watcher.Close()
+		}
+		if watcherDone != nil {
+			<-watcherDone
+		}
+	}()
 	// The timer handles debounce and retries; polling never depends on notifications.
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -201,6 +336,11 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-watcherDone:
+			_ = watcher.Close()
+			watcher = nil
+			watcherDone = nil
+			schedule(0)
 		case <-events:
 			if firstEvent.IsZero() {
 				firstEvent = time.Now()
@@ -220,7 +360,37 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 			if ctx.Err() != nil {
 				return
 			}
-			m.update(source.ID, func(s *Status) { s.State = "indexing"; s.LastStartedAt = time.Now().UTC().Format(time.RFC3339Nano) })
+			var attemptBytes [16]byte
+			if _, err := rand.Read(attemptBytes[:]); err != nil {
+				m.update(ctx, source.ID, generation, func(s *Status) {
+					s.State = "error"
+					s.LastError = "Refresh attempt could not be initialized."
+					s.LastErrorCode = "attempt_initialization_failed"
+				})
+				schedule(retry)
+				continue
+			}
+			attempt := hex.EncodeToString(attemptBytes[:])
+			started := time.Now().UTC()
+			m.update(ctx, source.ID, generation, func(s *Status) {
+				s.State = "indexing"
+				s.LastStartedAt = started.Format(time.RFC3339Nano)
+				s.Progress = Progress{AttemptID: attempt, Phase: "enumerating_extracting", Partial: true}
+			})
+			m.progress(ctx, source.ID, generation, attempt, started, 0, 0, true, "enumerating_extracting", false, "", "")
+			if !m.config.PollOnly && watcher == nil {
+				var watchErr error
+				watcher, watchErr = m.config.WatcherFactory()
+				if watchErr != nil {
+					m.update(ctx, source.ID, generation, func(s *Status) {
+						s.Mode = "polling"
+						s.WatchWarning = "File change notifications are unavailable; periodic refresh remains active."
+						s.WatchWarningCode = "watch_unavailable"
+					})
+				} else {
+					startWatching(watcher)
+				}
+			}
 			conn, err := m.config.Factory(source)
 			if err == nil && conn.Source() != source {
 				err = errors.New("source identity or extraction settings changed")
@@ -248,19 +418,40 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 						}
 					}
 				}
-				m.update(source.ID, func(s *Status) {
+				m.update(ctx, source.ID, generation, func(s *Status) {
+					select {
+					case <-watcherDone:
+						s.Mode = "polling"
+						s.WatchWarning = "File change notifications are unavailable; periodic refresh remains active."
+						s.WatchWarningCode = "watch_unavailable"
+						return
+					default:
+					}
 					if watchErr != nil {
 						s.Mode = "polling"
-						s.WatchWarning = watchErr.Error()
+						s.WatchWarning = "File change notifications are degraded; periodic refresh remains active."
+						s.WatchWarningCode = "watch_degraded"
 					} else {
 						s.Mode = "events"
 						s.WatchWarning = ""
+						s.WatchWarningCode = ""
 					}
 				})
 			}
 			var result ingest.Result
 			if err == nil {
-				result, err = ingest.Refresh(ctx, m.store, conn)
+				var unlock func()
+				unlock, err = m.config.Coordinator.Acquire(ctx, source.ID)
+				if err == nil {
+					result, err = ingest.RefreshWithProgress(ctx, m.store, conn, func(processed, skipped int, complete, flush bool) {
+						phase := "enumerating_extracting"
+						if complete {
+							phase = "publishing"
+						}
+						m.progress(ctx, source.ID, generation, attempt, started, processed, skipped, flush, phase, false, "", "")
+					})
+					unlock()
+				}
 			}
 			if ctx.Err() != nil {
 				return
@@ -269,20 +460,40 @@ func (m *Manager) runSource(ctx context.Context, source connector.Source) {
 				return
 			}
 			if err != nil {
-				m.update(source.ID, func(s *Status) { s.State = "error"; s.LastError = err.Error() })
+				failureCode := "scan_failed"
+				if errors.Is(err, context.Canceled) {
+					failureCode = "canceled"
+				} else if errors.Is(err, context.DeadlineExceeded) {
+					failureCode = "deadline_exceeded"
+				} else if errors.Is(err, ingest.ErrSourceGone) {
+					failureCode = "stale_source"
+				}
+				m.progress(ctx, source.ID, generation, attempt, started, 0, 0, true, "done", false, "", failureCode)
+				m.update(ctx, source.ID, generation, func(s *Status) {
+					s.State = "error"
+					s.LastError = "Refresh failed; the previous committed snapshot and report remain available."
+					s.LastErrorCode = failureCode
+				})
 				schedule(retry)
 				retry *= 2
 				if retry > time.Minute {
 					retry = time.Minute
 				}
 			} else {
+				reportID := ""
+				if result.Report != nil {
+					reportID = result.Report.ID
+				}
+				m.progress(ctx, source.ID, generation, attempt, started, result.Updated+result.Unchanged, result.Skipped, true, "done", true, reportID, "")
 				retry = time.Second
-				m.update(source.ID, func(s *Status) {
+				m.update(ctx, source.ID, generation, func(s *Status) {
 					s.State = "idle"
 					s.LastError = ""
+					s.LastErrorCode = ""
 					s.LastSuccessAt = time.Now().UTC().Format(time.RFC3339Nano)
 					s.Skipped = result.Skipped
 					s.SkippedPDF = result.SkippedPDF
+					s.SkippedDOCX = result.SkippedDOCX
 				})
 			}
 		}

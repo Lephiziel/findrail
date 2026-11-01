@@ -25,17 +25,32 @@ import (
 const help = `Findrail — find your knowledge, keep your sources.
 
 Usage:
-  findrail index [--data-dir DIR] [--max-bytes N] [--max-pdf-bytes N] [--json] DIRECTORY
-  findrail search [--data-dir DIR] [--limit N] [--source ID] [--json] QUERY
+  findrail index [--data-dir DIR] [--max-bytes N] [--max-pdf-bytes N] [--max-docx-bytes N] [--report] [--show-paths] [--json] DIRECTORY
+  findrail index-github [--data-dir DIR] [--ref REF] [--path PATH] [--max-bytes N] [--timeout 2m] [--report] [--show-paths] [--json] OWNER/REPO
+  findrail refresh-github [--data-dir DIR] [--timeout 2m] [--report] [--show-paths] [--json] SOURCE_ID
+  findrail start [--data-dir DIR] [--addr 127.0.0.1:7766] [--no-open] [--enable-originals] [DIRECTORY]
+  findrail desktop [--data-dir DIR] [DIRECTORY]
+  findrail demo [--addr 127.0.0.1:7766] [--no-open]
+  findrail search [--data-dir DIR] [--limit N] [--source ID] [--mode MODE] [--format FORMAT] [--path-prefix PATH] [--title-contains TEXT] [--json] QUERY
+  findrail evaluate --queries FILE --source ID [--data-dir DIR] [--json]
   findrail sources [--data-dir DIR] [--json]
+  findrail source-report --data-dir DIR --source SOURCE_ID [--json] [--show-paths]
+  findrail export-source --data-dir DIR --source ID --output FILE [--timeout 2m] [--json]
+  findrail inspect-export [--show-paths] [--json] FILE
+  findrail import-source --data-dir DIR --name NAME [--timeout 2m] [--json] FILE
   findrail forget [--data-dir DIR] SOURCE_ID
   findrail serve [--data-dir DIR] [--addr 127.0.0.1:7766] [--no-sync]
   findrail watch [--data-dir DIR] [--sync-interval 5m]
+  findrail explain-path ROOT --path RELATIVE [--path RELATIVE ...] [--data-dir DIR] [--json] [--show-rule]
+  findrail mcp --data-dir DIR --source ID [--source ID ...]
+  findrail mcp-config --client vscode|claude-desktop --data-dir DIR --source ID [--source ID ...] [--binary PATH]
   findrail version
+  findrail doctor [--data-dir DIR] [--json] [--show-paths]
 
 Options must precede positional arguments. Run COMMAND --help for details.
-Local alpha: text, Markdown, source code, text PDFs, preview and automatic refresh.
-Cloud connectors, semantic search and MCP remain planned.
+Local alpha: text, Markdown, source code, text PDFs, preview and automatic refresh. Native file opening is opt-in with start --enable-originals.
+start includes local source management in source builds; serve and demo are read-only.
+Public GitHub snapshots are manually refreshed. Source builds also include a read-only stdio MCP server.
 `
 
 func Run(ctx context.Context, args []string, out, stderr io.Writer, version string) error {
@@ -50,6 +65,41 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 		_, err := fmt.Fprintln(out, "findrail", version)
 		return err
 	}
+	if args[0] == "evaluate" {
+		return runEvaluate(ctx, args[1:], out, stderr)
+	}
+	if args[0] == "explain-path" {
+		return runExplainPath(ctx, args[1:], out, stderr)
+	}
+	if args[0] == "doctor" {
+		return runDoctor(ctx, args[1:], out, stderr, version)
+	}
+	if args[0] == "source-report" {
+		return runSourceReport(ctx, args[1:], out, stderr)
+	}
+	if args[0] == "export-source" || args[0] == "inspect-export" || args[0] == "import-source" {
+		return runSnapshotCommand(ctx, args[0], args[1:], out, version)
+	}
+	if args[0] == "start" {
+		return runStart(ctx, args[1:], out, stderr, openBrowser, version)
+	}
+	if args[0] == "desktop" {
+		return runDesktop(ctx, args[1:], out, stderr, openBrowser, version)
+	}
+	if args[0] == "mcp" {
+		return runMCP(ctx, args[1:], out, stderr, version)
+	}
+	if args[0] == "mcp-config" {
+		return runMCPConfig(ctx, args[1:], out, stderr)
+	}
+	if args[0] == "demo" {
+		return runDemo(ctx, args[1:], out, stderr, openBrowser, func(ctx context.Context, args []string, out, stderr io.Writer, open func(string) error) error {
+			return runStartReadOnly(ctx, args, out, stderr, open, version)
+		})
+	}
+	if args[0] == "index-github" || args[0] == "refresh-github" {
+		return runGitHub(ctx, args[0], args[1:], out, stderr)
+	}
 	if args[0] != "index" && args[0] != "search" && args[0] != "sources" && args[0] != "serve" && args[0] != "watch" && args[0] != "forget" {
 		return fmt.Errorf("unknown command %q; run findrail --help", args[0])
 	}
@@ -57,18 +107,28 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	fs.SetOutput(stderr)
 	dataDir := fs.String("data-dir", "", "directory for Findrail's private index")
 	var jsonOutput bool
+	var reportOutput, showPaths bool
 	maxBytes, limit, sourceID, addr := filesystem.DefaultMaxBytes, 20, "", "127.0.0.1:7766"
+	mode, format, pathPrefix, titleContains := "literal", "all", "", ""
 	maxPDFBytes := int64(16 << 20)
+	maxDOCXBytes := int64(8 << 20)
 	noSync := false
 	syncInterval := 5 * time.Minute
 	switch args[0] {
 	case "index":
 		fs.Int64Var(&maxBytes, "max-bytes", maxBytes, "maximum bytes per text document")
 		fs.Int64Var(&maxPDFBytes, "max-pdf-bytes", maxPDFBytes, "maximum bytes per PDF; 0 disables PDFs, maximum 33554432")
+		fs.Int64Var(&maxDOCXBytes, "max-docx-bytes", maxDOCXBytes, "maximum bytes per DOCX; 0 disables DOCX, maximum 16777216")
 		fs.BoolVar(&jsonOutput, "json", false, "output JSON")
+		fs.BoolVar(&reportOutput, "report", false, "include the committed diagnostics summary")
+		fs.BoolVar(&showPaths, "show-paths", false, "include bounded relative-path examples with --report")
 	case "search":
 		fs.IntVar(&limit, "limit", limit, "maximum search results, 1–100")
 		fs.StringVar(&sourceID, "source", "", "filter results by source ID")
+		fs.StringVar(&mode, "mode", "literal", "query mode: literal or advanced")
+		fs.StringVar(&format, "format", "all", "format: all, text, pdf, docx")
+		fs.StringVar(&pathPrefix, "path-prefix", "", "relative indexed path prefix")
+		fs.StringVar(&titleContains, "title-contains", "", "literal title substring")
 		fs.BoolVar(&jsonOutput, "json", false, "output JSON")
 	case "sources":
 		fs.BoolVar(&jsonOutput, "json", false, "output JSON")
@@ -94,6 +154,16 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 	if args[0] == "search" && fs.NArg() == 0 {
 		return fmt.Errorf("search requires a query")
 	}
+	searchRequest := search.Request{}
+	if args[0] == "search" {
+		searchRequest = search.Request{Query: strings.Join(fs.Args(), " "), SourceID: sourceID, Limit: limit, Mode: mode, Format: format, PathPrefix: pathPrefix, TitleContains: titleContains}
+		if limit < 1 || limit > 100 {
+			return search.ErrLimit
+		}
+		if err := search.ValidateRequest(searchRequest); err != nil {
+			return err
+		}
+	}
 	if (args[0] == "sources" || args[0] == "serve" || args[0] == "watch") && fs.NArg() != 0 {
 		return fmt.Errorf("%s does not accept positional arguments", args[0])
 	}
@@ -114,17 +184,54 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 		return err
 	}
 	newConnector := func(source connector.Source) (*filesystem.Connector, error) {
-		return filesystem.NewWithOptions(source.Root, filesystem.Options{MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, ExtractPDF: pdfextract.Extractor(executable)}, dir)
+		return filesystem.NewWithOptions(source.Root, filesystem.Options{MaxTextBytes: source.MaxTextBytes, MaxPDFBytes: source.MaxPDFBytes, MaxDOCXBytes: source.MaxDOCXBytes, RegistrationToken: source.RegistrationToken, RegistrationRevision: source.RegistrationRevision, ExtractPDF: pdfextract.Extractor(executable)}, dir)
 	}
 	switch args[0] {
 	case "index":
-		conn, err := newConnector(connector.Source{Root: fs.Arg(0), MaxTextBytes: maxBytes, MaxPDFBytes: maxPDFBytes})
+		if maxDOCXBytes < 0 || maxDOCXBytes > 16<<20 {
+			return fmt.Errorf("max-docx-bytes must be 0–16777216")
+		}
+		conn, err := newConnector(connector.Source{Root: fs.Arg(0), MaxTextBytes: maxBytes, MaxPDFBytes: maxPDFBytes, MaxDOCXBytes: maxDOCXBytes})
 		if err != nil {
 			return err
 		}
 		result, err := ingest.Run(ctx, store, conn)
 		if err != nil {
+			if jsonOutput {
+				result.Source.Root = ""
+				result.Source.Name = ""
+				if result.Attempt != nil && !showPaths {
+					copy := *result.Attempt
+					copy.Examples = nil
+					copy.FailurePath = ""
+					result.Attempt = &copy
+				}
+				var failure *ingest.ScanFailure
+				code := "operation_failed"
+				if errors.As(err, &failure) {
+					code = failure.Code
+				}
+				if encodeErr := json.NewEncoder(out).Encode(map[string]any{"committed": false, "result": result, "failure": map[string]string{"code": code}}); encodeErr != nil {
+					return encodeErr
+				}
+			} else if result.Attempt != nil {
+				if _, writeErr := fmt.Fprintf(out, "Scan not committed (%s): %d documents processed, %d skipped files, %d pruned directories. Previous snapshot/report remain available.\n", result.Attempt.FailureCode, result.Attempt.ProcessedDocuments, result.Attempt.SkippedFiles, result.Attempt.PrunedDirectories); writeErr != nil {
+					return writeErr
+				}
+				if showPaths && result.Attempt.FailurePath != "" {
+					if _, writeErr := fmt.Fprintf(out, "Failure at %s\n", safe(result.Attempt.FailurePath)); writeErr != nil {
+						return writeErr
+					}
+				}
+			}
 			return err
+		}
+		if !reportOutput {
+			result.Report = nil
+		} else if result.Report != nil && !showPaths {
+			copy := *result.Report
+			copy.Examples = nil
+			result.Report = &copy
 		}
 		if jsonOutput {
 			return json.NewEncoder(out).Encode(result)
@@ -133,11 +240,39 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 		if err == nil && result.SkippedPDF > 0 {
 			_, err = fmt.Fprintf(out, "Skipped %d PDFs: no usable text or extraction limits. OCR is not included.\n", result.SkippedPDF)
 		}
+		if err == nil && result.SkippedDOCX > 0 {
+			_, err = fmt.Fprintf(out, "Skipped %d DOCX files: disabled, unsupported, no body text, or extraction limit.\n", result.SkippedDOCX)
+		}
+		if err == nil && reportOutput {
+			if result.Report == nil {
+				_, err = fmt.Fprintln(out, "Indexing report unavailable for this connector.")
+			} else {
+				_, err = fmt.Fprintf(out, "Committed scan %s: %d indexed, %d skipped files, %d pruned directories.\n", result.Report.ID, result.Report.IndexedDocuments, result.Report.SkippedFiles, result.Report.PrunedDirectories)
+				for _, reason := range result.Report.Reasons {
+					if err != nil {
+						break
+					}
+					_, err = fmt.Fprintf(out, "  %s (%s): %d\n", reason.Code, reason.Unit, reason.Count)
+				}
+				if showPaths {
+					for _, sample := range result.Report.Examples {
+						if err != nil {
+							break
+						}
+						_, err = fmt.Fprintf(out, "  %s [%s]\n", safe(sample.Path), sample.Reason)
+					}
+				}
+			}
+		}
 		return err
 	case "search":
-		response, err := store.Search(ctx, search.Request{Query: strings.Join(fs.Args(), " "), SourceID: sourceID, Limit: limit})
+		response, err := store.Search(ctx, searchRequest)
 		if err != nil {
-			return err
+			var validation *search.ValidationError
+			if errors.As(err, &validation) || errors.Is(err, search.ErrQuery) || errors.Is(err, search.ErrLimit) {
+				return err
+			}
+			return fmt.Errorf("search unavailable")
 		}
 		if jsonOutput {
 			return json.NewEncoder(out).Encode(response)
@@ -179,7 +314,7 @@ func Run(ctx context.Context, args []string, out, stderr io.Writer, version stri
 		if _, err := fmt.Fprintf(out, "Findrail local UI: http://%s\n", addr); err != nil {
 			return err
 		}
-		return transport.Serve(ctx, addr, store, transport.WithSyncStatus(!noSync, manager.Status))
+		return transport.Serve(ctx, addr, store, transport.WithSyncStatus(!noSync, manager.Status), transport.WithDiagnostics(version))
 	case "forget":
 		if err := store.ForgetSource(ctx, fs.Arg(0)); err != nil {
 			return err

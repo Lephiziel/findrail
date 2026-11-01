@@ -1,8 +1,19 @@
 # Local alpha behaviour
 
+## Keyboard workflow
+
+Use Tab and Shift+Tab to move through the browser interface. Press `/` or
+`Ctrl+K` (`Cmd+K` on macOS) outside editable fields and dialogs to focus Search.
+Enter submits the search form; press Enter on a result's Preview button to open
+its indexed snapshot. Closing Preview restores focus to that result when it is
+still present, or to Search otherwise. Native dialogs provide their own focus
+order and Escape handling. The same shortcut summary is available in the UI.
+Automatic result refresh keeps the focused document selected across reordering;
+if it disappears, focus returns to Search. Refresh does not interrupt query editing.
+
 ## Automatic refresh
 
-`serve` starts refresh workers for registered filesystem sources. It scans at
+`start` and `serve` start refresh workers for registered filesystem sources. It scans at
 startup, listens to native directory notifications and reconciles every five
 minutes by default. New folders are watched after discovery. Events are
 coalesced with a 350 ms debounce and a two-second maximum debounce window.
@@ -28,6 +39,11 @@ in `/api/v1/sync` and the UI. The periodic full scan still reads and hashes ever
 eligible file. Large collections therefore need performance measurements before
 assuming low resource use.
 
+Alpha.3 filesystem folders may use root-level `.findrailignore` rules;
+failed policy reads preserve the last successful snapshot and successful scans
+apply pruning atomically. See [folder ignore rules](folder-ignore.md). This is
+not a published alpha.2 capability.
+
 ## PDF text
 
 The connector opens a selected PDF within `os.OpenRoot` and streams it to a
@@ -43,10 +59,21 @@ and text-budget-exceeding PDFs are skipped and included in skipped totals.
 Invalid / encrypted PDFs fail the source inventory; no partial changes commit.
 OCR and faithful visual PDF rendering are not implemented.
 
-Search matches all query terms anywhere in a document, including its title.
+## DOCX text
+
+Source builds extract the bounded main WordprocessingML body as plain text.
+Input defaults to 8 MiB, can be disabled with `--max-docx-bytes 0`, and is
+limited to 16 MiB maximum. DOCX previews and citations have no page numbers.
+Existing sources remain disabled after migration until explicitly re-indexed.
+See [DOCX policy and limits](docx.md).
+
+Literal search matches all query terms anywhere in a document, including its title.
+Alpha.3 also provides opt-in Advanced query syntax and server-side filters;
+see [search query semantics](search-query.md).
 For PDFs the returned page is the best matching page for one or more query
 terms. When terms span pages, a single excerpt may not contain every term.
-A title-only match has no matching page and opens page 1 by default.
+Legacy Literal title-only matches open page 1 by default. Advanced title-only PDF
+matches retain the original URI and report no page claim.
 
 ## Preview
 
@@ -59,13 +86,27 @@ file. The UI displays plain text, safely highlights query words and offers PDF
 page navigation. If files change before reindexing, the preview still shows the
 version that was indexed.
 
+`Copy location` copies only the original address. `Copy as Markdown` copies the
+selected passage from the current preview, or the whole current preview when
+nothing useful is selected. For PDFs, both the citation text and its `file:`
+source retain the current page. The result is always an indexed snapshot; the
+browser does not read the original file again. A truncated preview is marked in
+the citation, and the same Markdown is shown in a read-only field when the
+Clipboard API is unavailable or refuses the copy. The local `file:` address
+preserves provenance, but it is not a public link and may not open in every
+Markdown client.
+
 ## Upgrade
 
-Stop Findrail and back up its dedicated data directory. Migration 2 preserves
-schema 1 documents, adds media metadata, PDF pages / page FTS and source limits.
-The migration commits atomically. Old sources stay text-only until explicitly
-re-indexed, preserving their previous inclusion policy. The old binary rejects
-schema 2; restore the stopped-directory backup to downgrade.
+Stop Findrail and back up its dedicated data directory. Migrations are embedded
+and transactional: migration 2 adds media metadata, PDF pages / page FTS and
+source limits; migration 4 adds the DOCX limit and registration guards; migration
+5 adds frozen archive provenance; migration 6 adds last-successful indexing
+reports without rescanning or fabricating archive-origin diagnostics. Legacy
+sources keep DOCX disabled until explicitly configured/re-indexed. Schema-5
+sources have no report until a successful supported scan. Binaries predating
+these migrations reject newer schemas; restore a stopped-directory backup only
+with a compatible binary to downgrade.
 
 ## Alpha release scope
 
@@ -74,3 +115,17 @@ amd64. Cross-compilation is not full runtime certification. CI runs tests and
 the compiled journey on Linux, macOS and Windows; inspect the linked workflow
 for its actual outcome. Binaries are unsigned and unnotarized. Search relevance,
 100k-document scale, OCR and cloud sources are not established by these checks.
+
+## Built-in demo
+
+`demo` embeds three fictional documents and copies them to a new private
+temporary workspace. Documents and the demo index are sibling directories,
+so the index is excluded from ingestion. It delegates indexing, refresh and
+serving to `start`. It never resolves the normal data directory and accepts
+no personal folder or `--data-dir` override. Each invocation starts fresh.
+
+A normal shutdown stops HTTP and refresh workers, closes the store, and then
+removes the workspace. A forced kill or power loss can leave it in the OS
+temporary directory. Its path is printed so you can edit the synthetic note
+while recording or testing. Demo edits are discarded when the workspace is
+removed. Use `start DIRECTORY` for persistent personal sources.

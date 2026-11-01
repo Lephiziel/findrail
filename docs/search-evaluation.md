@@ -18,12 +18,26 @@ bin/findrail index --data-dir .findrail-evaluation examples/evaluation/documents
 bin/findrail search --data-dir .findrail-evaluation --json "kahve mercan"
 ```
 
+Source builds also provide a read-only evaluation command. Copy the source ID
+printed by `index` and run:
+
+```sh
+bin/findrail evaluate --data-dir .findrail-evaluation --source SOURCE_ID --queries examples/evaluation/queries.json --json
+```
+
+The command compares complete literal-search path sets for 1–100 cases and
+prints a deterministic report with the exact match rate. Any mismatch returns
+a nonzero exit status after the complete report. More than 100 matching
+documents makes a case incomplete and returns an error instead of scoring a
+truncated set. Evaluation reads an existing current-schema index; it does not
+create or migrate one.
+
 Do not index `examples/evaluation` itself: the JSON labels contain the query
 words and would contaminate the results. Use a fresh dedicated data directory,
 not an index containing personal sources. This evaluation does not need `serve`
 or an account and does not upload documents. The index contains plaintext data.
 
-For each JSON entry, pass `query` to `search --json` and compare the sorted
+For a manual comparison, pass each JSON entry's `query` to `search --json` and compare the sorted
 `results[].path` set with `expected_paths`. Record the tested commit, OS, CLI
 version, query, expected paths, observed paths, and whether they agree. Do not
 commit generated databases or logs of private queries. If a case fails on a

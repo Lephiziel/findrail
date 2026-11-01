@@ -2,9 +2,12 @@ openapi: 3.1.0
 info:
   title: Findrail local search API
   version: 0.1.0-alpha.1
-  description: Implemented read-only development API. The server binds to loopback,
-    checks Host and browser Origin, and has no remote authentication mode. It returns
-    indexed text and original local paths; clients must treat them as private data.
+  description: The API binds to loopback and returns indexed text and local paths,
+    which clients must treat as private. `serve` and `demo` expose read-only routes.
+    Only `start` enables the source mutation routes below. Mutations require an exact
+    Origin for the actual bound authority, `X-Findrail-Token` from the no-store
+    session endpoint, non-cross-site Fetch Metadata, and strict JSON up to 16 KiB.
+    This is browser-origin protection, not authentication against same-user processes.
 servers:
 - url: http://127.0.0.1:7766
 paths:
@@ -30,12 +33,12 @@ paths:
   /api/v1/search:
     get:
       operationId: search
-      summary: Search literal terms joined with AND semantics
+      summary: Search indexed documents in Literal or opt-in Advanced mode
       parameters:
       - name: q
         in: query
         required: true
-        description: Must contain letters or numbers; punctuation separates terms
+        description: Literal mode tokenizes punctuation as separators. Advanced mode uses the restricted grammar documented in docs/search-query.md; user input is compiled to safe FTS expressions, not passed through as SQL or raw MATCH syntax.
         schema:
           type: string
           minLength: 1
@@ -52,6 +55,22 @@ paths:
           minimum: 1
           maximum: 100
           default: 20
+      - name: mode
+        in: query
+        description: Literal is the compatible default; Advanced enables the restricted query grammar in docs/search-query.md.
+        schema: {type: string, enum: ['', literal, advanced], default: literal}
+      - name: format
+        in: query
+        description: Server-side media type filter.
+        schema: {type: string, enum: ['', all, text, pdf, docx], default: all}
+      - name: path_prefix
+        in: query
+        description: Relative indexed slash path; literal prefix with directory boundary.
+        schema: {type: string, maxLength: 512}
+      - name: title_contains
+        in: query
+        description: Literal, case-sensitive title substring.
+        schema: {type: string, maxLength: 128}
       responses:
         '200':
           description: Ranked matches and total match count
@@ -65,6 +84,116 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Unavailable'
+  /api/v1/search/pages:
+    get:
+      operationId: searchPages
+      summary: Read bounded cursor-based pages of a stable indexed search
+      description: Optional when the composed backend implements search.PageEngine. Read-only in start, desktop, serve and demo; all responses are no-store. Cursor is opaque and binds the complete query/filter tuple and fixed five-minute chain expiry. Search is limited to the first 1,000 ranked matches; total remains the full filtered count. Each JSON response, including its newline, is at most 524,288 bytes.
+      parameters:
+      - name: q
+        in: query
+        required: true
+        schema: {type: string, minLength: 1, maxLength: 256}
+      - name: mode
+        in: query
+        schema: {type: string, enum: ['', literal, advanced], default: literal}
+      - name: source
+        in: query
+        description: Exact source ID filter.
+        schema: {type: string}
+      - name: format
+        in: query
+        schema: {type: string, enum: ['', all, text, pdf, docx], default: all}
+      - name: path_prefix
+        in: query
+        schema: {type: string, maxLength: 512}
+      - name: title_contains
+        in: query
+        schema: {type: string, maxLength: 128}
+      - name: limit
+        in: query
+        schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+      - name: cursor
+        in: query
+        description: Opaque signed continuation. Repeat the full original search tuple unchanged; do not supply offset or page.
+        schema: {type: string, maxLength: 4096}
+      responses:
+        '200':
+          description: One byte-bounded page. end_reason is complete, window_limit, or null when another page is available.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchPageResponse'}
+              examples:
+                complete: {value: {results: [], total: 0, offset: 0, returned: 0, limit: 20, window_limit: 1000, next_cursor: null, end_reason: complete}}
+                continuation:
+                  summary: First of 24 results, with an illustrative opaque cursor
+                  value:
+                    results:
+                    - &pagedExample
+                      id: synthetic-note
+                      title: Synthetic note
+                      uri: file:///synthetic/docs/note.md
+                      path: docs/note.md
+                      source_id: synthetic-source
+                      source_name: Synthetic documents
+                      source_kind: filesystem
+                      snippet: '[retry] budget'
+                      score: -0.000001
+                      media_type: text/plain
+                      original_identity: '0000000000000000000000000000000000000000000000000000000000000000'
+                      snippet_truncated: false
+                    total: 24
+                    offset: 0
+                    returned: 1
+                    limit: 1
+                    window_limit: 1000
+                    next_cursor: opaque-cursor
+                    end_reason: null
+                windowLimit:
+                  value:
+                    results: [*pagedExample]
+                    total: 1200
+                    offset: 999
+                    returned: 1
+                    limit: 1
+                    window_limit: 1000
+                    next_cursor: null
+                    end_reason: window_limit
+        '400':
+          description: Invalid request/cursor (cursor_invalid, cursor_mismatch, invalid_limit, invalid_search_page_request) or search validation (syntax, missing_positive_term, query_too_large, invalid_mode, invalid_filter); validation errors retain position.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchPageError'}
+        '404':
+          description: Optional page capability unavailable (search_page_unavailable)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchPageError'}
+        '409':
+          description: Cursor expired, stale, or from another process session (cursor_expired, cursor_stale, cursor_session_changed)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchPageError'}
+        '429':
+          description: Pager admission capacity is busy (search_page_busy)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchPageError'}
+        '500':
+          description: One required result row cannot fit the response bound (page_result_too_large); unknown internal errors or an oversized backend response are search_page_unavailable
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchPageError'}
+        '503':
+          description: Pager is closed or unavailable (search_page_unavailable)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchPageError'}
+        '504':
+          description: Five-second pager budget exhausted (search_page_timeout)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchPageError'}
   /api/v1/sources:
     get:
       operationId: listSources
@@ -87,6 +216,465 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Unavailable'
+  /api/v1/sources/{id}/report:
+    get:
+      operationId: getSourceIndexingReport
+      summary: Read the latest committed source indexing report without triggering a scan
+      parameters:
+      - {$ref: '#/components/parameters/SourceID'}
+      - name: include_paths
+        in: query
+        description: Explicitly include at most 200 safe relative-path examples (at most 64 KiB serialized report).
+        schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Committed report, or explicit unavailable/frozen-origin status; paths are omitted unless include_paths=true and the serialized report is capped at 64 KiB.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SourceReportResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {description: Source does not exist}
+        '500': {$ref: '#/components/responses/Unavailable'}
+    post:
+      operationId: addSource
+      summary: Queue an explicitly selected folder or public GitHub source (start only)
+      parameters:
+      - $ref: '#/components/parameters/ManagementToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [type]
+              properties:
+                type: {type: string, enum: [folder, github]}
+                path: {type: string, maxLength: 4096}
+                repository: {type: string, maxLength: 300}
+                ref: {type: string, maxLength: 1024}
+                subdirectory: {type: string, maxLength: 1024}
+                max_docx_bytes:
+                  type: integer
+                  minimum: 0
+                  maximum: 16777216
+                  default: 8388608
+                  description: Folder DOCX input budget; 0 disables DOCX.
+      responses:
+        '202': {description: Job accepted}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Duplicate source or busy target}
+        '413': {description: Request exceeds 16 KiB}
+        '429': {description: Job queue is full}
+        '503': {description: Server is stopping}
+  /api/v1/capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Discover management and read-only client retrieval capabilities
+      responses:
+        '200':
+          description: Management is composition-dependent; retrieval contract is static
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [management, desktop, open_originals, collection_persistence, diagnostics, client_api_version, search_modes, search_filters, pdf_title_only_evidence, passage_preview]
+                properties:
+                  management: {type: boolean}
+                  portable_snapshots: {type: boolean, description: "True only when the complete writable management backend is composed; absent means false on older API v1 servers; source snapshot paths are local to the Findrail process host"}
+                  desktop: {type: boolean, description: Explicit desktop quit is available only in the desktop composition}
+                  open_originals: {type: boolean}
+                  collection_persistence: {type: boolean, description: "True only for writable start composition"}
+                  diagnostics: {type: boolean, description: "True when the opened backend exposes a bounded content-free support report"}
+                  evidence_bundle: {type: boolean, description: "True only when writable management and a complete bundle-capable collection backend are available"}
+                  client_api_version: {type: integer, const: 1}
+                  search_modes:
+                    type: array
+                    items: {type: string, enum: [literal, advanced]}
+                  search_filters:
+                    type: array
+                    items: {type: string, enum: [source, format, path_prefix, title_contains]}
+                  pdf_title_only_evidence: {type: boolean, const: true}
+                  passage_preview: {type: boolean, description: True when indexed text windows are supported}
+                  search_pagination: {type: boolean, description: True only when this backend supports GET /api/v1/search/pages; clients must treat an absent flag on older API v1 servers as false}
+  /api/v1/documents/{id}/passage:
+    get:
+      operationId: getDocumentPassage
+      summary: Read a bounded window of indexed text using an identity-bound literal anchor or code-point offset
+      description: Requires exactly one of q or start_char. mode=literal is allowed only with q. Unknown, duplicate and malformed query parameters are rejected. PDF uses the existing page-based document endpoint. Windows contain at most 65536 Unicode code points and 256 KiB UTF-8; the full JSON response is at most 512 KiB. Bodies larger than 1 MiB report anchor_unavailable and support manual windows.
+      parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+      - {name: original_identity, in: query, required: true, schema: {type: string}}
+      - {name: q, in: query, schema: {type: string, maxLength: 256}}
+      - {name: start_char, in: query, schema: {type: integer, minimum: 0}}
+      - {name: mode, in: query, schema: {type: string, enum: [literal]}}
+      responses:
+        '200':
+          description: Indexed text passage with full-content hash and canonical provenance
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PassageEvidence'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {description: Indexed document not found}
+        '409': {description: Snapshot identity changed}
+        '500': {description: Passage unavailable or response exceeds its bound}
+  /api/v1/diagnostics:
+    get:
+      operationId: getDiagnostics
+      summary: Read a bounded, content-free local support report
+      description: No paths, source/document identities, names, document text, queries, tokens, environment, arguments, logs, or raw database errors are included. The report is generated locally and is never uploaded.
+      responses:
+        '200':
+          description: Whitelisted support facts; JSON body is at most 16 KiB
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DiagnosticsReport'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/snapshots/inspect:
+    post:
+      operationId: inspectPortableSnapshot
+      summary: Validate a local source snapshot asynchronously (start/desktop only)
+      description: The absolute path is read on the Findrail host; this is not a browser upload or URL. Strict JSON body at most 32 KiB; path at most 4096 UTF-8 bytes. Management profile limits are 32 MiB compressed, 64 MiB expanded, 2000 documents and 20000 pages. One archive operation is decoded at a time. Full validation runs as a bounded existing job and takes at most two minutes.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [path], properties: {path: {type: string, minLength: 1, maxLength: 4096}}}
+      responses:
+        '202':
+          description: Existing async job; generic job records contain no archive path or claim
+          content: {application/json: {schema: {$ref: '#/components/schemas/JobEnvelope'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '413': {description: Request exceeds 32 KiB}
+        '429': {description: Bounded management job queue is full}
+  /api/v1/snapshots/inspections/{job_id}:
+    get:
+      operationId: getPortableSnapshotInspection
+      summary: Read the gated result for an inspect job
+      description: Requires same-origin session token. Successful results contain metadata only, never source name/location or document/page text. The one-time opaque claim expires after five minutes, is process-local, and is invalid after restart.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}, {name: job_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200':
+          description: Pending status or bounded successful metadata summary with import claim
+          content: {application/json: {schema: {$ref: '#/components/schemas/SnapshotInspection'}}}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown inspection job}
+        '409': {description: Inspection job failed or was canceled}
+        '410': {description: Preview lease expired}
+  /api/v1/snapshots/import:
+    post:
+      operationId: importPortableSnapshot
+      summary: Revalidate and atomically import a claimed snapshot asynchronously
+      description: Reopens the selected local file, revalidates hashes, limits and semantic fingerprint, and imports only the validated in-memory snapshot. Name at most 512 UTF-8 bytes. Does not reconnect to the origin.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [claim, name], properties: {claim: {type: string}, name: {type: string, minLength: 1, maxLength: 512}}}
+      responses:
+        '202': {description: Existing async import job; result is `imported:<source_id>` or `already_imported:<source_id>`}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: 'Invalid, expired, or replayed claim rejected before a job is accepted; a changed archive fails the accepted job before storage mutation'}
+  /api/v1/sources/{id}/snapshot-export:
+    post:
+      operationId: exportPortableSnapshot
+      summary: Export a source to a new local path asynchronously (start/desktop only)
+      description: Output path is interpreted on the Findrail host. Existing files, symlinks, the index directory and registered filesystem roots are refused. The v1 archive is plaintext. Profile limits match inspect; operation deadline is two minutes.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}, {name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [output_path], properties: {output_path: {type: string, minLength: 1, maxLength: 4096}}}
+      responses:
+        '202': {description: Existing async export job; result is `exported`; job records omit output path and archive contents}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Source target is busy before job acceptance}
+  /api/v1/collections/{id}/bundle:
+    get:
+      operationId: exportEvidenceBundle
+      summary: Export one saved collection revision as a portable evidence bundle (start/desktop only)
+      description: Requires the management token, including this GET. One bundle operation per process; five-second total budget. Responses are no-store.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}, {name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200':
+          description: JSON attachment from a single saved snapshot; at most 4 MiB.
+          headers:
+            Content-Disposition:
+              schema: {type: string, const: 'attachment; filename="findrail-evidence-bundle.json"'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EvidenceBundle'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Collection does not exist}
+        '413': {description: Saved evidence cannot fit a portable bundle}
+        '429': {description: One bundle operation is already in flight; retry later}
+        '500': {$ref: '#/components/responses/Unavailable'}
+        '504': {description: Five-second operation deadline exceeded}
+  /api/v1/collections/import/preview:
+    post:
+      operationId: previewEvidenceBundleImport
+      summary: Match every bundle citation against explicitly mapped indexed sources (start/desktop only)
+      description: Strict UTF-8 JSON, including escaped Unicode; duplicate, missing and unknown keys are rejected. The complete wrapper is at most 5 MiB and its raw bundle at most 4 MiB. Every source alias must be explicitly mapped. Read only indexed data; never fetch provenance. A claim is returned only when all entries and destination quotas match.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [bundle, mappings], properties: {bundle: {$ref: '#/components/schemas/EvidenceBundle'}, mappings: {type: object, maxProperties: 40, additionalProperties: {type: string, minLength: 1, maxLength: 512}}}}
+      responses:
+        '200':
+          description: Per-entry status and optional five-minute process-local claim; response including its newline is at most 256 KiB.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EvidenceBundlePreview'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Bundle mapping or indexed snapshot changed}
+        '413': {description: Request or bundle exceeds its byte or entry limits}
+        '429': {description: One bundle operation is already in flight; retry later}
+        '500': {$ref: '#/components/responses/Unavailable'}
+        '504': {description: 'Five-second operation deadline exceeded, including an incomplete body upload'}
+  /api/v1/collections/import:
+    post:
+      operationId: importEvidenceBundle
+      summary: Atomically create a new collection from a previously previewed bundle (start/desktop only)
+      description: Revalidate source registrations, indexed citations and quotas in the same writer transaction as all inserts. Import creates a new revision-1 collection and returns that exact committed snapshot. The strict UTF-8 wrapper is at most 5 MiB, the bundle at most 4 MiB, and the claim at most 32 KiB. Unknown, missing and duplicate fields are rejected. Claims expire after five minutes and cannot survive server restart or source Forget/re-add.
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [bundle, claim, title], properties: {bundle: {$ref: '#/components/schemas/EvidenceBundle'}, claim: {type: string, minLength: 1, maxLength: 32768}, title: {type: string, minLength: 1, maxLength: 256}}}
+      responses:
+        '201': {description: Newly created collection with destination-derived ordered evidence snapshots and fresh timestamps}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409':
+          description: Claim expired or tampered, source registration changed, or indexed data changed; preview again.
+        '413': {description: Request exceeds its byte limits or destination collection quota}
+        '429': {description: One bundle operation is already in flight; retry later}
+        '500': {$ref: '#/components/responses/Unavailable'}
+        '504': {description: 'Five-second operation deadline exceeded, including an incomplete body upload'}
+  /api/v1/collections:
+    get:
+      operationId: listEvidenceCollections
+      summary: List named collection metadata without passage payloads (start only)
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}]
+      responses:
+        '200': {description: Collection IDs, names, revisions, timestamps and entry counts}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: createEvidenceCollection
+      summary: Create a named collection (start only)
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [title], properties: {title: {type: string, maxLength: 256}}}
+      responses:
+        '201': {description: Created collection at revision 1}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/collections/{id}:
+    get:
+      operationId: getEvidenceCollection
+      summary: Load one collection and its bounded immutable snapshots (start only)
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}, {name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': {description: Collection including ordered entries and notes}
+        '404': {description: Collection not found}
+    put:
+      operationId: updateEvidenceCollection
+      summary: Atomically rename, reorder, edit notes or remove entries using an expected revision
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}, {name: id, in: path, required: true, schema: {type: string}}]
+      description: The complete edit is one SQLite transaction. Request bodies are capped at 4 MiB. Stale revisions or changed indexed identities return 409 without applying any edits. New entries require document_id, original_identity, page and excerpt; existing entry keys retain their historical snapshots.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [revision, title, entries]
+              properties:
+                revision: {type: integer, minimum: 1}
+                title: {type: string, maxLength: 256}
+                entries:
+                  type: array
+                  maxItems: 40
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [note]
+                    properties:
+                      key: {type: string, description: Existing saved entry key; omit/empty to pin a new exact passage}
+                      note: {type: string, maxLength: 2048}
+                      document_id: {type: string}
+                      original_identity: {type: string, pattern: '^[0-9a-f]{64}$', description: Indexed identity from the selected preview; required for new entries}
+                      page: {type: integer, minimum: 0}
+                      excerpt: {type: string, maxLength: 262144}
+                      whole_preview: {type: boolean}
+                      text_start_char: {type: integer, minimum: 0, default: 0, description: Unicode code-point start of the visible text window; zero for PDF}
+      responses:
+        '200': {description: Updated collection and incremented revision}
+        '409': {description: Stale revision or indexed identity; reload before retrying}
+    delete:
+      operationId: deleteEvidenceCollection
+      summary: Delete a collection under an expected revision
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}, {name: id, in: path, required: true, schema: {type: string}}, {name: revision, in: query, required: true, schema: {type: integer, minimum: 1}}]
+      responses:
+        '204': {description: Deleted}
+        '409': {description: Stale revision}
+  /api/v1/collections/{id}/entries:
+    post:
+      operationId: pinEvidenceEntry
+      summary: Pin an exact passage using document ID, indexed identity and page; provenance is resolved server-side
+      parameters: [{$ref: '#/components/parameters/ManagementToken'}, {name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [revision, document_id, original_identity, page, excerpt]
+              properties:
+                revision: {type: integer, minimum: 1}
+                document_id: {type: string}
+                original_identity: {type: string, pattern: '^[0-9a-f]{64}$'}
+                page: {type: integer, minimum: 0}
+                excerpt: {type: string, maxLength: 262144}
+                whole_preview: {type: boolean}
+                text_start_char: {type: integer, minimum: 0, default: 0, description: Unicode code-point start of the visible text window; zero for PDF}
+      responses:
+        '200': {description: Collection with immutable server-verified snapshot}
+        '404': {description: Collection or indexed document not found}
+        '409': {description: Stale revision or indexed identity}
+  /api/v1/session:
+    get:
+      operationId: getManagementSession
+      summary: Get the process-scoped in-memory mutation capability (start only)
+      responses:
+        '200': {description: No-store session token}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/desktop/identity:
+    get:
+      operationId: getDesktopInstanceIdentity
+      summary: Verify a desktop endpoint against its private instance record
+      parameters:
+      - name: X-Findrail-Desktop-Nonce
+        in: header
+        required: true
+        schema: {type: string, pattern: "^[0-9a-f]{64}$"}
+      responses:
+        '200': {description: Private instance identity; not enabled by serve or demo}
+  /api/v1/desktop/quit:
+    post:
+      operationId: quitDesktop
+      summary: Gracefully stop the desktop instance
+      description: Uses the same exact-origin, exact-host, Fetch Metadata, and process-scoped token checks as management mutations. Send an empty JSON body.
+      parameters:
+      - {$ref: '#/components/parameters/ManagementToken'}
+      responses:
+        '202': {description: Shutdown accepted; active jobs are drained before storage closes}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/sources/{id}/refresh:
+    post:
+      operationId: refreshSource
+      summary: Queue a manual refresh using the stored source configuration (start only)
+      parameters:
+      - {$ref: '#/components/parameters/SourceID'}
+      - {$ref: '#/components/parameters/ManagementToken'}
+      description: Send an empty body with Content-Type application/json.
+      responses:
+        '202': {description: Refresh job accepted}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown source}
+        '409': {description: Source already has an operation}
+        '429': {description: Job queue is full}
+  /api/v1/sources/{id}:
+    delete:
+      operationId: removeSource
+      summary: Queue confirmed logical removal from the local index (start only)
+      parameters:
+      - {$ref: '#/components/parameters/SourceID'}
+      - {$ref: '#/components/parameters/ManagementToken'}
+      description: Send an empty body with Content-Type application/json. Original files are untouched.
+      responses:
+        '202': {description: Removal job accepted; poll its job ID until terminal}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown source}
+        '409': {description: Removal already queued}
+        '429': {description: Job queue is full}
+  /api/v1/sources/{id}/configure:
+    post:
+      operationId: configureFolder
+      summary: Atomically update DOCX policy and re-index a filesystem source (start only)
+      parameters:
+      - {$ref: '#/components/parameters/SourceID'}
+      - {$ref: '#/components/parameters/ManagementToken'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [max_docx_bytes]
+              properties:
+                max_docx_bytes: {type: integer, minimum: 0, maximum: 16777216}
+      responses:
+        '202': {description: Configure job accepted; poll its job ID until terminal}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown source}
+        '409': {description: Source changed or another operation is active}
+        '429': {description: Job queue is full}
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      summary: List bounded process-memory job status (start only)
+      responses:
+        '200':
+          description: At most one hundred completed jobs plus active jobs; progress is process-local and contains no percentage.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs: {type: array, items: {$ref: '#/components/schemas/Job'}}
+  /api/v1/jobs/{id}:
+    get:
+      operationId: getJob
+      summary: Read one process-memory job
+      parameters:
+      - {$ref: '#/components/parameters/JobID'}
+      responses:
+        '200':
+          description: Job state; failed/canceled progress remains partial and never claims publication.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
+        '404': {description: Unknown or expired job}
+  /api/v1/jobs/{id}/cancel:
+    post:
+      operationId: cancelJob
+      summary: Cancel a queued/running job (start only)
+      parameters:
+      - {$ref: '#/components/parameters/JobID'}
+      - {$ref: '#/components/parameters/ManagementToken'}
+      description: Send an empty body with Content-Type application/json. Running cancellation returns only after operation cleanup when polled.
+      responses:
+        '204': {description: Cancellation accepted or job already terminal}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Unknown or expired job}
   /api/v1/documents/{id}:
     get:
       operationId: getEvidence
@@ -99,10 +687,10 @@ paths:
           type: string
       - name: page
         in: query
-        description: PDF page; omitted means page 1. Text documents must omit it.
+        description: PDF page; omitted means page 1. Page 0 requests a PDF title-only result without a page claim. Text documents must omit it.
         schema:
           type: integer
-          minimum: 1
+          minimum: 0
       responses:
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -123,6 +711,61 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Evidence'
+  /api/v1/originals/open:
+    post:
+      operationId: openOriginal
+      summary: Attempt to open a currently registered local original
+      description: Available only in the writable start composition when explicitly enabled. Same-origin POST requires the session token. The client supplies a document ID, opaque snapshot identity, action and optional indexed PDF page; it never supplies a path, URL, executable or command arguments. A 202 means a native launch was attempted, not that a viewer displayed the file.
+      parameters:
+      - name: Origin
+        in: header
+        required: true
+        schema: {type: string}
+      - name: X-Findrail-Token
+        in: header
+        required: true
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [document_id, original_identity, action]
+              properties:
+                document_id: {type: string, minLength: 1, maxLength: 512}
+                original_identity: {type: string, pattern: '^[0-9a-f]{64}$'}
+                action: {type: string, enum: [file, folder]}
+                page: {type: integer, minimum: 0, maximum: 100000, description: Positive indexed PDF page only; 0 or omission means no page request, including title-only matches and non-PDF files.}
+      responses:
+        '202':
+          description: Native spawn attempted; display is not guaranteed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, message]
+                properties:
+                  status: {type: string, const: attempted}
+                  message: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: Document is absent from the current index
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: Source registration/snapshot changed, or current file/type is unsafe or unavailable
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: Fixed native opener is unavailable
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /api/v1/sync:
     get:
       operationId: getSyncStatus
@@ -147,13 +790,34 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 components:
+  parameters:
+    ManagementToken:
+      name: X-Findrail-Token
+      in: header
+      required: true
+      description: In-memory capability returned by GET /api/v1/session; never put it in a URL.
+      schema: {type: string, minLength: 32, maxLength: 64}
+    SourceID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string}
+    JobID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, minLength: 32, maxLength: 32}
   responses:
     BadRequest:
-      description: Invalid query, result limit or PDF page
+      description: Invalid query, mode, search filter, result limit or PDF page
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+          examples:
+            invalidAdvancedQuery:
+              summary: An OR branch has no positive term
+              value: {error: "Each OR branch needs a positive term.", code: missing_positive_term, position: 9}
     Forbidden:
       description: Non-local Host or a browser Origin that differs from the request
         Host
@@ -168,6 +832,54 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    EvidenceBundle:
+      type: object
+      additionalProperties: false
+      required: [format, version, title, sources, entries]
+      properties:
+        format: {type: string, const: findrail-evidence-bundle}
+        version: {type: integer, const: 1}
+        title: {type: string, minLength: 1, maxLength: 256}
+        sources: {type: array, maxItems: 40, items: {type: object, additionalProperties: false, required: [alias, kind, display_name], properties: {alias: {type: string, pattern: '^s([1-9]|[1-3][0-9]|40)$'}, kind: {type: string, enum: [filesystem, github, archive]}, display_name: {type: string, maxLength: 512}}}}
+        entries: {type: array, maxItems: 40, items: {type: object, additionalProperties: false, required: [source_alias, relative_path, media_type, content_hash, page, start_char, text, note], properties: {source_alias: {type: string}, relative_path: {type: string, minLength: 1, maxLength: 512, description: Relative slash path; at most 2048 UTF-8 bytes}, media_type: {type: string, maxLength: 255}, content_hash: {type: string, pattern: '^[0-9a-f]{64}$'}, page: {type: integer, minimum: 0, maximum: 100000}, start_char: {type: integer, minimum: 0, maximum: 2147483647}, text: {type: string, minLength: 1, maxLength: 65536, description: Exact selected text; at most 256 KiB UTF-8}, note: {type: string, maxLength: 2048, description: At most 2048 UTF-8 bytes}}}}
+    EvidenceBundlePreview:
+      type: object
+      additionalProperties: false
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          maxItems: 40
+          items:
+            type: object
+            additionalProperties: false
+            required: [index, status]
+            properties:
+              index: {type: integer, minimum: 0, maximum: 39}
+              status: {type: string, enum: [match, unknown_source, missing_document, changed_hash, invalid_page, quote_mismatch, quota_conflict]}
+        claim: {type: string, maxLength: 32768}
+    DiagnosticsReport:
+      type: object
+      required: [report_version, version, go_version, goos, goarch, current_write_schema, checks, counts]
+      properties:
+        report_version: {type: integer, const: 1}
+        version: {type: string}
+        go_version: {type: string}
+        goos: {type: string}
+        goarch: {type: string}
+        index_schema: {type: integer, minimum: 0}
+        current_write_schema: {type: integer, minimum: 1}
+        checks:
+          type: array
+          maxItems: 16
+          items:
+            type: object
+            required: [id, status, code]
+            properties:
+              id: {type: string}
+              status: {type: string, enum: [ok, warning, error]}
+              code: {type: string}
+        counts: {type: object, additionalProperties: {type: integer, minimum: 0}, maxProperties: 32}
     Error:
       type: object
       required:
@@ -175,6 +887,14 @@ components:
       properties:
         error:
           type: string
+        code:
+          type: string
+          enum: [syntax, missing_positive_term, query_too_large, invalid_mode, invalid_filter, cursor_invalid, cursor_mismatch, cursor_expired, cursor_stale, cursor_session_changed, search_page_busy, search_page_unavailable, search_page_timeout, page_result_too_large, invalid_limit, invalid_search_page_request]
+          description: Stable search validation or paged-search error category.
+        position:
+          type: integer
+          minimum: 0
+          description: Zero-based Unicode code-point offset when the error points into the query.
     SearchResponse:
       type: object
       required:
@@ -230,14 +950,42 @@ components:
           description: Negative SQLite BM25 value; higher ranks first, not a probability
         media_type: &id007
           type: string
+        original_identity:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Opaque document, source-registration and indexed-content identity for the opt-in native open action.
         page: &id008
           type: integer
-          minimum: 1
-          description: Best matching PDF page; may match a subset of document query
-            terms
+          minimum: 0
+          description: Positive-evidence PDF page, or 0 when Advanced matches only the title.
         page_count: &id009
           type: integer
           minimum: 1
+    SearchPageResponse:
+      type: object
+      required: [results, total, offset, returned, limit, window_limit, next_cursor, end_reason]
+      properties:
+        results: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/SearchPageResult'}}
+        total: {type: integer, minimum: 0, description: Full filtered match count, including matches beyond the 1,000-result page window}
+        offset: {type: integer, minimum: 0, maximum: 999}
+        returned: {type: integer, minimum: 0, maximum: 100}
+        limit: {type: integer, minimum: 1, maximum: 100}
+        window_limit: {type: integer, const: 1000}
+        next_cursor: {type: [string, 'null'], maxLength: 4096}
+        end_reason: {type: [string, 'null'], enum: [complete, window_limit, null]}
+    SearchPageResult:
+      allOf:
+      - {$ref: '#/components/schemas/SearchResult'}
+      - type: object
+        required: [snippet_truncated]
+        properties:
+          snippet: {type: string, maxLength: 1024, description: Plain-text excerpt capped at 1,024 Unicode code points}
+          snippet_truncated: {type: boolean, description: True when the paged excerpt was shortened to the 1,024-code-point limit}
+    SearchPageError:
+      allOf:
+      - {$ref: '#/components/schemas/Error'}
+      - type: object
+        required: [error, code]
     Source:
       type: object
       required:
@@ -252,7 +1000,7 @@ components:
           type: string
         kind:
           type: string
-          const: filesystem
+          enum: [filesystem, github, archive]
         name:
           type: string
         root:
@@ -269,6 +1017,109 @@ components:
         max_pdf_bytes:
           type: integer
           description: 0 disables PDF extraction for this source
+        max_docx_bytes:
+          type: integer
+          description: Folder DOCX input limit in bytes; 0 disables DOCX (legacy sources default to 0).
+        github:
+          type: object
+          description: Present only for public GitHub snapshots
+          properties:
+            owner: {type: string}
+            repo: {type: string}
+            ref_mode: {type: string, enum: [default, ref, commit]}
+            ref_value: {type: string}
+            selected_path: {type: string}
+            sha: {type: string, pattern: '^[0-9a-f]{40}$'}
+            last_error: {type: string, maxLength: 512}
+        indexing_report:
+          $ref: '#/components/schemas/IndexingReportSummary'
+    IndexingReportSummary:
+      type: object
+      required: [available]
+      properties:
+        available: {type: boolean}
+        availability: {type: string, enum: [available, not_yet_available, frozen_origin_report_not_in_portable_v1]}
+        report_id: {type: string}
+        operation: {type: string, enum: [initial_index, refresh, configure, github_publication]}
+        finished_at: {type: string, format: date-time}
+        indexed_documents: {type: integer, minimum: 0}
+        skipped_files: {type: integer, minimum: 0}
+        pruned_directories: {type: integer, minimum: 0}
+        coverage: {type: string}
+        reasons:
+          type: array
+          maxItems: 45
+          items:
+            type: object
+            required: [code, count, unit]
+            properties:
+              code: {type: string}
+              count: {type: integer, minimum: 0}
+              unit: {type: string, enum: [file, directory, entry]}
+    SourceReportResponse:
+      type: object
+      required: [available, source_id, source_kind, availability]
+      properties:
+        available: {type: boolean}
+        source_id: {type: string}
+        source_kind: {type: string}
+        availability: {type: string, enum: [available, not_yet_available, frozen_origin_report_not_in_portable_v1]}
+        report:
+          oneOf:
+          - {$ref: '#/components/schemas/IndexingReportSummary'}
+          - {$ref: '#/components/schemas/CommittedIndexingReport'}
+    CommittedIndexingReport:
+      type: object
+      description: At most 200 exact relative-path examples; complete serialized report at most 64 KiB.
+      required: [format_version, id, source_id, source_kind, operation, committed, complete, indexed_documents, updated_documents, unchanged_documents, removed_documents, skipped_files, skipped_entries, pruned_directories, reasons, coverage]
+      properties:
+        format_version: {type: integer, enum: [1]}
+        id: {type: string}
+        source_id: {type: string}
+        source_kind: {type: string, enum: [filesystem, github]}
+        snapshot_id: {type: string}
+        operation: {type: string, enum: [initial_index, refresh, configure, github_publication]}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        duration_millis: {type: integer, minimum: 0}
+        committed: {type: boolean, enum: [true]}
+        complete: {type: boolean, enum: [true]}
+        indexed_documents: {type: integer, minimum: 0}
+        updated_documents: {type: integer, minimum: 0}
+        unchanged_documents: {type: integer, minimum: 0}
+        removed_documents: {type: integer, minimum: 0}
+        observed_entries: {type: integer, minimum: 0}
+        observed_entries_known: {type: boolean}
+        observed_files: {type: integer, minimum: 0}
+        observed_files_known: {type: boolean}
+        observed_directories: {type: integer, minimum: 0}
+        observed_directories_known: {type: boolean}
+        skipped_files: {type: integer, minimum: 0}
+        skipped_entries: {type: integer, minimum: 0}
+        pruned_directories: {type: integer, minimum: 0}
+        coverage: {type: string, enum: [complete_filesystem, selected_github_candidates]}
+        examples_omitted: {type: integer, minimum: 0}
+        redacted_samples: {type: integer, minimum: 0}
+        examples:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            required: [path, unit, reason]
+            properties:
+              path: {type: string, minLength: 1, maxLength: 2048, description: Safe relative path; never an absolute root.}
+              unit: {type: string, enum: [file, directory, entry]}
+              reason: {type: string}
+        reasons:
+          type: array
+          maxItems: 45
+          items:
+            type: object
+            required: [code, count, unit]
+            properties:
+              code: {type: string}
+              count: {type: integer, minimum: 0}
+              unit: {type: string, enum: [file, directory, entry]}
     Evidence:
       type: object
       required:
@@ -295,6 +1146,9 @@ components:
         page_count: *id009
         content_hash:
           type: string
+        original_identity:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
         modified_at:
           type: string
           format: date-time
@@ -303,6 +1157,16 @@ components:
           maxLength: 65536
         truncated:
           type: boolean
+    PassageEvidence:
+      allOf:
+      - {$ref: '#/components/schemas/Evidence'}
+      - type: object
+        required: [original_identity, text_start_char, text_total_chars, match_kind]
+        properties:
+          text_start_char: {type: integer, minimum: 0}
+          text_total_chars: {type: integer, minimum: 0}
+          match_kind: {type: string, enum: [literal_body, title_only, window, anchor_unavailable]}
+          truncated: {type: boolean, description: True whenever the window omits any part of the indexed body, including a missing prefix}
     SyncStatus:
       type: object
       required:
@@ -333,11 +1197,68 @@ components:
           format: date-time
         last_error:
           type: string
+          description: Bounded safe text; omitted when there is no current refresh error.
+        last_error_code:
+          type: string
+          description: Optional stable refresh error code; unknown values must be treated as unknown.
         watch_warning:
           type: string
+          description: Bounded safe text; a warning does not imply that a refresh has committed.
+        watch_warning_code:
+          type: string
+          description: Optional stable watcher warning code; unknown values must be treated as unknown.
         skipped:
           type: integer
           minimum: 0
         skipped_pdf:
           type: integer
           minimum: 0
+        progress:
+          $ref: '#/components/schemas/Progress'
+    Job:
+      type: object
+      properties:
+        id: {type: string}
+        type: {type: string, enum: [add_folder, add_github, configure, refresh, remove, snapshot-inspect, snapshot-import, snapshot-export]}
+        target: {type: string, description: Snapshot jobs use non-path safe targets}
+        source_id: {type: string}
+        status: {type: string, enum: [queued, running, succeeded, failed, canceled]}
+        phase: {type: string}
+        result: {type: string, description: Snapshot inspect has no generic result; import exposes status and destination source ID only; export exposes `exported`}
+        error_code: {type: string}
+        error: {type: string}
+        progress: {$ref: '#/components/schemas/Progress'}
+    JobEnvelope:
+      type: object
+      required: [job]
+      properties:
+        job: {$ref: '#/components/schemas/Job'}
+    SnapshotInspection:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [queued, running, succeeded, failed, canceled, expired, not_found]}
+        format: {type: string, enum: [findrail-portable-snapshot]}
+        version: {type: integer, const: 1}
+        kind: {type: string, enum: [filesystem, github, archive]}
+        documents: {type: integer, minimum: 0, maximum: 2000}
+        pages: {type: integer, minimum: 0, maximum: 20000}
+        bytes: {type: integer, minimum: 0, maximum: 33554432, description: Compressed archive bytes}
+        fingerprint: {type: string, pattern: '^[0-9a-f]{64}$'}
+        frozen: {type: boolean, const: true}
+        claim: {type: string, description: One-use opaque process-local claim; five-minute TTL}
+        error: {type: string}
+    Progress:
+      type: object
+      required: [attempt_id, sequence, phase, processed_documents, skipped_entries, elapsed_millis, partial]
+      properties:
+        attempt_id: {type: string}
+        sequence: {type: integer, minimum: 0}
+        phase: {type: string, enum: [validating, resolving, downloading, indexing, enumerating_extracting, publishing, removing, done]}
+        processed_documents: {type: integer, minimum: 0}
+        skipped_entries: {type: integer, minimum: 0}
+        elapsed_millis: {type: integer, minimum: 0}
+        partial: {type: boolean}
+        committed: {type: boolean}
+        report_id: {type: string}
+        failure_code: {type: string}

@@ -8,21 +8,30 @@ use and unsolicited contributions are stronger signals of product value.
 
 ## Positioning to validate
 
-Onyx and Khoj already cover connected knowledge and personal AI. Findrail should
-test whether a smaller local install, useful keyword search without a required
-model account, source-backed previews, and transparent freshness are enough to
-win a specific audience. Do not claim those features are absent from competitors
-without a versioned comparison.
+Recoll and DocFetcher already provide local document search. Obsidian's
+Omnisearch supports PDF search through Text Extractor, and QMD already offers
+local search and MCP. Findrail should test a specific workflow: remembered words
+across selected folders of notes, code and text PDFs, with inspectable passages,
+PDF page locations and no model setup for keyword search. This is an audience
+hypothesis, not a claim of unique features or measured superiority.
 
-References: [Onyx](https://github.com/onyx-dot-app/onyx),
-[Khoj](https://github.com/khoj-ai/khoj).
+References: [Recoll](https://www.recoll.org/),
+[DocFetcher](https://docfetcher.sourceforge.io/),
+[Omnisearch](https://github.com/scambier/obsidian-omnisearch),
+[QMD](https://github.com/tobi/qmd).
 
 ## First public demonstration
 
-Use an entirely public demo corpus. Search a remembered phrase across a local
-note and a GitHub issue, inspect the evidence, update the source, and show the
-fresh result. Until GitHub is implemented, demonstrations must show local
-sources only and label future product mockups accurately.
+For the released alpha.2, use the three fictional documents in `findrail demo`:
+a local note, Go source and a two-page text PDF. Search a remembered word,
+inspect PDF page 2, and recover the original location. An edited recording is
+a workflow demonstration, not a latency benchmark.
+
+A separate source-build demonstration may include a public GitHub **file**
+snapshot pinned to a commit and retrieval through the scoped read-only MCP
+server. GitHub issues and private repositories are not supported. Refresh is
+explicit; the MCP server does not fetch or refresh repositories. Keep these
+source-only features separate from claims about the published alpha archives.
 
 ## Launch sequence
 
@@ -53,6 +62,8 @@ than remove basic local capabilities.
 
 ## Concrete local-alpha launch
 
-See the [30-day launch plan](ru/launch.md) for a demo script, tester journey,
-community-specific material, voluntary metrics and an announcement draft.
-It describes work to perform; no outreach or posts have been sent.
+See the [English launch record](launch/README.md) and
+[project facts and media](launch/press-kit.md). The author reports initial
+publication on X, Reddit and Product Hunt; editorial submissions remain
+unverified. Distinguish prepared copy, sent submissions, editorial publication,
+archive downloads and confirmed independent use.

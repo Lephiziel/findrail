@@ -1,0 +1,165 @@
+name: Packaged candidate journey
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      archive_url:
+        description: Public URL of the already-built Linux amd64 candidate archive
+        required: true
+        type: string
+      archive_sha256:
+        description: SHA-256 of that archive
+        required: true
+        type: string
+      candidate_sha:
+        description: Full source revision recorded in BUILD-INFO.json
+        required: true
+        type: string
+      candidate_version:
+        description: Version reported by the packaged executable
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  linux-packaged-journey:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha }}
+      CANDIDATE_VERSION: ${{ github.event_name == 'pull_request' && '0.1.0-beta.1' || inputs.candidate_version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Read the repository's preparation candidate selector
+        if: github.event_name == 'pull_request'
+        run: |
+          version=$(cat build/package/CANDIDATE_VERSION)
+          test "$version" = 0.1.0-beta.1
+          echo "CANDIDATE_VERSION=$version" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Candidate identity regression tests
+        run: python -m unittest scripts/test_packaged_journey.py
+      - name: Build a PR preview through the production packager
+        if: github.event_name == 'pull_request'
+        run: python scripts/package.py --version "$CANDIDATE_VERSION" --require-clean --target linux-amd64 --output "$RUNNER_TEMP/candidate"
+      - name: Download the supplied candidate
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          ARCHIVE_URL: ${{ inputs.archive_url }}
+          ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$ARCHIVE_URL" == https://* ]]
+          [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_VERSION" == 0.1.0-alpha.5 || "$CANDIDATE_VERSION" == 0.1.0-beta.1 ]]
+          mkdir -p "$RUNNER_TEMP/candidate"
+          ARCHIVE="findrail_${CANDIDATE_VERSION}_linux-amd64.tar.gz"
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error "$ARCHIVE_URL" -o "$RUNNER_TEMP/candidate/$ARCHIVE"
+          printf '%s  %s\n' "$ARCHIVE_SHA256" "$ARCHIVE" > "$RUNNER_TEMP/candidate/SHA256SUMS.txt"
+      - name: Verify and safely extract the candidate
+        run: |
+          python - <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import package
+          source = pathlib.Path(os.environ['RUNNER_TEMP']) / 'candidate'
+          version = os.environ['CANDIDATE_VERSION']
+          archive = source / f'findrail_{version}_linux-amd64.tar.gz'
+          package.verify_manifest(source)
+          package.verify_archive(archive, 'linux-amd64', version)
+          root = package.extract_verified(archive, pathlib.Path(os.environ['RUNNER_TEMP']) / 'install space 📦')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              output.write(f'CANDIDATE_DIR={root}\n')
+          PY
+      - name: Fetch pinned published alpha.3 for the stopped-backup restore check
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/findrail_0.1.0-alpha.3_linux-amd64.tar.gz"
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error \
+            https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.3/findrail_0.1.0-alpha.3_linux-amd64.tar.gz -o "$archive"
+          echo 'b8e9d606e6487745a9f96d4453114e7ef6ec74fcde242a7da20a059462b3b9e9  '"$archive" | sha256sum --check --status
+          python - "$archive" "$RUNNER_TEMP/alpha3-reference" <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import package
+          archive, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          package.verify_archive(archive, 'linux-amd64', '0.1.0-alpha.3', 6)
+          root = package.extract_verified(archive, out)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'ALPHA3_BINARY={root / "findrail"}\n')
+          PY
+      - name: Fetch pinned published alpha.4 for schema-7 restore
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/findrail_0.1.0-alpha.4_linux-amd64.tar.gz"
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error \
+            https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.4/findrail_0.1.0-alpha.4_linux-amd64.tar.gz -o "$archive"
+          echo '41f91c62b618a64dc083f7a63403f7f4fcc6f8b13ffb613acfee6704927f6a1a  '"$archive" | sha256sum --check --status
+          python - "$archive" "$RUNNER_TEMP/alpha4-reference" <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import package
+          archive, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          package.verify_archive(archive, 'linux-amd64', '0.1.0-alpha.4', 7)
+          root = package.extract_verified(archive, out)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'ALPHA4_BINARY={root / "findrail"}\n')
+          PY
+      - name: Fetch pinned published alpha.5 for beta same-schema compatibility
+        if: env.CANDIDATE_VERSION == '0.1.0-beta.1'
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/findrail_0.1.0-alpha.5_linux-amd64.tar.gz"
+          curl --proto '=https' --proto-redir '=https' --fail --location --silent --show-error \
+            https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_linux-amd64.tar.gz -o "$archive"
+          echo '78885728107e26be6db18f93c0f94ee6af92b585f00aea21dd93ba9e19a5a8f0  '"$archive" | sha256sum --check --status
+          python - "$archive" "$RUNNER_TEMP/alpha5-reference" <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import package
+          archive, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          package.verify_archive(archive, 'linux-amd64', '0.1.0-alpha.5', 8)
+          root = package.extract_verified(archive, out)
+          import json
+          info = json.loads((root / 'BUILD-INFO.json').read_text(encoding='utf-8'))
+          if (info.get('revision'), info.get('version'), info.get('schema_version'), info.get('dirty')) != ('cb53ee9638f69b47b386921e41368f3b66ceddde', '0.1.0-alpha.5', 8, False):
+              raise SystemExit('published alpha.5 reference provenance mismatch')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'ALPHA5_BINARY={root / "findrail"}\n')
+          PY
+      - name: Install pinned matched Chromium and driver
+        run: |
+          python -m pip install --disable-pip-version-check 'selenium==4.35.0'
+          npm install --global --ignore-scripts '@puppeteer/browsers@2.10.6'
+          npx --yes @puppeteer/browsers@2.10.6 install chrome@139.0.7258.66 --path "$RUNNER_TEMP/chrome-for-testing"
+          npx --yes @puppeteer/browsers@2.10.6 install chromedriver@139.0.7258.66 --path "$RUNNER_TEMP/chrome-for-testing"
+      - name: Prepare the offline synthetic GitHub fixture writer (not the application)
+        run: go build -o "$RUNNER_TEMP/evidence-collection-fixture" ./scripts/evidence_collection_fixture.go
+      - name: Run the extracted candidate journey
+        env:
+          FINDRAIL_CHROME: ${{ runner.temp }}/chrome-for-testing/chrome/linux-139.0.7258.66/chrome-linux64/chrome
+          FINDRAIL_CHROMEDRIVER: ${{ runner.temp }}/chrome-for-testing/chromedriver/linux-139.0.7258.66/chromedriver-linux64/chromedriver
+        run: |
+          args=(--alpha3-binary "$ALPHA3_BINARY" --alpha4-binary "$ALPHA4_BINARY")
+          if [[ "$CANDIDATE_VERSION" == 0.1.0-beta.1 ]]; then args+=(--alpha5-binary "$ALPHA5_BINARY"); fi
+          python scripts/packaged_journey.py "$CANDIDATE_DIR/findrail" --candidate-sha "$CANDIDATE_SHA" --candidate-version "$CANDIDATE_VERSION" "${args[@]}" --evidence-fixture "$RUNNER_TEMP/evidence-collection-fixture" --report "$RUNNER_TEMP/packaged-journey-report.json"
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: packaged-journey-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/packaged-journey-report.json
+          if-no-files-found: warn
+          retention-days: 14

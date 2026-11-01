@@ -1,0 +1,55 @@
+name: Voluntary desktop first-run report
+description: Optional manual desktop first-run observations on Linux, Windows, or macOS
+title: "[Manual first run] "
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Optional manual feedback for the verified release kit linked from
+        https://github.com/Lephiziel/findrail/releases. Automated CI/native
+        testing is not a manual desktop experience. Do not provide private paths,
+        documents, queries, logs, device identifiers, or credentials. A local
+        private report is fine; public issue submission is optional. You do not
+        need to find or provide a Git SHA; unknown identity is useful qualitative
+        feedback, but cannot match candidate evidence.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: ["Linux amd64 (linux-amd64)", "Windows amd64 (windows-amd64)", "Apple Silicon (darwin-arm64)", "Intel macOS (darwin-amd64, experimental)", "Linux arm64 (experimental)"]
+    validations:
+      required: true
+  - type: input
+    id: identity
+    attributes:
+      label: Version or release (if known)
+      description: Optional. Do not search for a Git SHA; unknown version or source is still useful qualitative feedback.
+    validations:
+      required: false
+  - type: input
+    id: archive_sha256
+    attributes:
+      label: Archive SHA-256 (if available)
+      description: Optional. Copy only if available; do not guess or look it up for this form.
+  - type: textarea
+    id: cases
+    attributes:
+      label: Manual cases
+      description: For each item note passed, failed, or not run and actual elapsed seconds if known; otherwise say unknown. Describe obstacles without private details.
+      value: |
+        install:
+        launch:
+        repeat-launch:
+        retrieval:
+        collection-restart:
+        refresh:
+        quit:
+        uninstall-data-preserved:
+    validations:
+      required: true
+  - type: textarea
+    id: obstacle
+    attributes:
+      label: Optional obstacle or notes
+      description: Do not include private content, paths, logs, or queries.
