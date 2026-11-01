@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
 
 	"github.com/Lephiziel/findrail/internal/devtools/resourcecheck"
 )
@@ -30,7 +29,7 @@ func main() {
 		if f.NArg() != 0 {
 			usage()
 		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
 		defer stop()
 		code := resourcecheck.RunRecovery(ctx, resourcecheck.RecoveryOptions{Binary: *binary, ExpectedHash: *hash, Revision: *revision, Schema: *schema, WorkDir: *work, Report: *report, Deadline: *deadline})
 		os.Exit(code)
@@ -41,7 +40,7 @@ func main() {
 		if f.NArg() != 0 {
 			usage()
 		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
 		defer stop()
 		result, err := resourcecheck.RunPortable(ctx, *binary)
 		if err != nil {

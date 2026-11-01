@@ -18,7 +18,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -50,7 +49,7 @@ type child struct {
 
 func start(ctx context.Context, binary string, args ...string) (*child, error) {
 	c := &child{cmd: exec.CommandContext(ctx, binary, args...), readers: make(chan struct{}, 2)}
-	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureProcessGroup(c.cmd)
 	out, err := c.cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -123,8 +122,7 @@ func stopGroup(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	_ = cmd.Process.Kill()
+	killProcessGroup(cmd)
 }
 
 func boundedWait(c *child) {

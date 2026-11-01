@@ -106,7 +106,7 @@ func TestStopGroupKillsLeaderAndDescendant(t *testing.T) {
 	defer cancel()
 	heartbeat := filepath.Join(t.TempDir(), "heartbeat")
 	// A short-lived shell leader leaves a writing descendant in its process group.
-	command := "(while :; do printf x >> '" + heartbeat + "'; done) & exit 0"
+	command := "(while :; do printf x >> '" + heartbeat + "'; done) & while [ ! -f '" + heartbeat + "' ]; do sleep .005; done; exit 0"
 	c, err := start(ctx, "/bin/sh", "-c", command)
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func TestTimeoutKillsProcessGroup(t *testing.T) {
 		t.Skip("Linux process groups")
 	}
 	heartbeat := filepath.Join(t.TempDir(), "heartbeat")
-	command := "(while :; do printf x >> '" + heartbeat + "'; done) & sleep 30"
+	command := "(while :; do printf x >> '" + heartbeat + "'; done) & while [ ! -f '" + heartbeat + "' ]; do sleep .005; done; sleep 30"
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	c, err := start(ctx, "/bin/sh", "-c", command)
