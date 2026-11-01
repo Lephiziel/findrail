@@ -1,6 +1,6 @@
 # Manual evidence intake
 
-`scripts/manual_evidence.py` is an offline maintainer utility. It reads only
+`cmd/findrail-manual` is an offline maintainer utility. It reads only
 explicit local JSON paths; it does not access the network, contact reporters, or
 decide release readiness. The operator is responsible for voluntarily receiving
 reports and checking their provenance. A report may remain private locally.
@@ -93,16 +93,23 @@ Unknown SHA feedback can still be qualitatively useful, but it cannot match a
 candidate or count as release evidence.
 
 Only allowlisted evidence fields go to `supplemental.json`; free-form obstacle
-text and local input paths do not. JSON is capped at 1 MiB per file, usage intake
-at 100 reports; duplicate keys, non-finite numbers, unknown fields, malformed
-types, and invalid identities are rejected. Inputs are parsed as data and never
-executed or rendered as HTML. Console output and `intake.json` contain only
-fixed issue codes, counts, and safe references.
+text and local input paths do not. Go parses each candidate/report from one
+bounded byte snapshot (1 MiB per parser input); usage intake is capped at 100
+reports. Duplicate keys, trailing JSON, non-finite/overflow numbers, unknown
+fields, malformed types, and invalid identities are rejected. Beta handoff raw
+reports retain their separate 8 KiB limit; it is not substituted for the parser
+or batch bound. Transferable JSON output is capped at 8 MiB, with at most 4 MiB
+of references in a batch summary. Inputs are parsed as data and never executed or
+rendered as HTML. Console output and `intake.json` contain only fixed issue codes,
+counts, and safe references.
 
 ## Run
 
 ```sh
-python3 scripts/manual_evidence.py \
+go build -o /absolute/path/findrail-manual ./cmd/findrail-manual
+/absolute/path/findrail-manual intake \
+  --python "$(command -v python3)" \
+  --readiness "$PWD/scripts/readiness.py" \
   --candidate /absolute/path/verified-candidate.json \
   --report /absolute/path/report.json \
   --output /absolute/path/intake
@@ -119,6 +126,17 @@ records. Any rerun removes prior success files before validation, so a failed
 rerun cannot leave stale evidence. Incomplete and invalid reports are counted,
 never silently filtered into an apparent complete set. Keep test fixtures out of
 actual readiness runs.
+
+`findrail-manual validate` is the bounded single-report protocol used by beta
+automation; it requires explicit `--python`, `--readiness`, `--candidate`, and
+`--report` paths. It emits only fixed classification and sanitized outcomes. The
+prebuilt tool is supplied explicitly; acceptance paths never invoke `go run` or
+build a tool on demand. Beta callers use this same protocol for raw Linux intake,
+incomplete Windows handoff, assemble, independent verify, and refresh. They pass
+the original report file bytes to Go (not a Python-decoded/re-encoded object) and
+use the original candidate summary byte snapshot for strict context validation.
+Beta raw manual report files remain separately capped at 8 KiB; the Go parser's
+1 MiB bound and the 100-report batch cap are unchanged.
 
 An issue form is optional; a local private report is allowed. Publishing any
 report is a separate voluntary human action. Native automated tests are not

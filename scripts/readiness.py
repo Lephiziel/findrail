@@ -242,13 +242,28 @@ def classify(candidate, supplemental=(), *, candidate_sha=None, candidate_versio
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manual-context", action="store_true",
+                        help=argparse.SUPPRESS)
     parser.add_argument("--candidate", required=True, type=pathlib.Path)
-    parser.add_argument("--candidate-sha", required=True)
-    parser.add_argument("--candidate-version", required=True)
+    parser.add_argument("--candidate-sha")
+    parser.add_argument("--candidate-version")
     parser.add_argument("--recovery", type=pathlib.Path)
     parser.add_argument("--evidence", action="append", type=pathlib.Path, default=[])
-    parser.add_argument("--output", required=True, type=pathlib.Path)
+    parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
+    if args.manual_context:
+        try:
+            candidate = _json(args.candidate)
+            native = strict_candidate(candidate)
+            context = {"protocol_version": 1, "candidate": candidate, "native_archives": {
+                target: record["archive"]["sha256"] for target, record in native.items()}}
+            print(json.dumps(context, sort_keys=True, allow_nan=False))
+            return 0
+        except (ValueError, OSError, KeyError, TypeError, RecursionError):
+            print('{"error":"candidate_invalid"}')
+            return 1
+    if not args.candidate_sha or not args.candidate_version or not args.output:
+        parser.error("--candidate-sha, --candidate-version, and --output are required")
     try:
         require(len(args.evidence) <= len(KINDS))
         records = [_json(path) for path in args.evidence]
