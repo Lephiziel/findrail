@@ -15,7 +15,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "unexpected arguments")
 		os.Exit(2)
 	}
-	if err := connectorkit.Run(*root); err != nil {
+	ctx, stop := interruptContext()
+	defer stop()
+	if err := connectorkit.RunContext(ctx, *root); err != nil {
 		fmt.Fprintln(os.Stderr, "connector kit:", err)
 		os.Exit(1)
 	}

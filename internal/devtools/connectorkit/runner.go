@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -48,6 +49,10 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 }
 
 func Run(root string) error {
+	return RunContext(context.Background(), root)
+}
+
+func RunContext(parent context.Context, root string) error {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return fmt.Errorf("resolve root: %w", err)
@@ -62,7 +67,7 @@ func Run(root string) error {
 	if err := requireGo(exec.LookPath); err != nil {
 		return err
 	}
-	base, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	base, cancel := context.WithTimeout(parent, 25*time.Minute)
 	defer cancel()
 	r := runner{root: abs, env: os.Environ(), base: base}
 	return runProtected(abs, r.validate)
@@ -94,6 +99,11 @@ func runProtected(root string, validate func() error) (retErr error) {
 }
 
 func (r runner) command(dir string, timeout time.Duration, overrides map[string]string, args ...string) error {
+	_, err := r.execute(dir, timeout, overrides, args...)
+	return err
+}
+
+func (r runner) execute(dir string, timeout time.Duration, overrides map[string]string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(r.base, timeout)
 	defer cancel()
 	goPath := r.goPath
@@ -104,27 +114,59 @@ func (r runner) command(dir string, timeout time.Duration, overrides map[string]
 	cmd.Dir = dir
 	cmd.Env = replaceEnv(r.env, overrides)
 	cmd.WaitDelay = 2 * time.Second
+	configureProcess(cmd)
+	var tree processTree
+	var treeMu sync.Mutex
+	cmd.Cancel = func() error {
+		treeMu.Lock()
+		defer treeMu.Unlock()
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		if tree != nil {
+			return tree.stop()
+		}
+		return cmd.Process.Kill()
+	}
 	var stdout, stderr limitedBuffer
 	stdout.limit, stderr.limit = outputLimit, outputLimit
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
-	if stdout.over || stderr.over {
-		if err != nil {
-			return fmt.Errorf("go %s: %w (output exceeded %d bytes)", strings.Join(args, " "), err, outputLimit)
-		}
-		return fmt.Errorf("go %s output exceeded %d bytes", strings.Join(args, " "), outputLimit)
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("start go %s: %w", strings.Join(args, " "), err)
 	}
-	if err != nil {
+	var attachErr error
+	treeMu.Lock()
+	tree, attachErr = attachProcessTree(cmd, func(owned processTree) { tree = owned })
+	treeMu.Unlock()
+	if attachErr != nil {
+		_ = cmd.Cancel()
+	}
+	runErr := cmd.Wait()
+	treeMu.Lock()
+	if tree != nil {
+		tree.cleanup()
+	}
+	treeMu.Unlock()
+	if attachErr != nil {
+		return stdout.String(), fmt.Errorf("prepare process tree for go %s: %w", strings.Join(args, " "), attachErr)
+	}
+	if stdout.over || stderr.over {
+		if runErr != nil {
+			return stdout.String(), fmt.Errorf("go %s: %w (output exceeded %d bytes)", strings.Join(args, " "), runErr, outputLimit)
+		}
+		return stdout.String(), fmt.Errorf("go %s output exceeded %d bytes", strings.Join(args, " "), outputLimit)
+	}
+	if runErr != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("go %s: %w", strings.Join(args, " "), ctx.Err())
+			return stdout.String(), fmt.Errorf("go %s: %w", strings.Join(args, " "), ctx.Err())
 		}
 		detail := strings.TrimSpace(stderr.String())
 		if detail == "" {
 			detail = strings.TrimSpace(stdout.String())
 		}
-		return fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), err, detail)
+		return stdout.String(), fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), runErr, detail)
 	}
-	return nil
+	return stdout.String(), nil
 }
 
 func replaceEnv(base []string, overrides map[string]string) []string {
@@ -227,24 +269,11 @@ func workspaceModule(root, example string) string {
 
 func (r runner) checkDeps(dir string, packages []string) error {
 	args := append([]string{"list", "-deps"}, packages...)
-	ctx, cancel := context.WithTimeout(r.base, 3*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", args...)
-	cmd.Dir = dir
-	cmd.Env = replaceEnv(r.env, map[string]string{"GOWORK": "off"})
-	cmd.WaitDelay = 2 * time.Second
-	var out, stderr limitedBuffer
-	out.limit = outputLimit
-	stderr.limit = outputLimit
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("go list -deps: %w\n%s", err, stderr.String())
+	out, err := r.execute(dir, 3*time.Minute, map[string]string{"GOWORK": "off"}, args...)
+	if err != nil {
+		return fmt.Errorf("dependency inspection: %w", err)
 	}
-	if out.over || stderr.over {
-		return errors.New("go list -deps output exceeded limit")
-	}
-	for _, line := range strings.Split(out.String(), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		for _, forbidden := range []string{"github.com/Lephiziel/findrail/internal/", "modernc.org/sqlite", "modelcontextprotocol", "ledongthuc/pdf"} {
 			if strings.Contains(line, forbidden) {
 				return fmt.Errorf("forbidden dependency %q in %s", line, dir)
