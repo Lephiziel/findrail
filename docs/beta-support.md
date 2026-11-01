@@ -1,12 +1,12 @@
 # Beta.1 platform support and release policy
 
 This page is the canonical platform and readiness policy for the
-`0.1.0-beta.1` limited desktop beta. It describes the candidate, not a published
-product. The current download remains [alpha.5](release-alpha5-verification.md)
-until a separately authorized publication is complete. TASK 35/A sets the
-candidate `VERSION` to beta.1; that metadata change does not publish the product
-or change any release assets. The contract remains schema 8, Client API 1 and
-VSIX 0.1.0.
+`0.1.0-beta.1` limited desktop beta. The
+[published release](https://github.com/Lephiziel/findrail/releases/tag/v0.1.0-beta.1)
+is bound to `4c0c94e1663804344b1ae1cbcdc3a346208e688a`. Later source commits
+and CI artifacts do not replace its immutable assets. Publication does not
+complete pending human evidence or establish stable/v1 readiness. The contract
+remains schema 8, Client API 1 and VSIX 0.1.0.
 
 ## Platform promises
 
@@ -20,7 +20,7 @@ pending.
 |---|---|---|
 | `linux-amd64` | Primary beta path. | Any manual outcome applies only to the candidate/archive actually checked. It does not promise every Linux distribution, desktop environment, browser, or installation method. A historical alpha report is not beta evidence. |
 | `linux-arm64` | Experimental. Its matching candidate must pass the native CI gate; lack of an independent tester does not block preparation. | No manual result is implied by an `amd64` report. |
-| `windows-amd64` | Primary target. The owner plans the manual first-run in a Windows VM at 35/C; manual evidence stays pending until a matching passed report is validated. | A matching passed report supports only its named scenarios in its recorded VM and Windows build. A failed/invalid report blocks; it does not certify physical devices or other Windows builds. |
+| `windows-amd64` | Primary target. A matching first-run report was received but remains incomplete; manual evidence stays pending until a matching passed report is validated. | A matching passed report supports only its named scenarios in its recorded environment and Windows build. A failed/invalid report blocks; it does not certify physical devices or other Windows builds. |
 | `darwin-arm64` | Experimental. Its matching candidate must pass the native CI gate. | Finder/Gatekeeper manual results are not claimed until a matching report exists. |
 | `darwin-amd64` | Experimental. Its matching candidate must pass the native CI gate. | No manual result is claimed until a matching report exists. |
 
