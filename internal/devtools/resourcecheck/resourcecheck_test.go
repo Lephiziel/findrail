@@ -214,6 +214,9 @@ func TestDoctorContractRejectsMalformedAndIncompleteJSON(t *testing.T) {
 }
 
 func TestOversizedChildOutputIsBoundedAndKilled(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux process groups")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	c, err := start(ctx, "/bin/sh", "-c", "yes oversized-output")

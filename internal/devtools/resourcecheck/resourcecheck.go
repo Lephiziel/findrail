@@ -195,9 +195,11 @@ func writeAtomic(path string, v any) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	resolved, err := filepath.EvalSymlinks(dir)
-	if err != nil || resolved != dir {
-		return errors.New("unsafe report directory")
+	if runtime.GOOS == "linux" {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err != nil || resolved != dir {
+			return errors.New("unsafe report directory")
+		}
 	}
 	path = filepath.Join(dir, filepath.Base(path))
 	if st, err := os.Lstat(path); err == nil && st.Mode()&os.ModeSymlink != 0 {
