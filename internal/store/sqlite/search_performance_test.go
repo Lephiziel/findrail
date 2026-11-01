@@ -54,7 +54,7 @@ func TestSearchSyntheticQueryPlans(t *testing.T) {
 		args        []any
 	}{
 		{"fts_exact_count", `EXPLAIN QUERY PLAN SELECT COUNT(*) FROM documents_fts JOIN documents d ON d.rowid=documents_fts.rowid WHERE documents_fts MATCH ?`, []any{"commonmark"}},
-		{"ranked_rows", `EXPLAIN QUERY PLAN SELECT d.id,snippet(documents_fts,1,'[',']','…',32),bm25(documents_fts,4.0,1.0) FROM documents_fts JOIN documents d ON d.rowid=documents_fts.rowid JOIN sources s ON s.id=d.source_id WHERE documents_fts MATCH ? ORDER BY bm25(documents_fts,4.0,1.0),d.id LIMIT ?`, []any{"commonmark", 20}},
+		{"ranked_rows", `EXPLAIN QUERY PLAN SELECT d.id,snippet(documents_fts,1,'[',']','…',32),-bm25(documents_fts,4.0,1.0) AS score FROM documents_fts JOIN documents d ON d.rowid=documents_fts.rowid JOIN sources s ON s.id=d.source_id WHERE documents_fts MATCH ? ORDER BY score DESC,d.id LIMIT ?`, []any{"commonmark", 20}},
 		{"pdf_page_attribution", `EXPLAIN QUERY PLAN SELECT p.page_number,snippet(pages_fts,0,'[',']','…',32) FROM pages_fts JOIN document_pages p ON p.rowid=pages_fts.rowid WHERE pages_fts MATCH ? AND p.document_id=? ORDER BY bm25(pages_fts),p.page_number LIMIT 1`, []any{"commonmark", "plan-000"}},
 	}
 	for _, plan := range plans {
