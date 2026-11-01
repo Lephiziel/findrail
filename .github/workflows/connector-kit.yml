@@ -27,14 +27,15 @@ jobs:
         with:
           go-version: '1.26.x'
       - name: Build connector check (Unix)
-        if: runner.os != 'Windows'
+        if: ${{ runner.os != 'Windows' }}
         run: go build -o "$RUNNER_TEMP/findrail-connector-check" ./cmd/findrail-connector-check
       - name: Run connector check (Unix)
-        if: runner.os != 'Windows'
-        run: "$RUNNER_TEMP/findrail-connector-check" --repo-root "$GITHUB_WORKSPACE"
+        if: ${{ runner.os != 'Windows' }}
+        run: |
+          "$RUNNER_TEMP/findrail-connector-check" --repo-root "$GITHUB_WORKSPACE"
       - name: Build connector check (Windows)
-        if: runner.os == 'Windows'
+        if: ${{ runner.os == 'Windows' }}
         run: go build -o "$env:RUNNER_TEMP/findrail-connector-check.exe" ./cmd/findrail-connector-check
       - name: Run connector check (Windows)
-        if: runner.os == 'Windows'
+        if: ${{ runner.os == 'Windows' }}
         run: '& "$env:RUNNER_TEMP/findrail-connector-check.exe" --repo-root "$env:GITHUB_WORKSPACE"'
