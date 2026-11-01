@@ -13,10 +13,13 @@ import os
 import pathlib
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import zipfile
 from datetime import datetime, timezone
 
@@ -962,7 +965,26 @@ def _validate_soak(soak_path, candidate_sha, candidate_version, binary_sha):
     return report, environment
 
 
-def _manual_record(path, expected_kind, candidate, candidate_bytes, native, manual_tool, *, max_bytes=MAX_MANUAL_PARSER_JSON):
+def _stop_manual_process_tree(process):
+    # A leader can exit while a descendant still owns the pipe handles.
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        elif os.name == "nt":
+            subprocess.run(["taskkill.exe", "/T", "/F", "/PID", str(process.pid)],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=5, check=False)
+        else:
+            process.kill()
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def _manual_record(path, expected_kind, candidate, candidate_bytes, native, manual_tool, *,
+                   max_bytes=MAX_MANUAL_PARSER_JSON, timeout=30, output_limit=2 << 20):
     raw_file = _regular_file(path, max_bytes)
     with tempfile.TemporaryDirectory(prefix="findrail-manual-context-") as directory:
         candidate_path = pathlib.Path(directory) / "candidate.json"
@@ -972,26 +994,81 @@ def _manual_record(path, expected_kind, candidate, candidate_bytes, native, manu
                    "--readiness", str(pathlib.Path(__file__).with_name("readiness.py")),
                    "--max-json", str(max_bytes)]
         try:
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                      stderr=subprocess.DEVNULL)
-            try:
-                output = process.stdout.read((2 << 20) + 1)
-                if len(output) > 2 << 20:
-                    process.kill()
-                    process.wait(timeout=5)
-                    raise EvidenceError("manual_validator_protocol_invalid")
-                remaining, _ = process.communicate(timeout=30)
-                output += remaining
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-                raise EvidenceError("manual_validator_timeout") from None
+            process = subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, start_new_session=os.name == "posix",
+                creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0))
         except OSError:
             raise EvidenceError("manual_validator_unavailable") from None
-        if process.returncode != 0 or len(output) > 2 << 20:
+
+        output = bytearray()
+        overflow = threading.Event()
+        reader_error = []
+
+        def capture_stdout():
+            try:
+                while True:
+                    chunk = os.read(process.stdout.fileno(), 64 << 10)
+                    if not chunk:
+                        return
+                    if len(output) + len(chunk) > output_limit:
+                        overflow.set()
+                        _stop_manual_process_tree(process)
+                        return
+                    output.extend(chunk)
+            except OSError as error:
+                reader_error.append(error)
+
+        reader = threading.Thread(target=capture_stdout, name="manual-validator-stdout",
+                                  daemon=True)
+        reader.start()
+        deadline = time.monotonic() + timeout
+        timed_out = False
+        try:
+            while process.poll() is None:
+                if overflow.is_set():
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                time.sleep(min(0.02, remaining))
+        except BaseException:
+            _stop_manual_process_tree(process)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            reader.join(timeout=5)
+            raise
+        if timed_out or overflow.is_set():
+            _stop_manual_process_tree(process)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _stop_manual_process_tree(process)
+            process.wait(timeout=5)
+        reader.join(timeout=max(0, deadline - time.monotonic()))
+        handles_open = reader.is_alive()
+        if handles_open:
+            _stop_manual_process_tree(process)
+            reader.join(timeout=2)
+        if process.stdout is not None:
+            process.stdout.close()
+        if reader.is_alive():
+            raise EvidenceError("manual_validator_cleanup_failed")
+        if timed_out:
+            raise EvidenceError("manual_validator_timeout")
+        if overflow.is_set():
+            raise EvidenceError("manual_validator_protocol_invalid")
+        if handles_open:
+            raise EvidenceError("manual_validator_handles_open")
+        if reader_error:
+            raise EvidenceError("manual_validator_protocol_invalid")
+        if process.returncode != 0:
             raise EvidenceError("manual_report_invalid_or_mismatched")
         try:
-            checked = json.loads(output)
+            checked = json.loads(bytes(output))
         except (ValueError, UnicodeDecodeError):
             raise EvidenceError("manual_validator_protocol_invalid") from None
     expected_fields = {"protocol_version", "outcome", "kind", "status", "reference",

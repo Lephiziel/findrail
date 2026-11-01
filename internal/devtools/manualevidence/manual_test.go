@@ -2,6 +2,7 @@ package manualevidence
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -213,6 +214,43 @@ func TestValidateAllFirstRunKindsAndLinuxBlankException(t *testing.T) {
 		r["archive_sha256"] = native[target]
 		if got, err := Validate(r, testContext(candidate, native)); err != nil || got != Complete {
 			t.Fatalf("%s = %q, %v", kind, got, err)
+		}
+	}
+}
+
+func TestLinuxEmptyReferenceExceptionRequiresPresentString(t *testing.T) {
+	for _, status := range []string{"not_run", "incomplete"} {
+		for _, value := range []any{nil, 42, true, map[string]any{}} {
+			t.Run(status+"/"+fmt.Sprintf("%T", value), func(t *testing.T) {
+				r, candidate, _ := fixture()
+				hash := strings.Repeat("c", 64)
+				r["kind"], r["target"], r["status"] = "linux_first_run", "linux-amd64", status
+				r["archive_sha256"], r["reference"] = hash, value
+				ctx := testContext(candidate, map[string]string{"linux-amd64": hash})
+				if outcome, err := Validate(r, ctx); err == nil {
+					t.Fatalf("reference type %T accepted as %s", value, outcome)
+				}
+			})
+		}
+		t.Run(status+"/missing", func(t *testing.T) {
+			r, candidate, _ := fixture()
+			hash := strings.Repeat("c", 64)
+			r["kind"], r["target"], r["status"] = "linux_first_run", "linux-amd64", status
+			r["archive_sha256"] = hash
+			delete(r, "reference")
+			ctx := testContext(candidate, map[string]string{"linux-amd64": hash})
+			if outcome, err := Validate(r, ctx); err == nil {
+				t.Fatalf("missing reference accepted as %s", outcome)
+			}
+		})
+	}
+	for _, status := range []string{"not_run", "incomplete"} {
+		r, candidate, _ := fixture()
+		hash := strings.Repeat("c", 64)
+		r["kind"], r["target"], r["status"] = "linux_first_run", "linux-amd64", status
+		r["archive_sha256"], r["reference"] = hash, ""
+		if outcome, err := Validate(r, testContext(candidate, map[string]string{"linux-amd64": hash})); err != nil || outcome != Incomplete {
+			t.Fatalf("explicit empty Linux reference should remain incomplete: %q, %v", outcome, err)
 		}
 	}
 }

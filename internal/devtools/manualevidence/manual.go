@@ -211,9 +211,13 @@ func Validate(r map[string]any, context CandidateContext) (Outcome, error) {
 	if r["obstacle"] != nil && !text(r["obstacle"], 2000) {
 		return "", invalid()
 	}
-	ref, _ := r["reference"].(string)
+	refValue, hasReference := r["reference"]
+	ref, referenceIsString := refValue.(string)
+	if !hasReference || !referenceIsString {
+		return "", invalid()
+	}
 	status, _ := r["status"].(string)
-	if !(kind == "linux_first_run" && ref == "" && (status == "not_run" || status == "incomplete")) && !referenceRE.MatchString(ref) {
+	if !(kind == LinuxFirstRun && ref == "" && (status == "not_run" || status == "incomplete")) && !referenceRE.MatchString(ref) {
 		return "", invalid()
 	}
 	if kind == VoluntaryUsage {

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -361,6 +362,53 @@ class BetaEvidenceTests(unittest.TestCase):
     def tearDownClass(cls):
         if cls._tool_dir is not None:
             cls._tool_dir.cleanup()
+
+    @unittest.skipUnless(os.name == "posix", "process-group behavior is POSIX-specific")
+    def test_manual_validator_timeout_capture_overflow_and_descendant_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            report = root / "report.json"
+            report.write_text("{}", encoding="utf-8")
+            candidate = {"candidate_sha": SHA, "candidate_version": evidence.VERSION}
+            native = {"windows-amd64": {"archive": {"sha256": "a" * 64}}}
+
+            def fake_tool(name, body):
+                tool = root / name
+                tool.write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
+                tool.chmod(0o700)
+                return tool
+
+            def invoke(tool, **kwargs):
+                return evidence._manual_record(
+                    report, "windows_first_run", candidate, b"{}", native, tool,
+                    timeout=kwargs.get("timeout", 0.3),
+                    output_limit=kwargs.get("output_limit", 4096))
+
+            no_output = fake_tool("no-output", "import time; time.sleep(30)\n")
+            started = time.monotonic()
+            with self.assertRaisesRegex(evidence.EvidenceError, "manual_validator_timeout"):
+                invoke(no_output)
+            self.assertLess(time.monotonic() - started, 5)
+
+            partial = fake_tool("partial", "import sys,time; sys.stdout.write('{'); sys.stdout.flush(); time.sleep(30)\n")
+            with self.assertRaisesRegex(evidence.EvidenceError, "manual_validator_timeout"):
+                invoke(partial)
+
+            overflow = fake_tool("overflow", "import sys,time; sys.stdout.write('x'*10000); sys.stdout.flush(); time.sleep(30)\n")
+            with self.assertRaisesRegex(evidence.EvidenceError, "manual_validator_protocol_invalid"):
+                invoke(overflow, output_limit=1024)
+
+            heartbeat = root / "heartbeat"
+            descendant = fake_tool(
+                "descendant",
+                "import subprocess,sys; "
+                f"subprocess.Popen([sys.executable, '-c', {('import pathlib,time; p=pathlib.Path(' + repr(str(heartbeat)) + '); exec(\"while True:\\n p.open(\\\"a\\\").write(\\\"x\\\"); time.sleep(.01)\")')!r}])\n")
+            with self.assertRaisesRegex(evidence.EvidenceError, "manual_validator_handles_open"):
+                invoke(descendant)
+            size = heartbeat.stat().st_size
+            time.sleep(0.1)
+            self.assertEqual(heartbeat.stat().st_size, size,
+                             "owned descendant continued after adapter returned")
     def test_assemble_refuses_existing_outputs_without_removing_user_data(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
@@ -1096,6 +1144,78 @@ class BetaEvidenceTests(unittest.TestCase):
             self.assertEqual(batch_summary["counts"]["received"], 101)
             self.assertEqual(batch_summary["counts"]["failed"], 101)
             self.assertIn("candidate_invalid", batch_summary["issues"])
+
+    def test_linux_empty_reference_exception_rejects_wrong_types_in_cli_and_consumer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            fixture = _full_beta_fixture(root)
+            candidate = fixture["summary"]
+            candidate_path = fixture["summary_path"]
+            native = fixture["native"]
+            command = [str(self.manual_tool), "validate", "--candidate", str(candidate_path),
+                       "--python", sys.executable,
+                       "--readiness", str(pathlib.Path(__file__).with_name("readiness.py"))]
+            bad_values = (None, 42, True, {})
+            for index, value in enumerate(bad_values):
+                report = _manual_report("linux_first_run", "linux-amd64", candidate, native,
+                                        "", status="not_run")
+                for case in report["cases"]:
+                    case.update(status="not_run", elapsed_seconds=None)
+                report["reference"] = value
+                report_path = root / f"bad-reference-{index}.json"
+                report_path.write_text(json.dumps(report), encoding="utf-8")
+                checked = subprocess.run(command + ["--report", str(report_path)],
+                                         capture_output=True, text=True, timeout=10)
+                self.assertEqual(checked.returncode, 1, checked.stdout + checked.stderr)
+
+                output = root / f"intake-{index}"
+                intake = subprocess.run(
+                    [str(self.manual_tool), "intake", "--candidate", str(candidate_path),
+                     "--python", sys.executable,
+                     "--readiness", str(pathlib.Path(__file__).with_name("readiness.py")),
+                     "--report", str(report_path), "--output", str(output)],
+                    capture_output=True, text=True, timeout=10)
+                self.assertEqual(intake.returncode, 1)
+                result = json.loads((output / "intake.json").read_text(encoding="utf-8"))
+                self.assertEqual(result["counts"]["failed"], 1)
+                self.assertFalse((output / "linux-observations.json").exists())
+
+                observation = {"status": "incomplete", "target": "linux-amd64",
+                               "archive_sha256": native["linux-amd64"]["archive"]["sha256"],
+                               "reference": value,
+                               "cases": [{"case": name, "status": "not_run",
+                                          "elapsed_seconds": None}
+                                         for name in readiness.MANUAL_CASES]}
+                payload = {"format_version": 1, "kind": "linux_first_run",
+                           "candidate_sha": candidate["candidate_sha"],
+                           "candidate_version": candidate["candidate_version"],
+                           "observations": [observation]}
+                with self.assertRaisesRegex(evidence.EvidenceError,
+                                            "linux_observations_invalid"):
+                    evidence._validate_linux_observations(
+                        payload, candidate, candidate_path.read_bytes(), native,
+                        self.manual_tool)
+
+            missing = _manual_report("linux_first_run", "linux-amd64", candidate, native,
+                                     "", status="not_run")
+            for case in missing["cases"]:
+                case.update(status="not_run", elapsed_seconds=None)
+            missing.pop("reference")
+            missing_path = root / "missing-reference.json"
+            missing_path.write_text(json.dumps(missing), encoding="utf-8")
+            checked = subprocess.run(command + ["--report", str(missing_path)],
+                                     capture_output=True, text=True, timeout=10)
+            self.assertEqual(checked.returncode, 1, checked.stdout + checked.stderr)
+            missing_output = root / "missing-reference-intake"
+            intake = subprocess.run(
+                [str(self.manual_tool), "intake", "--candidate", str(candidate_path),
+                 "--python", sys.executable,
+                 "--readiness", str(pathlib.Path(__file__).with_name("readiness.py")),
+                 "--report", str(missing_path), "--output", str(missing_output)],
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(intake.returncode, 1)
+            missing_result = json.loads((missing_output / "intake.json").read_text(encoding="utf-8"))
+            self.assertEqual(missing_result["counts"]["failed"], 1)
 
     def test_manual_intake_sanitizes_real_reports_and_blocks_failures_or_mismatches(self):
         with tempfile.TemporaryDirectory() as temp:
