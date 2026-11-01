@@ -42,8 +42,9 @@ whether search was needed again; first use is not `return_use`.
 
 The functional application is shared across platforms, but evidence is not
 transferred between them. Linux amd64 is the primary documented path.
-Windows manual coverage remains pending until the planned VM report is
-actually received. macOS and Linux arm64 are experimental without matching
+The matching Windows first-run report was received but remains incomplete;
+manual coverage stays pending until a passed report is accepted. macOS and
+Linux arm64 are experimental without matching
 human reports. Native CI is not a GUI/OS observation, and the earlier alpha
 report is not beta evidence. `final_release=false` remains true.
 
