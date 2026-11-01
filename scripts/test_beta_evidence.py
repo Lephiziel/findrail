@@ -448,6 +448,32 @@ class BetaEvidenceTests(unittest.TestCase):
         ]
         evidence.validate_trusted_metadata(historical, SHA, evidence.VERSION)
 
+    def test_macos15_candidate_graph_preserves_frozen_macos14_validation(self):
+        historical = _metadata()
+        evidence.validate_trusted_metadata(historical, SHA, evidence.VERSION)
+        current = copy.deepcopy(historical)
+        arm_job = next(job for job in current["candidate_run"]["jobs"]
+                       if job["name"] == "native-packages (darwin-arm64, macos-14)")
+        arm_job["name"] = "native-packages (darwin-arm64, macos-15)"
+        self.assertEqual({job["name"] for job in current["candidate_run"]["jobs"]},
+                         evidence.CANDIDATE_JOB_NAMES)
+        evidence.validate_trusted_metadata(current, SHA, evidence.VERSION)
+        for variant in (historical, current):
+            for conclusion in ("skipped", "cancelled", "failure"):
+                bad = copy.deepcopy(variant)
+                next(job for job in bad["candidate_run"]["jobs"]
+                     if job["name"].startswith("native-packages (darwin-arm64,")
+                     )["conclusion"] = conclusion
+                with self.subTest(graph=variant is current, conclusion=conclusion), \
+                        self.assertRaises(evidence.EvidenceError):
+                    evidence.validate_trusted_metadata(bad, SHA, evidence.VERSION)
+        duplicate = copy.deepcopy(current)
+        duplicate["candidate_run"]["jobs"].append(copy.deepcopy(next(
+            job for job in historical["candidate_run"]["jobs"]
+            if job["name"] == "native-packages (darwin-arm64, macos-14)")))
+        with self.assertRaises(evidence.EvidenceError):
+            evidence.validate_trusted_metadata(duplicate, SHA, evidence.VERSION)
+
     def test_metadata_requires_candidate_and_performance_run_ids_to_be_decimal(self):
         metadata = _metadata()
         metadata["candidate_run"]["run_id"] = "01"

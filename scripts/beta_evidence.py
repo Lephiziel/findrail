@@ -65,7 +65,7 @@ CANDIDATE_TARGET_RUNNERS = {
     "linux-amd64": "ubuntu-latest",
     "linux-arm64": "ubuntu-24.04-arm",
     "darwin-amd64": "macos-15-intel",
-    "darwin-arm64": "macos-14",
+    "darwin-arm64": "macos-15",
     "windows-amd64": "windows-latest",
 }
 CANDIDATE_JOB_NAMES = {
@@ -87,7 +87,15 @@ CANDIDATE_JOB_NAMES = {
 CANDIDATE_REQUIRED_JOB_NAMES = CANDIDATE_JOB_NAMES - {
     "promotion-preflight", "promotion-publish",
 }
-CANDIDATE_LEGACY_JOB_NAMES = CANDIDATE_REQUIRED_JOB_NAMES | {"publish"}
+# Preserve the exact pre-retirement graph for frozen beta.1 handoffs. Accept
+# complete known graphs, never a mixture or an extra native job.
+CANDIDATE_MACOS14_JOB_NAMES = {
+    name.replace("(darwin-arm64, macos-15)", "(darwin-arm64, macos-14)")
+    for name in CANDIDATE_JOB_NAMES
+}
+CANDIDATE_LEGACY_JOB_NAMES = (CANDIDATE_MACOS14_JOB_NAMES - {
+    "promotion-preflight", "promotion-publish",
+}) | {"publish"}
 PERFORMANCE_JOB_NAMES = {"series", "soak"}
 
 
@@ -423,9 +431,10 @@ def _validate_normalized_run(run, kind, candidate_sha):
                 job.get("status") == "completed", f"{kind}_attempt_mismatch")
     if kind == "candidate":
         names = set(by_name)
-        require(names in (CANDIDATE_JOB_NAMES, CANDIDATE_LEGACY_JOB_NAMES),
+        require(names in (CANDIDATE_JOB_NAMES, CANDIDATE_MACOS14_JOB_NAMES,
+                          CANDIDATE_LEGACY_JOB_NAMES),
                 "candidate_jobs_incomplete")
-        if names == CANDIDATE_JOB_NAMES:
+        if names in (CANDIDATE_JOB_NAMES, CANDIDATE_MACOS14_JOB_NAMES):
             for name in ("promotion-preflight", "promotion-publish"):
                 require(by_name[name].get("conclusion") == "skipped",
                         "candidate_write_job_unexpectedly_ran")
