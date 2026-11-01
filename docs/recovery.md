@@ -80,6 +80,16 @@ stdout/stderr and output size, and kills only the owned process group, including
 descendants after leader exit. SIGINT/SIGTERM writes an `interrupted` record with
 the last phase; failed runs replace any earlier passed record. The old-or-new
 check reads all four totals for the updated, added and pruned documents.
+The producer keeps exception details private and emits only fixed
+`failure_code` classifications: preflight `unsupported_platform`,
+`invalid_identity`, `invalid_deadline`, `invalid_binary`,
+`binary_hash_mismatch`, `invalid_work_dir`, and `proc_unavailable`; run phases
+`setup_failed`, `seed_failed`, `seed_verification_failed`, `child_start_failed`,
+`early_exit`, `observation_timeout`, `doctor_failed`, `doctor_invalid_json`,
+`doctor_identity_mismatch`, `integrity_failed`, `search_failed`,
+`mixed_snapshot`, and `binary_changed`; cancellation is `interrupted`. These
+replace Python exception-class names with privacy-safe stable codes; no consumer
+acceptance rule is weakened.
 
 The same development executable offers `portable-boundary --binary PATH`. It
 indexes a deterministic 8 MiB synthetic ASCII file and exports that source from

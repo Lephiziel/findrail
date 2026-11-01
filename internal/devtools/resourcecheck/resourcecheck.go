@@ -50,20 +50,34 @@ type child struct {
 func start(ctx context.Context, binary string, args ...string) (*child, error) {
 	c := &child{cmd: exec.CommandContext(ctx, binary, args...), readers: make(chan struct{}, 2)}
 	configureProcessGroup(c.cmd)
-	out, err := c.cmd.StdoutPipe()
+	out, outWriter, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	errout, err := c.cmd.StderrPipe()
+	errout, errWriter, err := os.Pipe()
 	if err != nil {
+		out.Close()
+		outWriter.Close()
 		return nil, err
 	}
+	c.cmd.Stdout, c.cmd.Stderr = outWriter, errWriter
 	if err = c.cmd.Start(); err != nil {
+		out.Close()
+		outWriter.Close()
+		errout.Close()
+		errWriter.Close()
 		return nil, err
 	}
+	_ = outWriter.Close()
+	_ = errWriter.Close()
 	done := make(chan struct{}, 2)
 	copyBounded := func(r io.Reader, dst *bytes.Buffer) {
 		defer func() { done <- struct{}{} }()
+		defer func() {
+			if closer, ok := r.(io.Closer); ok {
+				_ = closer.Close()
+			}
+		}()
 		b := make([]byte, 8192)
 		for {
 			n, e := r.Read(b)
@@ -174,10 +188,18 @@ func executable(path string) (string, string, error) {
 	return p, h, e
 }
 func writeAtomic(path string, v any) error {
-	dir := filepath.Dir(path)
+	dir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil || resolved != dir {
+		return errors.New("unsafe report directory")
+	}
+	path = filepath.Join(dir, filepath.Base(path))
 	if st, err := os.Lstat(path); err == nil && st.Mode()&os.ModeSymlink != 0 {
 		return errors.New("unsafe report path")
 	}
@@ -202,7 +224,10 @@ func writeAtomic(path string, v any) error {
 	if ce != nil {
 		return ce
 	}
-	return os.Rename(name, path)
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 func RunRecovery(parent context.Context, o RecoveryOptions) int {
@@ -218,7 +243,9 @@ func RunRecovery(parent context.Context, o RecoveryOptions) int {
 	if o.Report == "" {
 		return 1
 	}
-	_ = writeAtomic(o.Report, r)
+	if err := writeAtomic(o.Report, r); err != nil {
+		return 1
+	}
 	fail := func(s string) int {
 		if parent.Err() != nil {
 			r.Status = "interrupted"
