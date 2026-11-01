@@ -51,15 +51,17 @@ not establish power-loss safety or equivalent behavior on other OSes.
 
 ## Supplied-candidate journey (Linux)
 
-Run the separate executable journey with an extracted candidate; it never builds
-or locates a binary on its own:
+Build the development-only producer from the source checkout, then run the
+separate executable journey with an explicitly extracted candidate. The helper
+never builds or locates the app binary itself:
 
 ```sh
-python3 scripts/recovery_candidate.py \
-  --binary /path/to/extracted/findrail \
+go build -o /tmp/findrail-resource-check ./cmd/findrail-resource-check
+/tmp/findrail-resource-check sigkill \
+  --binary /path/to/extracted/findrail --binary-sha256 CANDIDATE_SHA256 \
   --revision CANDIDATE_REVISION --schema 8 \
   --work-dir /tmp/findrail-recovery-work \
-  --report /tmp/findrail-recovery-report.json
+  --report /tmp/findrail-recovery-report.json --deadline 45
 ```
 
 It verifies or computes the binary SHA-256, creates synthetic source and data
@@ -72,12 +74,20 @@ binary SHA-256, caller-supplied revision/schema and platform; command output,
 paths and indexed content are excluded. The synthetic work directory is left
 for diagnosis and is never deleted by the harness.
 
-The deadline bounds the whole candidate journey (at most 120 seconds), with a
-separate bounded process-group cleanup. Seed, doctor, and search commands reuse
-the existing bounded-output runner and clean up descendants even when their
-leader has already exited. SIGINT/SIGTERM writes an `interrupted` record with
+The deadline bounds the whole candidate journey (at most 120 seconds), including
+setup, commands, observation, reopen and checks. The runner bounds captured
+stdout/stderr and output size, and kills only the owned process group, including
+descendants after leader exit. SIGINT/SIGTERM writes an `interrupted` record with
 the last phase; failed runs replace any earlier passed record. The old-or-new
-check includes an updated document, an added document, and a pruned document.
+check reads all four totals for the updated, added and pruned documents.
+
+The same development executable offers `portable-boundary --binary PATH`. It
+indexes a deterministic 8 MiB synthetic ASCII file and exports that source from
+an isolated temporary index, reporting archive size, elapsed seconds and observed
+peak child RSS (or JSON `null` when `/proc` did not provide a measurement). This
+is a single-document boundary spot check, not a scale or leak benchmark. Its
+reported platform and Go runtime identify the producer environment; historical
+Python evidence is retained unchanged.
 
 This candidate journey covers the ordinary filesystem refresh path only. The
 configure, collection-import, and Forget lifecycle guarantees are checked by
