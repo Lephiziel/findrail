@@ -5,7 +5,8 @@ on:
       - 'pkg/connector/**'
       - 'examples/connectors/catalog/**'
       - 'internal/connectorcheck/**'
-      - 'scripts/connector_kit_check.py'
+      - 'cmd/findrail-connector-check/**'
+      - 'internal/devtools/connectorkit/**'
       - 'docs/connector-conformance.md'
       - 'docs/connectors.md'
       - 'CONTRIBUTING.md'
@@ -25,4 +26,16 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26.x'
-      - run: python scripts/connector_kit_check.py
+      - name: Build connector check (Unix)
+        if: ${{ runner.os != 'Windows' }}
+        run: go build -o "$RUNNER_TEMP/findrail-connector-check" ./cmd/findrail-connector-check
+      - name: Run connector check (Unix)
+        if: ${{ runner.os != 'Windows' }}
+        run: |
+          "$RUNNER_TEMP/findrail-connector-check" --repo-root "$GITHUB_WORKSPACE"
+      - name: Build connector check (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        run: go build -o "$env:RUNNER_TEMP/findrail-connector-check.exe" ./cmd/findrail-connector-check
+      - name: Run connector check (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        run: '& "$env:RUNNER_TEMP/findrail-connector-check.exe" --repo-root "$env:GITHUB_WORKSPACE"'
