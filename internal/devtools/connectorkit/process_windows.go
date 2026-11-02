@@ -90,11 +90,19 @@ func attachProcessTree(cmd *exec.Cmd, publish func(processTree)) (processTree, e
 	}
 	defer syscall.CloseHandle(thread)
 	publish(tree)
-	if previous, _, e := resumeThread.Call(uintptr(thread)); previous == ^uintptr(0) {
-		return nil, winCallError("ResumeThread", e)
+	if err := resumeOwnedThread(thread); err != nil {
+		return nil, err
 	}
 	ready = true
 	return tree, nil
+}
+
+func resumeOwnedThread(thread syscall.Handle) error {
+	// ResumeThread returns a DWORD, including its failure sentinel on 64-bit Windows.
+	if previous, _, e := resumeThread.Call(uintptr(thread)); uint32(previous) == ^uint32(0) {
+		return winCallError("ResumeThread", e)
+	}
+	return nil
 }
 
 func primaryThread(pid uint32) (syscall.Handle, error) {
