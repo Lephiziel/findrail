@@ -19,6 +19,25 @@ func TestCappedBufferBoundsOutput(t *testing.T) {
 	}
 }
 
+func TestDiagnosticExamplesRejectSensitiveSyntheticNames(t *testing.T) {
+	for _, path := range []string{"secret-token.txt", "~$private_key.docx", ".secret/not-enumerated.md"} {
+		report := map[string]any{
+			"examples":         []any{map[string]any{"path": path}},
+			"examples_omitted": float64(1),
+		}
+		if err := validateDiagnosticExamples(report); err == nil {
+			t.Errorf("sensitive synthetic example %q was accepted", path)
+		}
+	}
+	report := map[string]any{
+		"examples":         []any{map[string]any{"path": "picture.png"}},
+		"examples_omitted": float64(1),
+	}
+	if err := validateDiagnosticExamples(report); err != nil {
+		t.Fatalf("ordinary diagnostic example rejected: %v", err)
+	}
+}
+
 func TestCandidateRejectsInvalidJSON(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a POSIX test executable")

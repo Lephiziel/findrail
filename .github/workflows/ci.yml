@@ -57,7 +57,11 @@ jobs:
           CGO_ENABLED: '0'
         run: go build ./cmd/findrail
       - name: Build development smoke helper
+        if: runner.os != 'Windows'
         run: go build -o findrail-smoke ./cmd/findrail-smoke
+      - name: Build development smoke helper (Windows)
+        if: runner.os == 'Windows'
+        run: go build -o findrail-smoke.exe ./cmd/findrail-smoke
       - name: Compiled alpha smoke (Unix)
         if: runner.os != 'Windows'
         run: python3 scripts/smoke.py ./findrail

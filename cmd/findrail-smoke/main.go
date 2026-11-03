@@ -261,6 +261,11 @@ func runDiagnosticsSmoke(binary string) error {
 	if err != nil {
 		return err
 	}
+	if indexedReport, ok := indexed["report"].(map[string]any); !ok || indexedReport["committed"] != true {
+		return fmt.Errorf("index did not return a committed report")
+	} else if _, leaked := indexedReport["examples"]; leaked {
+		return fmt.Errorf("index summary unexpectedly included diagnostic examples")
+	}
 	sid, err := stringField(indexed, "source", "id")
 	if err != nil {
 		return err
@@ -284,9 +289,31 @@ func runDiagnosticsSmoke(binary string) error {
 		report["observed_entries_known"] != true {
 		return fmt.Errorf("diagnostic inventory counts are incomplete")
 	}
+	if number(report["indexed_documents"]) != number(report["updated_documents"])+number(report["unchanged_documents"]) ||
+		number(report["observed_entries"]) != number(report["observed_files"])+number(report["observed_directories"]) ||
+		number(indexed["skipped"]) != number(report["skipped_files"])+number(report["skipped_entries"])+number(report["pruned_directories"]) ||
+		number(report["redacted_samples"]) < 3 {
+		return fmt.Errorf("diagnostic count/redaction totals are inconsistent")
+	}
+	reasonCounts := make(map[string]int)
+	if reasons, ok := report["reasons"].([]any); ok {
+		for _, reason := range reasons {
+			item, ok := reason.(map[string]any)
+			if !ok {
+				return fmt.Errorf("invalid diagnostic reason")
+			}
+			reasonCounts[stringValue(item["code"])] = number(item["count"])
+		}
+	}
+	if reasonCounts["office_lock_file"] != 1 || reasonCounts["hidden_entry"] != 1 {
+		return fmt.Errorf("diagnostic skip reasons are incomplete")
+	}
 	if len(mustJSON(report)) > 65536 || strings.Contains(mustJSON(summary), "picture.png") ||
 		!strings.Contains(mustJSON(details), "picture.png") {
 		return fmt.Errorf("diagnostic report redaction/size contract failed")
+	}
+	if err := validateDiagnosticExamples(report); err != nil {
+		return err
 	}
 	if err := os.WriteFile(filepath.Join(sourceRoot, "broken.pdf"), []byte("%PDF-invalid"), 0o644); err != nil {
 		return err
@@ -298,9 +325,28 @@ func runDiagnosticsSmoke(binary string) error {
 	if failure["committed"] != false {
 		return fmt.Errorf("failed scan was committed")
 	}
+	if stringValue(nested(failure, "failure", "code")) != "scan_failed" ||
+		nested(failure, "result", "attempt", "committed") != false ||
+		stringValue(nested(failure, "result", "attempt", "failure_code")) != "scan_failed" {
+		return fmt.Errorf("failed scan attempt details are incomplete")
+	}
+	if strings.Contains(mustJSON(failure), sourceRoot) || strings.Contains(mustJSON(failure), "broken.pdf") {
+		return fmt.Errorf("default failed-scan diagnostics disclosed a source path")
+	}
+	failureDetails, err := runCandidateFailure(binary, "index", "--data-dir", data, "--json", "--show-paths", sourceRoot)
+	if err != nil || stringValue(nested(failureDetails, "result", "attempt", "failure_path")) != "broken.pdf" {
+		return fmt.Errorf("show-paths failed-scan diagnostic missing failure path: %v", err)
+	}
 	restarted, err := runCandidateJSON(binary, summaryArgs...)
 	if err != nil || stringValue(nested(restarted, "report", "report_id")) != durableReportID {
 		return fmt.Errorf("failed scan replaced committed report")
+	}
+	missingIndex := filepath.Join(base, "must-not-be-created")
+	if _, err := runCandidate(binary, "source-report", "--data-dir", missingIndex, "--source", sid, "--json"); err == nil {
+		return fmt.Errorf("missing source-report unexpectedly succeeded")
+	}
+	if _, err := os.Stat(missingIndex); !os.IsNotExist(err) {
+		return fmt.Errorf("missing source-report created its data directory")
 	}
 	if err := os.Remove(filepath.Join(sourceRoot, "broken.pdf")); err != nil {
 		return err
@@ -329,6 +375,13 @@ func runDiagnosticsSmoke(binary string) error {
 	httpSummary, err := client.get("/api/v1/sources/" + url.PathEscape(sid) + "/report")
 	if err != nil {
 		return err
+	}
+	if strings.Contains(mustJSON(httpSummary), "picture.png") {
+		return fmt.Errorf("default HTTP diagnostics disclosed an example path")
+	}
+	httpDetails, err := client.get("/api/v1/sources/" + url.PathEscape(sid) + "/report?include_paths=true")
+	if err != nil || !strings.Contains(mustJSON(httpDetails), "picture.png") {
+		return fmt.Errorf("HTTP include_paths report omitted example paths: %v", err)
 	}
 	httpReportID := stringValue(nested(httpSummary, "report", "report_id"))
 	if httpReportID == "" {
@@ -364,8 +417,19 @@ func runDiagnosticsSmoke(binary string) error {
 		return err
 	}
 	canceled, err := client.waitJob(jobID, 10*time.Second)
-	if err != nil || stringValue(canceled["status"]) != "canceled" || stringValue(canceled["error_code"]) != "canceled" {
+	if err != nil || stringValue(canceled["status"]) != "canceled" || stringValue(canceled["error_code"]) != "canceled" ||
+		stringValue(nested(canceled, "progress", "failure_code")) != "canceled" ||
+		nested(canceled, "progress", "committed") != false || nested(canceled, "progress", "partial") != true {
 		return fmt.Errorf("canceled job contract failed: %v", err)
+	}
+	registered, err := client.get("/api/v1/sources")
+	if err != nil {
+		return err
+	}
+	for _, source := range objects(registered["sources"]) {
+		if stringValue(source["root"]) == cancelRoot {
+			return fmt.Errorf("canceled source was registered")
+		}
 	}
 	configured, err := client.post("/api/v1/sources/"+url.PathEscape(sid)+"/configure", token, map[string]any{"max_docx_bytes": 0})
 	if err != nil {
@@ -376,6 +440,36 @@ func runDiagnosticsSmoke(binary string) error {
 	if err != nil || stringValue(configureJob["status"]) != "succeeded" {
 		return fmt.Errorf("configure job failed: %v", err)
 	}
+	if stringValue(configureJob["type"]) != "configure" || nested(configureJob, "progress", "committed") != true ||
+		stringValue(nested(configureJob, "progress", "report_id")) == "" {
+		return fmt.Errorf("configure completion diagnostics are incomplete")
+	}
+	configuredReport, err := runCandidateJSON(binary, summaryArgs...)
+	if err != nil {
+		return err
+	}
+	configuredPayload, ok := configuredReport["report"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("configured source report missing")
+	}
+	if configuredPayload["report_id"] == nested(configureJob, "progress", "report_id") {
+		if configuredPayload["operation"] != "configure" {
+			return fmt.Errorf("Configure report operation mismatch")
+		}
+	} else if configuredPayload["operation"] != "refresh" {
+		return fmt.Errorf("Configure report was replaced by an unexpected operation")
+	}
+	if !hasReason(configuredPayload["reasons"], "format_disabled") {
+		return fmt.Errorf("Configure report omitted the disabled-format reason")
+	}
+	registered, err = client.get("/api/v1/sources")
+	if err != nil {
+		return err
+	}
+	configuredSource := findSource(registered["sources"], sid)
+	if configuredSource == nil || number(configuredSource["max_docx_bytes"]) != 0 {
+		return fmt.Errorf("configured DOCX limit was not published")
+	}
 	searchAfterConfigure, err := client.get("/api/v1/search?q=syntheticdocxmarker")
 	if err != nil || number(searchAfterConfigure["total"]) != 0 {
 		return fmt.Errorf("disabled DOCX remained searchable")
@@ -385,6 +479,14 @@ func runDiagnosticsSmoke(binary string) error {
 	}
 	if err := client.waitSearch("watcherfresh", 15*time.Second); err != nil {
 		return err
+	}
+	watcherReport, err := runCandidateJSON(binary, summaryArgs...)
+	if err != nil {
+		return err
+	}
+	if stringValue(nested(watcherReport, "report", "operation")) != "refresh" ||
+		stringValue(nested(watcherReport, "report", "report_id")) == stringValue(configuredPayload["report_id"]) {
+		return fmt.Errorf("watcher refresh diagnostics were not published")
 	}
 	if _, err := runCandidateJSON(binary, "export-source", "--data-dir", data, "--source", sid, "--output", archive, "--json"); err != nil {
 		return err
@@ -398,6 +500,23 @@ func runDiagnosticsSmoke(binary string) error {
 	if err != nil || archivedReport["available"] != false {
 		return fmt.Errorf("portable report unexpectedly available")
 	}
+	registered, err = client.get("/api/v1/sources")
+	if err != nil {
+		return err
+	}
+	archiveSource := findSource(registered["sources"], archiveID)
+	if archiveSource == nil || stringValue(archiveSource["kind"]) != "archive" {
+		return fmt.Errorf("imported source missing from inventory")
+	}
+	syncState, err := client.get("/api/v1/sync")
+	if err != nil {
+		return err
+	}
+	for _, source := range objects(syncState["sources"]) {
+		if stringValue(source["source_id"]) == archiveID {
+			return fmt.Errorf("frozen archive source entered filesystem sync")
+		}
+	}
 	if token == "" {
 		return fmt.Errorf("session token missing")
 	}
@@ -410,6 +529,9 @@ func runDiagnosticsSmoke(binary string) error {
 	}
 	if _, err := runCandidate(binary, "forget", "--data-dir", data, archiveID); err != nil {
 		return err
+	}
+	if _, err := runCandidate(binary, append(summaryArgs, "--show-paths")...); err == nil {
+		return fmt.Errorf("source report remained available after Forget")
 	}
 	fmt.Println("Findrail diagnostics smoke passed: committed report, bounded redaction, failure preservation, restart, loopback HTTP report, archive report unavailability and cleanup.")
 	return nil
@@ -636,6 +758,25 @@ func number(value any) int {
 	}
 	return 0
 }
+
+func validateDiagnosticExamples(report map[string]any) error {
+	examples, ok := report["examples"].([]any)
+	if !ok || len(examples) > 200 || number(report["examples_omitted"]) == 0 {
+		return fmt.Errorf("diagnostic example bound contract failed")
+	}
+	for _, example := range examples {
+		item, ok := example.(map[string]any)
+		if !ok {
+			return fmt.Errorf("invalid diagnostic example")
+		}
+		path := stringValue(item["path"])
+		if path == "secret-token.txt" || path == "~$private_key.docx" || strings.Contains(path, ".secret") {
+			return fmt.Errorf("sensitive diagnostic example was retained")
+		}
+	}
+	return nil
+}
+
 func objects(value any) []map[string]any {
 	items, _ := value.([]any)
 	result := make([]map[string]any, 0, len(items))
@@ -645,6 +786,22 @@ func objects(value any) []map[string]any {
 		}
 	}
 	return result
+}
+func findSource(value any, id string) map[string]any {
+	for _, item := range objects(value) {
+		if stringValue(item["id"]) == id {
+			return item
+		}
+	}
+	return nil
+}
+func hasReason(value any, code string) bool {
+	for _, item := range objects(value) {
+		if stringValue(item["code"]) == code {
+			return true
+		}
+	}
+	return false
 }
 func ids(value any) string {
 	var result []string

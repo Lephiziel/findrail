@@ -169,8 +169,9 @@ jobs:
           BINARY="$RUNNER_TEMP/install space 📦/findrail_${VERSION}_${{ matrix.target }}/findrail"
           [[ '${{ matrix.target }}' != windows-* ]] || BINARY="$RUNNER_TEMP/install space 📦/findrail_${VERSION}_${{ matrix.target }}/findrail.exe"
           "$PY" scripts/smoke.py --expected-version "$VERSION" "$BINARY"
-          go build -o "$RUNNER_TEMP/findrail-smoke" ./cmd/findrail-smoke
-          SMOKE_TOOL="$RUNNER_TEMP/findrail-smoke"; [[ '${{ matrix.target }}' == windows-* ]] && SMOKE_TOOL="$SMOKE_TOOL.exe"
+          SMOKE_TOOL="$RUNNER_TEMP/findrail-smoke"
+          [[ '${{ matrix.target }}' != windows-* ]] || SMOKE_TOOL="$SMOKE_TOOL.exe"
+          go build -o "$SMOKE_TOOL" ./cmd/findrail-smoke
           "$SMOKE_TOOL" search-smoke "$BINARY"
           "$PY" scripts/mcp_smoke.py "$BINARY"
           "$PY" scripts/portable_smoke.py "$BINARY"
