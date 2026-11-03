@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -213,19 +214,83 @@ func TestDoctorContractRejectsMalformedAndIncompleteJSON(t *testing.T) {
 	}
 }
 
-func TestOversizedChildOutputIsBoundedAndKilled(t *testing.T) {
+func TestConcurrentStdoutStderrOverflowIsBounded(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux process groups")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	c, err := start(ctx, "/bin/sh", "-c", "yes oversized-output")
+	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = c.wait(ctx); err == nil || err.Error() != "oversized output" {
-		t.Fatalf("wait error=%v, want bounded-output failure", err)
+	for i := 0; i < 20; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		c, err := startWithEnv(ctx, exe, []string{"FINDRAIL_RESOURCECHECK_OVERFLOW_HELPER=1"}, "-test.run=^TestOutputOverflowHelper$")
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		err = c.wait(ctx)
+		cancel()
+		if err == nil || err.Error() != "oversized output" {
+			t.Fatalf("iteration %d: wait error=%v, want bounded-output failure", i, err)
+		}
+		if !c.overflow.Load() {
+			t.Fatalf("iteration %d: no stream overflow recorded", i)
+		}
+		if c.stdout.Len() > outputLimit || c.stderr.Len() > outputLimit {
+			t.Fatalf("iteration %d exceeded capture limit: stdout=%d stderr=%d", i, c.stdout.Len(), c.stderr.Len())
+		}
 	}
+}
+
+// TestOutputOverflowHelper is started as a child by the test above. It drives
+// stdout and stderr past the shared capture limit concurrently without relying
+// on a shell; the parent stops the process group as soon as overflow is seen.
+func TestOutputOverflowHelper(t *testing.T) {
+	if os.Getenv("FINDRAIL_RESOURCECHECK_OVERFLOW_HELPER") != "1" {
+		return
+	}
+	base := bytes.Repeat([]byte{'x'}, outputLimit)
+	ready := make(chan struct{}, 2)
+	gate := make(chan struct{})
+	errs := make(chan error, 2)
+	write := func(w io.Writer) {
+		if err := writeTestBytes(w, base); err != nil {
+			errs <- err
+			return
+		}
+		ready <- struct{}{}
+		<-gate
+		errs <- writeTestBytes(w, []byte{'!'})
+	}
+	go write(os.Stdout)
+	go write(os.Stderr)
+	<-ready
+	<-ready
+	close(gate)
+	if err := <-errs; err != nil {
+		os.Exit(2)
+	}
+	if err := <-errs; err != nil {
+		os.Exit(2)
+	}
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+func writeTestBytes(w io.Writer, b []byte) error {
+	for len(b) > 0 {
+		n, err := w.Write(b)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		b = b[n:]
+	}
+	return nil
 }
 
 func TestStopGroupKillsLeaderAndDescendant(t *testing.T) {

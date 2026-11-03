@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,12 +44,19 @@ type recoveryReport struct {
 type child struct {
 	cmd            *exec.Cmd
 	stdout, stderr bytes.Buffer
-	overflow       bool
+	overflow       atomic.Bool
 	readers        chan struct{}
 }
 
 func start(ctx context.Context, binary string, args ...string) (*child, error) {
+	return startWithEnv(ctx, binary, nil, args...)
+}
+
+func startWithEnv(ctx context.Context, binary string, env []string, args ...string) (*child, error) {
 	c := &child{cmd: exec.CommandContext(ctx, binary, args...), readers: make(chan struct{}, 2)}
+	if env != nil {
+		c.cmd.Env = append(os.Environ(), env...)
+	}
 	configureProcessGroup(c.cmd)
 	out, outWriter, err := os.Pipe()
 	if err != nil {
@@ -83,7 +91,7 @@ func start(ctx context.Context, binary string, args ...string) (*child, error) {
 			n, e := r.Read(b)
 			if n > 0 {
 				if dst.Len()+n > outputLimit {
-					c.overflow = true
+					c.overflow.Store(true)
 					stopGroup(c.cmd)
 					return
 				}
@@ -115,7 +123,7 @@ func (c *child) wait(ctx context.Context) error {
 		// A leader may exit while a descendant still owns its output pipe.
 		stopGroup(c.cmd)
 		<-c.readers
-		if c.overflow {
+		if c.overflow.Load() {
 			return errors.New("oversized output")
 		}
 		return err
