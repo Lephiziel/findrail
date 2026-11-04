@@ -3,14 +3,22 @@ package acceptancefixture
 import (
 	"archive/zip"
 	"bytes"
-	"encoding/base64"
-	"encoding/json"
-	"os/exec"
-	"path/filepath"
+	"crypto/sha256"
+	"fmt"
+	"io"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 )
+
+var goldenFileSHA256 = map[string]string{
+	"fixture/Copper-Lantern.pdf": "4b4e23438874cb2cfee59abe7b7e0baaa45fad6b599697314c753afe3d4934a6",
+	"fixture/Juniper-Notes.md":   "fba4e1393147f6fcc24a85f29a2b3c301c4e036142622985d26b3b74ab1e19e6",
+	"fixture/Élodie-Parcel.docx": "6db08fd44232bc0c3dd968d2cf0c1965e3f3b82c55f4f343ef3a58b4065a1694",
+}
+
+const goldenCorpusSHA256 = "5cd3a84911666ef810ac38e2a8f494491c9e739ed855c00cc8fdc0ac54a155a6"
 
 func TestFilesAreDeterministicAndBounded(t *testing.T) {
 	first, second := Files(), Files()
@@ -25,98 +33,140 @@ func TestFilesAreDeterministicAndBounded(t *testing.T) {
 			t.Fatalf("%s changed between calls", name)
 		}
 	}
-	first["fixture/Juniper-Notes.md"][0] ^= 0xff
-	if bytes.Equal(first["fixture/Juniper-Notes.md"], Files()["fixture/Juniper-Notes.md"]) {
-		t.Fatal("Files returned shared mutable storage")
-	}
 }
 
-func TestPythonStructuralParity(t *testing.T) {
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Fatal("python3 required for compatibility check:", err)
+func TestGoldenSHA256(t *testing.T) {
+	files := Files()
+	if len(files) != len(goldenFileSHA256) {
+		t.Fatalf("file count: got %d, want %d", len(files), len(goldenFileSHA256))
 	}
-	script := `import base64, json, pathlib, sys
-sys.path.insert(0, str(pathlib.Path("../../scripts").resolve()))
-import acceptance_fixture
-print(json.dumps({name: base64.b64encode(data.encode("utf-8") if isinstance(data, str) else data).decode("ascii") for name, data in acceptance_fixture.files().items()}, ensure_ascii=False))`
-	output, err := exec.Command(python, "-c", script).CombinedOutput()
-	if err != nil {
-		t.Fatalf("Python fixture generator failed: %v: %s", err, output)
-	}
-	var expected map[string]string
-	if err := json.Unmarshal(output, &expected); err != nil {
-		t.Fatalf("decode Python output: %v", err)
-	}
-	actual := Files()
-	if len(expected) != len(actual) {
-		t.Fatalf("file count differs: Python=%d Go=%d", len(expected), len(actual))
-	}
-	for name, encoded := range expected {
-		want, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, ok := actual[name]
+	names := make([]string, 0, len(files))
+	for name, data := range files {
+		want, ok := goldenFileSHA256[name]
 		if !ok {
-			t.Fatalf("Go missing %q", name)
-		}
-		switch filepath.Ext(name) {
-		case ".md", ".pdf":
-			if !bytes.Equal(got, want) {
-				t.Errorf("%s bytes differ", name)
-			}
-		case ".docx":
-			assertZipStructure(t, name, got, want)
-		default:
 			t.Errorf("unexpected fixture path %q", name)
+			continue
+		}
+		got := fmt.Sprintf("%x", sha256.Sum256(data))
+		if got != want {
+			t.Errorf("%s SHA-256 = %s, want %s", name, got, want)
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	h := sha256.New()
+	for _, name := range names {
+		h.Write([]byte(name))
+		h.Write([]byte{0})
+		h.Write(files[name])
+		h.Write([]byte{0})
+	}
+	if got := fmt.Sprintf("%x", h.Sum(nil)); got != goldenCorpusSHA256 {
+		t.Errorf("corpus SHA-256 = %s, want %s", got, goldenCorpusSHA256)
+	}
+}
+
+func TestReturnedSlicesAndCallsAreIsolated(t *testing.T) {
+	first := Files()
+	pristine := Files()
+	for name, data := range first {
+		if len(data) == 0 {
+			t.Fatalf("%s unexpectedly empty", name)
+		}
+		for i := range data {
+			data[i] ^= 0xff
+		}
+		if bytes.Equal(data, pristine[name]) {
+			t.Errorf("mutating returned %s did not affect only that slice", name)
+		}
+	}
+	first["fixture/extra"] = []byte("caller-owned")
+	delete(first, "fixture/Juniper-Notes.md")
+	second := Files()
+	if len(second) != len(pristine) {
+		t.Fatalf("later Files call has %d paths, want %d", len(second), len(pristine))
+	}
+	for name, want := range pristine {
+		if !bytes.Equal(second[name], want) {
+			t.Errorf("later Files call changed after caller mutation: %s", name)
 		}
 	}
 }
 
-func assertZipStructure(t *testing.T, name string, got, want []byte) {
-	t.Helper()
-	open := func(label string, data []byte) map[string][]byte {
-		reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+func TestDOCXZIPContract(t *testing.T) {
+	const name = "fixture/Élodie-Parcel.docx"
+	data := Files()[name]
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantContents := map[string][]byte{
+		"[Content_Types].xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`),
+		"_rels/.rels": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`),
+		"word/document.xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Fictional fixture: juniper observatory parcel.</w:t></w:r></w:p><w:sectPr/></w:body></w:document>`),
+	}
+	if len(reader.File) != len(wantContents) {
+		t.Fatalf("ZIP entry count = %d, want %d", len(reader.File), len(wantContents))
+	}
+	seen := make(map[string]bool, len(reader.File))
+	for _, member := range reader.File {
+		if seen[member.Name] {
+			t.Errorf("duplicate ZIP entry %q", member.Name)
+			continue
+		}
+		seen[member.Name] = true
+		if member.Name == "" || member.FileInfo().IsDir() || member.Mode().Perm() != 0644 || member.Method != zip.Deflate {
+			t.Errorf("unexpected ZIP metadata for %q: mode=%v method=%d", member.Name, member.Mode(), member.Method)
+		}
+		if got := member.Modified.UTC(); !got.Equal(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)) {
+			t.Errorf("timestamp for %q = %v", member.Name, got)
+		}
+		want, ok := wantContents[member.Name]
+		if !ok {
+			t.Errorf("unexpected ZIP entry %q", member.Name)
+			continue
+		}
+		stream, err := member.Open()
 		if err != nil {
-			t.Fatalf("%s %s ZIP: %v", name, label, err)
+			t.Fatalf("open %q: %v", member.Name, err)
 		}
-		result := make(map[string][]byte)
-		for _, member := range reader.File {
-			if member.Name == "" || member.FileInfo().IsDir() || member.Mode().Perm() != 0644 || member.Method != zip.Deflate {
-				t.Errorf("%s %s unexpected ZIP metadata for %q: mode=%v method=%d", name, label, member.Name, member.Mode(), member.Method)
-			}
-			date := member.Modified.UTC()
-			if !date.Equal(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)) {
-				t.Errorf("%s %s timestamp for %q: %v", name, label, member.Name, date)
-			}
-			stream, err := member.Open()
-			if err != nil {
-				t.Fatalf("%s %s member %q: %v", name, label, member.Name, err)
-			}
-			var content bytes.Buffer
-			_, err = content.ReadFrom(stream)
-			_ = stream.Close()
-			if err != nil {
-				t.Fatalf("%s %s member %q: %v", name, label, member.Name, err)
-			}
-			result[member.Name] = content.Bytes()
+		got, readErr := io.ReadAll(stream)
+		closeErr := stream.Close()
+		if readErr != nil {
+			t.Fatalf("read %q: %v", member.Name, readErr)
 		}
-		return result
+		if closeErr != nil {
+			t.Fatalf("close %q: %v", member.Name, closeErr)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("contents differ for %q", member.Name)
+		}
 	}
-	gotEntries, wantEntries := open("Go", got), open("Python", want)
-	if !reflect.DeepEqual(gotEntries, wantEntries) {
-		t.Errorf("%s decompressed ZIP entries differ: Go=%v Python=%v", name, keys(gotEntries), keys(wantEntries))
-	}
-	if len(gotEntries) != 3 {
-		t.Errorf("%s has %d entries, want 3", name, len(gotEntries))
+	for entry := range wantContents {
+		if !seen[entry] {
+			t.Errorf("missing ZIP entry %q", entry)
+		}
 	}
 }
 
-func keys(values map[string][]byte) []string {
-	result := make([]string, 0, len(values))
-	for key := range values {
-		result = append(result, key)
+func TestCorpusHashUsesStableFilenameOrder(t *testing.T) {
+	files := Files()
+	names := []string{"fixture/Copper-Lantern.pdf", "fixture/Juniper-Notes.md", "fixture/Élodie-Parcel.docx"}
+	// The contract sorts UTF-8 filename bytes before adding NUL separators.
+	sort.Strings(names)
+	first := sha256.New()
+	for _, name := range names {
+		first.Write([]byte(name + "\x00"))
+		first.Write(files[name])
+		first.Write([]byte{0})
 	}
-	return result
+	if fmt.Sprintf("%x", first.Sum(nil)) != goldenCorpusSHA256 {
+		t.Fatal("stable filename/NUL corpus digest changed")
+	}
+	if !reflect.DeepEqual(names, []string{"fixture/Copper-Lantern.pdf", "fixture/Juniper-Notes.md", "fixture/Élodie-Parcel.docx"}) {
+		t.Fatalf("unexpected filename order: %v", names)
+	}
 }
