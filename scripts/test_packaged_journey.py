@@ -68,7 +68,7 @@ class ReportTests(unittest.TestCase):
         binary.chmod(0o755)
         return SimpleNamespace(binary=binary, candidate_sha="a" * 40,
                                candidate_version="0.1.0-alpha.5", alpha3_binary=binary,
-                               alpha4_binary=binary, evidence_fixture=binary,
+                               alpha4_binary=binary, evidence_fixture=binary, smoke_tool=binary,
                                report=root / "report.json", skip_browser=skip)
 
     def execute(self, args, operation=None):
@@ -91,6 +91,53 @@ class ReportTests(unittest.TestCase):
             report = json.loads(args.report.read_text())
             self.assertEqual(report["status"], "failed")
             self.assertEqual([(c["case"], c["status"]) for c in report["cases"]], [("candidate_identity", "failed")])
+
+    def test_missing_smoke_tool_fails_before_candidate_or_journey(self):
+        for invalid in (None, pathlib.Path("/not/a/real/smoke-tool")):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as temp:
+                args = self.args(pathlib.Path(temp))
+                args.smoke_tool = invalid
+                with patch.object(journey, "validate_candidate") as validate, \
+                     patch.object(journey, "command") as command, \
+                     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(journey.execute(args), 1)
+                validate.assert_not_called()
+                command.assert_not_called()
+                report = json.loads(args.report.read_text())
+                self.assertEqual(report["status"], "failed")
+                self.assertEqual(report["cases"], [])
+
+    def test_non_executable_smoke_tool_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            tool = root / "not-executable"
+            tool.write_text("not executable")
+            with self.assertRaisesRegex(ValueError, "executable"):
+                journey.require_smoke_tool(tool)
+
+    def test_cli_requires_smoke_tool(self):
+        argv = ["packaged_journey.py", "candidate", "--candidate-sha", "a" * 40,
+                "--candidate-version", "0.1.0-alpha.5", "--alpha3-binary", "alpha3",
+                "--alpha4-binary", "alpha4"]
+        with patch.object(sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                journey.main()
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_smoke_cases_always_use_explicit_tool_and_keep_historical_ids(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = self.args(pathlib.Path(temp), skip=True)
+            calls = []
+            def capture(argv, **kwargs):
+                calls.append(argv)
+            status, report = self.execute(args, capture)
+            self.assertEqual(status, 0)
+            self.assertEqual(report["status"], "incomplete")
+            by_case = {call[1]: call for call in calls if len(call) > 1 and call[0] == str(args.smoke_tool)}
+            self.assertEqual(by_case["search-smoke"][0], str(args.smoke_tool))
+            self.assertEqual(by_case["diagnostics-smoke"][0], str(args.smoke_tool))
+            self.assertIn("search_smoke.py", [case["case"] for case in report["cases"]])
+            self.assertIn("diagnostics_smoke.py", [case["case"] for case in report["cases"]])
 
     def test_skip_is_incomplete_and_each_browser_case_is_recorded(self):
         with tempfile.TemporaryDirectory() as temp:
