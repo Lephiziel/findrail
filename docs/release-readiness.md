@@ -24,7 +24,7 @@ a new local-v1 SDK-contributor gate.
 | Strict software candidate | Exact SHA/version; required root/transfer/common browser cases; five native targets, installed VSIX and exact asset verification | Existing strict `candidate_record.py summary`, after the mandatory candidate jobs |
 | Native install lifecycle | Five real targets, eight fixed installer cases each, matching archive and desktop/CLI hashes | Validated native records from that summary |
 | Freshness and first run | Two additional fixed freshness browser cases; passage-window smoke also executes the keyboard first-run journey | Existing packaged browser reports on the supplied extracted candidate |
-| Crash/recovery | Actual Linux SIGKILL, reopened integrity checks, complete old-or-new state | `recovery_candidate.py` on the same extracted production binary; a required technical outcome for this handoff |
+| Crash/recovery | Actual Linux SIGKILL, reopened integrity checks, complete old-or-new state | `findrail-resource-check sigkill` on the same extracted production binary; a required technical outcome for this handoff |
 | Final 10k / 100k | Complete fixture-v2/seed-42 runs on the final candidate, paging 20/50/100 and refresh/cancellation | Required on the final frozen beta candidate; old TASK17/alpha runs do not certify it |
 | Manual Windows first run | Matching human report on the exact `windows-amd64` archive | Existing `windows_first_run`; the planned Windows VM run remains pending until a matching passed report is validated; failed/invalid reports block |
 | Manual Apple Silicon first run | Matching human report on the exact `darwin-arm64` archive | Existing `apple_silicon_first_run`; native CI is not Finder/Gatekeeper evidence |

@@ -239,8 +239,12 @@ jobs:
               --documents 100 --seed 42 --queries 2 --report "$RUNNER_TEMP/source-baseline-resource-comparison.json"
             "$PY" scripts/search_resource_check.py --binary "$BINARY" --documents 1000 --seed 42 --queries 2 \
               --source-cycle-boundaries --report "$RUNNER_TEMP/source-cycle-resource-boundaries.json"
-            "$PY" scripts/portable_resource_check.py "$BINARY" > "$RUNNER_TEMP/snapshot-resource-boundary.json"
-            "$PY" scripts/recovery_candidate.py --binary "$BINARY" --revision "$CANDIDATE_SHA" --schema 8 \
+            go build -o "$RUNNER_TEMP/findrail-resource-check" ./cmd/findrail-resource-check
+            BINARY_SHA256=$(sha256sum "$BINARY" | cut -d ' ' -f1)
+            "$RUNNER_TEMP/findrail-resource-check" portable-boundary --binary "$BINARY" > "$RUNNER_TEMP/snapshot-resource-boundary.json"
+            mkdir -p "$RUNNER_TEMP/recovery-work"
+            "$RUNNER_TEMP/findrail-resource-check" sigkill --binary "$BINARY" --binary-sha256 "$BINARY_SHA256" \
+              --revision "$CANDIDATE_SHA" --schema 8 \
               --work-dir "$RUNNER_TEMP/recovery-work" --report "$RUNNER_TEMP/recovery-candidate.json"
           fi
       - name: Save verification result and archive
