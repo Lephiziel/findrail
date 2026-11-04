@@ -56,7 +56,10 @@ receive a private local JSON report. Do not create a second product intake
 system. The offline operator command remains:
 
 ```sh
-python3 scripts/manual_evidence.py \
+go build -o /abs/tools/findrail-manual ./cmd/findrail-manual
+/abs/tools/findrail-manual intake \
+  --python "$(command -v python3)" \
+  --readiness "$PWD/scripts/readiness.py" \
   --candidate /abs/evidence/verified-candidate.json \
   --report /abs/evidence/report.json \
   --output /abs/evidence/intake

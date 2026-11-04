@@ -91,6 +91,14 @@ jobs:
             [[ "$MODE" == refresh ]]
             [[ "$REFRESH_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
           fi
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Build the manual evidence validator once
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o "$RUNNER_TEMP/findrail-manual" ./cmd/findrail-manual
       - name: Confirm checked-out source is the exact candidate
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Preflight GitHub run metadata and download exact artifact IDs
@@ -198,6 +206,7 @@ jobs:
             --output-dir "$OUTPUT_ROOT/handoff" \
             --reports-zip "$OUTPUT_ROOT/beta-evidence-reports.zip" \
             --diagnostics "$OUTPUT_ROOT/diagnostics.json" \
+            --manual-tool "$RUNNER_TEMP/findrail-manual" \
             "${args[@]}" > "$OUTPUT_ROOT/result.json"
           python3 scripts/beta_evidence.py verify \
             --candidate-sha "$CANDIDATE_SHA" \
@@ -205,6 +214,7 @@ jobs:
             --assets-dir "$WORK_ROOT/downloads/assets" \
             --handoff-dir "$OUTPUT_ROOT/handoff" \
             --reports-zip "$OUTPUT_ROOT/beta-evidence-reports.zip" \
+            --manual-tool "$RUNNER_TEMP/findrail-manual" \
             > "$WORK_ROOT/verify-result.json"
           python3 - "$OUTPUT_ROOT/result.json" "$WORK_ROOT/verify-result.json" <<'PY'
           import json, pathlib, sys
@@ -235,6 +245,7 @@ jobs:
             --output-dir "$OUTPUT_ROOT/handoff" \
             --reports-zip "$OUTPUT_ROOT/beta-evidence-reports.zip" \
             --diagnostics "$OUTPUT_ROOT/diagnostics.json" \
+            --manual-tool "$RUNNER_TEMP/findrail-manual" \
             "${args[@]}" > "$OUTPUT_ROOT/result.json"
           python3 scripts/beta_evidence.py verify \
             --candidate-sha "$CANDIDATE_SHA" \
@@ -242,6 +253,7 @@ jobs:
             --assets-dir "$WORK_ROOT/downloads/assets" \
             --handoff-dir "$OUTPUT_ROOT/handoff" \
             --reports-zip "$OUTPUT_ROOT/beta-evidence-reports.zip" \
+            --manual-tool "$RUNNER_TEMP/findrail-manual" \
             > "$WORK_ROOT/refresh-verify-result.json"
           python3 - "$OUTPUT_ROOT/result.json" "$WORK_ROOT/refresh-verify-result.json" <<'PY'
           import json, pathlib, sys
