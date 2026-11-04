@@ -29,8 +29,18 @@ jobs:
         run: python3 scripts/test_package.py
       - name: Release asset contract tests
         run: python3 -m unittest scripts/test_release_assets.py scripts/test_release_gate.py scripts/test_packaged_journey.py scripts/test_smoke.py scripts/test_readiness.py
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Build the manual evidence validator once
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o "$RUNNER_TEMP/findrail-manual" ./cmd/findrail-manual
       - name: Performance and acceptance contract tests
-        run: python3 -m unittest scripts/test_resource_series.py scripts/test_search_resource_check.py scripts/test_mixed_load_soak.py scripts/test_acceptance_kit.py scripts/test_manual_evidence.py scripts/test_beta_evidence.py scripts/test_alpha5_media.py
+        env:
+          FINDRAIL_MANUAL_TOOL: ${{ runner.temp }}/findrail-manual
+        run: python3 -m unittest scripts/test_resource_series.py scripts/test_search_resource_check.py scripts/test_mixed_load_soak.py scripts/test_acceptance_kit.py scripts/test_beta_evidence.py scripts/test_alpha5_media.py
   check:
     strategy:
       fail-fast: false
@@ -57,7 +67,11 @@ jobs:
           CGO_ENABLED: '0'
         run: go build ./cmd/findrail
       - name: Build development smoke helper
+        if: runner.os != 'Windows'
         run: go build -o findrail-smoke ./cmd/findrail-smoke
+      - name: Build development smoke helper (Windows)
+        if: runner.os == 'Windows'
+        run: go build -o findrail-smoke.exe ./cmd/findrail-smoke
       - name: Compiled alpha smoke (Unix)
         if: runner.os != 'Windows'
         run: python3 scripts/smoke.py ./findrail

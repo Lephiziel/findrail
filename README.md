@@ -47,14 +47,15 @@ uploads**. The standalone app includes its database and web interface; Go and
 Python are only development tools.
 
 > [!NOTE]
-> **Early alpha — feedback welcome.** The current download is
-> [0.1.0-alpha.5](https://github.com/Lephiziel/findrail/releases/tag/v0.1.0-alpha.5),
-> with passage windows, paged results and explicit source/evidence transfer.
-> [What's new](#new-in-alpha5) · [Verified release](docs/release-alpha5-verification.md).
-> Beta.1 preparation: [limited-beta release notes](docs/release-notes-beta1.md)
-> (preparation only; not a download or published release).
+> **Limited desktop beta — feedback welcome.** The current download is
+> [0.1.0-beta.1](https://github.com/Lephiziel/findrail/releases/tag/v0.1.0-beta.1),
+> published from `4c0c94e1663804344b1ae1cbcdc3a346208e688a`.
+> [First use](docs/beta-start-here.md) · [Platform coverage](docs/beta-support.md).
+> Linux amd64 is the primary beta path; Windows amd64 is a primary target with
+> an incomplete manual report. macOS and Linux arm64 are experimental.
+> Automated checks do not establish independent human use or stable/v1 readiness.
 > Upgrading an existing index? [Stop and back up the whole data directory first](build/package/INSTALL.txt).
-> Alpha.5 uses schema 8. Earlier binaries cannot open an index upgraded to
+> Beta.1 and alpha.5 use schema 8. Earlier binaries cannot open an index upgraded to
 > schema 8; rollback requires the complete stopped pre-upgrade backup.
 
 ## A path back to your documents
@@ -109,20 +110,20 @@ as independent frozen sources. [GitHub sources](docs/github.md) ·
 
 ### 1. Download
 
-Download **0.1.0-alpha.5** for your computer, verify the matching entry in
-[SHA256SUMS.txt](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/SHA256SUMS.txt),
+Download **0.1.0-beta.1** for your computer, verify the matching entry in
+[SHA256SUMS.txt](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-beta.1/SHA256SUMS.txt),
 then extract the archive into a folder you own.
 
 | Linux | macOS | Windows |
 |:---|:---|:---|
-| [x86-64 / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_linux-amd64.tar.gz) | [Apple Silicon / arm64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_darwin-arm64.tar.gz) | [x86-64 / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_windows-amd64.zip) |
-| [ARM64 / arm64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_linux-arm64.tar.gz) | [Intel / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/findrail_0.1.0-alpha.5_darwin-amd64.tar.gz) | |
+| [x86-64 / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-beta.1/findrail_0.1.0-beta.1_linux-amd64.tar.gz) | [Apple Silicon / arm64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-beta.1/findrail_0.1.0-beta.1_darwin-arm64.tar.gz) | [x86-64 / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-beta.1/findrail_0.1.0-beta.1_windows-amd64.zip) |
+| [ARM64 / arm64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-beta.1/findrail_0.1.0-beta.1_linux-arm64.tar.gz) | [Intel / amd64](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-beta.1/findrail_0.1.0-beta.1_darwin-amd64.tar.gz) | |
 
 No Go, Python, database server or Docker setup is required. **macOS 13+** is
-required for these macOS builds. The alpha binaries are unsigned; read the
+required for these macOS builds. The beta binaries are unsigned; read the
 bundled `INSTALL.txt` for platform-specific first-run instructions. On macOS,
 an app-specific allowance may be needed in Privacy & Security. [Installation, upgrade and rollback](build/package/INSTALL.txt) ·
-[Release manifest](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-alpha.5/release-manifest.json)
+[Release manifest](https://github.com/Lephiziel/findrail/releases/download/v0.1.0-beta.1/release-manifest.json)
 
 ### 2. Start
 
@@ -209,7 +210,7 @@ headless machine. `demo` uses its own temporary index and does not accept
 
 > [!IMPORTANT]
 > Stop Findrail and back up the **whole data directory** before upgrading.
-> Alpha.5 uses schema **8**; alpha.4 uses **7** and alpha.3 uses **6**.
+> Beta.1 and alpha.5 use schema **8**; alpha.4 uses **7** and alpha.3 uses **6**.
 > Upgrades are forward-only: alpha.4 cannot open a schema-8 index.
 > [Backup and rollback instructions](build/package/INSTALL.txt).
 
@@ -252,7 +253,7 @@ historical indexed passages, not live copies of the original files.
 | [Indexing diagnostics](docs/indexing-diagnostics.md) | [Search evaluation](docs/search-evaluation.md) |
 | [Portable snapshots](docs/portable-snapshots.md) | [Experimental connector kit](docs/connectors.md) |
 | [Release checks](docs/release-alpha5-verification.md) | [Product direction](docs/product.md) |
-| [Beta.1 platform and preparation policy](docs/beta-support.md) | [Beta evidence handoff contract](docs/beta-evidence.md) |
+| [Beta.1 platform and release policy](docs/beta-support.md) | [Beta evidence handoff contract](docs/beta-evidence.md) |
 | [Русский обзор](docs/ru/overview.md) | [Contributing](CONTRIBUTING.md) |
 
 ## Build from source

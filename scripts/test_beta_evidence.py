@@ -4,6 +4,7 @@ import copy
 import hashlib
 import io
 import json
+import os
 import pathlib
 import shutil
 import stat
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -21,13 +23,15 @@ import acceptance_kit
 import beta_evidence as evidence
 import beta_evidence_github as github
 import candidate_record
-import manual_evidence
 import readiness
 import release_assets
 import resource_series
 import test_acceptance_kit
 import test_release_assets
 
+
+MANUAL_CASES = ("install", "launch", "repeat-launch", "retrieval", "collection-restart",
+                "refresh", "quit", "uninstall-data-preserved")
 
 SHA = "2" * 40
 BINARY_SHA = "a" * 64
@@ -98,9 +102,13 @@ def _replace_fixture_value(value, old, new):
     return value
 
 
+def _candidate_bytes(candidate):
+    return (json.dumps(candidate, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode()
+
+
 def _manual_report(kind, target, candidate, native, reference, status="passed"):
     cases = [{"case": name, "status": "passed", "elapsed_seconds": 1}
-             for name in manual_evidence.CASES]
+             for name in MANUAL_CASES]
     return {"kind": kind, "evidence_type": "manual", "status": status,
             "candidate_sha": candidate["candidate_sha"],
             "candidate_version": candidate["candidate_version"], "target": target,
@@ -336,6 +344,71 @@ def _soak_fixture(directory, candidate_sha=SHA, candidate_version=evidence.VERSI
 
 
 class BetaEvidenceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        configured = os.environ.get("FINDRAIL_MANUAL_TOOL")
+        cls._tool_dir = None
+        if configured:
+            cls.manual_tool = pathlib.Path(configured).resolve(strict=True)
+        else:
+            cls._tool_dir = tempfile.TemporaryDirectory(prefix="findrail-manual-test-")
+            cls.manual_tool = pathlib.Path(cls._tool_dir.name) / ("findrail-manual.exe" if sys.platform == "win32" else "findrail-manual")
+            root = pathlib.Path(__file__).resolve().parents[1]
+            subprocess.run(["go", "build", "-o", str(cls.manual_tool), "./cmd/findrail-manual"],
+                           cwd=root, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                           timeout=120)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._tool_dir is not None:
+            cls._tool_dir.cleanup()
+
+    @unittest.skipUnless(os.name == "posix", "process-group behavior is POSIX-specific")
+    def test_manual_validator_timeout_capture_overflow_and_descendant_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            report = root / "report.json"
+            report.write_text("{}", encoding="utf-8")
+            candidate = {"candidate_sha": SHA, "candidate_version": evidence.VERSION}
+            native = {"windows-amd64": {"archive": {"sha256": "a" * 64}}}
+
+            def fake_tool(name, body):
+                tool = root / name
+                tool.write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
+                tool.chmod(0o700)
+                return tool
+
+            def invoke(tool, **kwargs):
+                return evidence._manual_record(
+                    report, "windows_first_run", candidate, b"{}", native, tool,
+                    timeout=kwargs.get("timeout", 0.3),
+                    output_limit=kwargs.get("output_limit", 4096))
+
+            no_output = fake_tool("no-output", "import time; time.sleep(30)\n")
+            started = time.monotonic()
+            with self.assertRaisesRegex(evidence.EvidenceError, "manual_validator_timeout"):
+                invoke(no_output)
+            self.assertLess(time.monotonic() - started, 5)
+
+            partial = fake_tool("partial", "import sys,time; sys.stdout.write('{'); sys.stdout.flush(); time.sleep(30)\n")
+            with self.assertRaisesRegex(evidence.EvidenceError, "manual_validator_timeout"):
+                invoke(partial)
+
+            overflow = fake_tool("overflow", "import sys,time; sys.stdout.write('x'*10000); sys.stdout.flush(); time.sleep(30)\n")
+            with self.assertRaisesRegex(evidence.EvidenceError, "manual_validator_protocol_invalid"):
+                invoke(overflow, output_limit=1024)
+
+            heartbeat = root / "heartbeat"
+            descendant = fake_tool(
+                "descendant",
+                "import subprocess,sys; "
+                f"subprocess.Popen([sys.executable, '-c', {('import pathlib,time; p=pathlib.Path(' + repr(str(heartbeat)) + '); exec(\"while True:\\n p.open(\\\"a\\\").write(\\\"x\\\"); time.sleep(.01)\")')!r}])\n")
+            with self.assertRaisesRegex(evidence.EvidenceError, "manual_validator_handles_open"):
+                invoke(descendant)
+            size = heartbeat.stat().st_size
+            time.sleep(0.1)
+            self.assertEqual(heartbeat.stat().st_size, size,
+                             "owned descendant continued after adapter returned")
     def test_assemble_refuses_existing_outputs_without_removing_user_data(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
@@ -447,6 +520,32 @@ class BetaEvidenceTests(unittest.TestCase):
             for name in sorted(evidence.CANDIDATE_LEGACY_JOB_NAMES)
         ]
         evidence.validate_trusted_metadata(historical, SHA, evidence.VERSION)
+
+    def test_macos15_candidate_graph_preserves_frozen_macos14_validation(self):
+        historical = _metadata()
+        evidence.validate_trusted_metadata(historical, SHA, evidence.VERSION)
+        current = copy.deepcopy(historical)
+        arm_job = next(job for job in current["candidate_run"]["jobs"]
+                       if job["name"] == "native-packages (darwin-arm64, macos-14)")
+        arm_job["name"] = "native-packages (darwin-arm64, macos-15)"
+        self.assertEqual({job["name"] for job in current["candidate_run"]["jobs"]},
+                         evidence.CANDIDATE_JOB_NAMES)
+        evidence.validate_trusted_metadata(current, SHA, evidence.VERSION)
+        for variant in (historical, current):
+            for conclusion in ("skipped", "cancelled", "failure"):
+                bad = copy.deepcopy(variant)
+                next(job for job in bad["candidate_run"]["jobs"]
+                     if job["name"].startswith("native-packages (darwin-arm64,")
+                     )["conclusion"] = conclusion
+                with self.subTest(graph=variant is current, conclusion=conclusion), \
+                        self.assertRaises(evidence.EvidenceError):
+                    evidence.validate_trusted_metadata(bad, SHA, evidence.VERSION)
+        duplicate = copy.deepcopy(current)
+        duplicate["candidate_run"]["jobs"].append(copy.deepcopy(next(
+            job for job in historical["candidate_run"]["jobs"]
+            if job["name"] == "native-packages (darwin-arm64, macos-14)")))
+        with self.assertRaises(evidence.EvidenceError):
+            evidence.validate_trusted_metadata(duplicate, SHA, evidence.VERSION)
 
     def test_metadata_requires_candidate_and_performance_run_ids_to_be_decimal(self):
         metadata = _metadata()
@@ -596,19 +695,19 @@ class BetaEvidenceTests(unittest.TestCase):
                 assets_dir=fixture["assets"], run_metadata=refreshed_metadata,
                 output_dir=refreshed, reports_zip=refreshed_zip,
                 windows_report=windows_path, linux_report=linux_path,
-                diagnostics=root / "refreshed-diagnostics.json")
+                diagnostics=root / "refreshed-diagnostics.json", manual_tool=self.manual_tool)
             original_run = evidence.subprocess.run
             with mock.patch.object(evidence.subprocess, "run", wraps=original_run) as run_spy:
                 refresh_result = evidence.refresh(refresh_args)
-            self.assertEqual(len(run_spy.call_args_list), 1)
-            readiness_command = run_spy.call_args.args[0]
-            self.assertEqual(pathlib.Path(readiness_command[2]).name, "readiness.py")
-            self.assertNotIn("search_resource_check.py", " ".join(readiness_command))
+            self.assertTrue(any(pathlib.Path(call.args[0][2]).name == "readiness.py"
+                                for call in run_spy.call_args_list))
+            self.assertTrue(all("search_resource_check.py" not in " ".join(call.args[0])
+                                for call in run_spy.call_args_list))
 
             refreshed_verify = evidence.verify(argparse.Namespace(
                 candidate_sha=SHA, candidate_version=evidence.VERSION,
                 assets_dir=fixture["assets"], handoff_dir=refreshed,
-                reports_zip=refreshed_zip))
+                reports_zip=refreshed_zip, manual_tool=self.manual_tool))
             self.assertEqual(refresh_result["report_zip_sha256"],
                              refreshed_verify["report_zip_sha256"])
             self.assertEqual(evidence._refresh_technical_paths(handoff),
@@ -644,7 +743,7 @@ class BetaEvidenceTests(unittest.TestCase):
                 evidence.verify(argparse.Namespace(
                     candidate_sha=SHA, candidate_version=evidence.VERSION,
                     assets_dir=fixture["assets"], handoff_dir=refreshed,
-                    reports_zip=invalid_zip))
+                    reports_zip=invalid_zip, manual_tool=self.manual_tool))
 
     def test_independent_verify_rejects_rehashed_provenance_and_manual_summary_contradictions(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -662,14 +761,16 @@ class BetaEvidenceTests(unittest.TestCase):
                 run_metadata=fixture["metadata_path"], kits_dir=fixture["kits_dir"],
                 output_dir=handoff, reports_zip=reports_zip,
                 windows_report=fixture["windows_report"],
-                linux_report=fixture["linux_report"], diagnostics=None))
+                linux_report=fixture["linux_report"], diagnostics=None,
+                manual_tool=self.manual_tool))
 
             command = [sys.executable, "-B",
                        str(pathlib.Path(__file__).parents[1] / "scripts/beta_evidence.py"),
                        "verify", "--candidate-sha", SHA,
                        "--candidate-version", evidence.VERSION,
                        "--assets-dir", str(fixture["assets"]),
-                       "--handoff-dir", str(handoff), "--reports-zip", str(reports_zip)]
+                       "--handoff-dir", str(handoff), "--reports-zip", str(reports_zip),
+                        "--manual-tool", str(self.manual_tool)]
 
             def verify():
                 result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -744,11 +845,12 @@ class BetaEvidenceTests(unittest.TestCase):
                 run_metadata=fixture["metadata_path"], kits_dir=fixture["kits_dir"],
                 output_dir=handoff, reports_zip=reports_zip,
                 windows_report=fixture["windows_report"],
-                linux_report=fixture["linux_report"], diagnostics=None))
+                linux_report=fixture["linux_report"], diagnostics=None,
+                manual_tool=self.manual_tool))
             verified = evidence.verify(argparse.Namespace(
                 candidate_sha=SHA, candidate_version=evidence.VERSION,
                 assets_dir=fixture["assets"], handoff_dir=handoff,
-                reports_zip=reports_zip))
+                reports_zip=reports_zip, manual_tool=self.manual_tool))
             self.assertEqual(result["report_zip_sha256"], verified["report_zip_sha256"])
             index, _ = evidence.load_json(handoff / "evidence-index.json")
             intake, _ = evidence.load_json(handoff / "manual-evidence/intake-summary.json")
@@ -886,6 +988,18 @@ class BetaEvidenceTests(unittest.TestCase):
             self.assertNotIn(secret, github_output.read_text(encoding="utf-8"))
             self.assertIn(str(windows_path), github_output.read_text(encoding="utf-8"))
 
+            boundary_event = root / "boundary-event.json"
+            boundary_report = json.dumps({"notes": ""})
+            boundary_report += " " * (evidence.MAX_MANUAL_JSON - len(boundary_report.encode("utf-8")))
+            self.assertEqual(len(boundary_report.encode("utf-8")), evidence.MAX_MANUAL_JSON)
+            boundary_event.write_text(json.dumps({"inputs": {
+                "windows_report_json": boundary_report, "linux_report_json": ""}}),
+                encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                evidence._write_manual_inputs(argparse.Namespace(
+                    event_path=boundary_event, output_dir=root / "boundary-inputs",
+                    github_output=None))
+
             oversized_event = root / "oversized-event.json"
             oversized_report = json.dumps({"notes": "x" * evidence.MAX_MANUAL_JSON})
             oversized_event.write_text(json.dumps({"inputs": {
@@ -896,11 +1010,218 @@ class BetaEvidenceTests(unittest.TestCase):
                     event_path=oversized_event, output_dir=root / "oversized-inputs",
                     github_output=None))
 
+    def test_go_manual_intake_sanitizes_outputs_and_clears_stale_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            fixture = _full_beta_fixture(root)
+            summary, native = fixture["summary"], fixture["native"]
+            command = [str(self.manual_tool), "intake", "--candidate",
+                       str(fixture["summary_path"]), "--python", sys.executable,
+                       "--readiness", str(pathlib.Path(__file__).with_name("readiness.py"))]
+
+            windows = _manual_report("windows_first_run", "windows-amd64", summary, native,
+                                     "sha256:" + "a" * 64)
+            windows.update(observer="PRIVATE PERSON", notes="PRIVATE prose")
+            windows_path = root / "windows.json"
+            windows_path.write_text(json.dumps(windows), encoding="utf-8")
+            output = root / "intake"
+            result = subprocess.run(command + ["--report", str(windows_path),
+                                               "--output", str(output)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            summary_out = json.loads((output / "intake.json").read_text())
+            self.assertEqual(summary_out["status"], "recorded")
+            self.assertEqual(summary_out["outputs"], ["supplemental.json"])
+            supplemental = (output / "supplemental.json").read_text()
+            self.assertNotIn("PRIVATE", supplemental)
+
+            # The adapter receives original bytes: duplicate members must be
+            # rejected by Go, never normalized by a Python decode/re-encode.
+            duplicate_path = root / "duplicate.json"
+            duplicate_path.write_text(
+                windows_path.read_text(encoding="utf-8").replace(
+                    "{", '{"kind":"windows_first_run",', 1), encoding="utf-8")
+            with self.assertRaisesRegex(evidence.EvidenceError,
+                                        "manual_report_invalid_or_mismatched"):
+                evidence._prepare_manual_inputs(duplicate_path, None, summary,
+                                                fixture["summary_path"].read_bytes(),
+                                                native, self.manual_tool)
+
+            failed = copy.deepcopy(windows)
+            failed["status"] = "failed"
+            failed_path = root / "failed.json"
+            failed_path.write_text(json.dumps(failed), encoding="utf-8")
+            result = subprocess.run(command + ["--report", str(failed_path),
+                                               "--output", str(output)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(json.loads((output / "intake.json").read_text())["counts"]["failed"], 1)
+            self.assertFalse((output / "supplemental.json").exists())
+
+            linux = _manual_report("linux_first_run", "linux-amd64", summary, native, "",
+                                   status="incomplete")
+            linux["reference"] = ""
+            for case in linux["cases"]:
+                case.update(status="not_run", elapsed_seconds=None, observation="PRIVATE note")
+            linux_path = root / "linux.json"
+            linux_path.write_text(json.dumps(linux), encoding="utf-8")
+            result = subprocess.run(command + ["--report", str(linux_path),
+                                               "--output", str(output)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 1)
+            linux_output = json.loads((output / "linux-observations.json").read_text())
+            self.assertEqual(linux_output["observations"][0]["status"], "incomplete")
+            self.assertNotIn("PRIVATE", (output / "linux-observations.json").read_text())
+            self.assertFalse((output / "supplemental.json").exists())
+
+            usage = {"kind": "voluntary_usage", "reference": "sha256:" + "c" * 64,
+                     "candidate_sha": summary["candidate_sha"],
+                     "candidate_version": summary["candidate_version"],
+                     "evidence_type": "manual", "return_use": False,
+                     "retrieval_one": "not_found", "retrieval_two": "not_tried",
+                     "collection_restart": "not_restored", "obstacle": "PRIVATE query"}
+            usage_path = root / "usage.json"
+            usage_path.write_text(json.dumps(usage), encoding="utf-8")
+            result = subprocess.run(command + ["--report", str(usage_path),
+                                               "--output", str(output)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 1)
+            usage_output = json.loads((output / "usage-observations.json").read_text())
+            record = usage_output["observations"][0]
+            self.assertIs(record["return_use"], False)
+            self.assertEqual((record["retrieval_one"], record["retrieval_two"],
+                              record["collection_restart"]),
+                             ("not_found", "not_tried", "not_restored"))
+            self.assertNotIn("PRIVATE", (output / "usage-observations.json").read_text())
+
+            complete_usage = dict(usage, return_use=True, retrieval_two="found",
+                                 collection_restart="restored", obstacle="")
+            first = root / "usage-first.json"
+            second = root / "usage-second.json"
+            first.write_text(json.dumps(complete_usage), encoding="utf-8")
+            second.write_text(json.dumps(complete_usage), encoding="utf-8")
+            duplicate_output = root / "duplicate-intake"
+            result = subprocess.run(command + ["--report", str(first), "--report", str(second),
+                                               "--output", str(duplicate_output)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 1)
+            duplicate_summary = json.loads((duplicate_output / "intake.json").read_text())
+            self.assertEqual(duplicate_summary["counts"]["failed"], 1)
+            self.assertIn("duplicate_reference", duplicate_summary["issues"])
+            self.assertFalse((duplicate_output / "supplemental.json").exists())
+
+            windows["reference"] = "sha256:" + "d" * 64
+            mixed_windows = root / "mixed-windows.json"
+            mixed_windows.write_text(json.dumps(windows), encoding="utf-8")
+            mixed_output = root / "mixed-intake"
+            result = subprocess.run(command + ["--report", str(first), "--report",
+                                               str(mixed_windows), "--output", str(mixed_output)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 1)
+            mixed_summary = json.loads((mixed_output / "intake.json").read_text())
+            self.assertIn("mixed_report_kinds", mixed_summary["issues"])
+            self.assertFalse((mixed_output / "supplemental.json").exists())
+
+            mismatch = dict(windows, archive_sha256="0" * 64)
+            mismatch_path = root / "mismatch.json"
+            mismatch_path.write_text(json.dumps(mismatch), encoding="utf-8")
+            mismatch_output = root / "mismatch-intake"
+            result = subprocess.run(command + ["--report", str(mismatch_path),
+                                               "--output", str(mismatch_output)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 1)
+            mismatch_summary = json.loads((mismatch_output / "intake.json").read_text())
+            self.assertEqual(mismatch_summary["counts"]["mismatch"], 1)
+            self.assertIn("candidate_mismatch", mismatch_summary["issues"])
+
+            over_batch = root / "over-batch-intake"
+            args = command + [item for _ in range(101)
+                              for item in ("--report", str(windows_path))]
+            args += ["--output", str(over_batch)]
+            result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 1)
+            batch_summary = json.loads((over_batch / "intake.json").read_text())
+            self.assertEqual(batch_summary["counts"]["received"], 101)
+            self.assertEqual(batch_summary["counts"]["failed"], 101)
+            self.assertIn("candidate_invalid", batch_summary["issues"])
+
+    def test_linux_empty_reference_exception_rejects_wrong_types_in_cli_and_consumer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            fixture = _full_beta_fixture(root)
+            candidate = fixture["summary"]
+            candidate_path = fixture["summary_path"]
+            native = fixture["native"]
+            command = [str(self.manual_tool), "validate", "--candidate", str(candidate_path),
+                       "--python", sys.executable,
+                       "--readiness", str(pathlib.Path(__file__).with_name("readiness.py"))]
+            bad_values = (None, 42, True, {})
+            for index, value in enumerate(bad_values):
+                report = _manual_report("linux_first_run", "linux-amd64", candidate, native,
+                                        "", status="not_run")
+                for case in report["cases"]:
+                    case.update(status="not_run", elapsed_seconds=None)
+                report["reference"] = value
+                report_path = root / f"bad-reference-{index}.json"
+                report_path.write_text(json.dumps(report), encoding="utf-8")
+                checked = subprocess.run(command + ["--report", str(report_path)],
+                                         capture_output=True, text=True, timeout=10)
+                self.assertEqual(checked.returncode, 1, checked.stdout + checked.stderr)
+
+                output = root / f"intake-{index}"
+                intake = subprocess.run(
+                    [str(self.manual_tool), "intake", "--candidate", str(candidate_path),
+                     "--python", sys.executable,
+                     "--readiness", str(pathlib.Path(__file__).with_name("readiness.py")),
+                     "--report", str(report_path), "--output", str(output)],
+                    capture_output=True, text=True, timeout=10)
+                self.assertEqual(intake.returncode, 1)
+                result = json.loads((output / "intake.json").read_text(encoding="utf-8"))
+                self.assertEqual(result["counts"]["failed"], 1)
+                self.assertFalse((output / "linux-observations.json").exists())
+
+                observation = {"status": "incomplete", "target": "linux-amd64",
+                               "archive_sha256": native["linux-amd64"]["archive"]["sha256"],
+                               "reference": value,
+                               "cases": [{"case": name, "status": "not_run",
+                                          "elapsed_seconds": None}
+                                         for name in readiness.MANUAL_CASES]}
+                payload = {"format_version": 1, "kind": "linux_first_run",
+                           "candidate_sha": candidate["candidate_sha"],
+                           "candidate_version": candidate["candidate_version"],
+                           "observations": [observation]}
+                with self.assertRaisesRegex(evidence.EvidenceError,
+                                            "linux_observations_invalid"):
+                    evidence._validate_linux_observations(
+                        payload, candidate, candidate_path.read_bytes(), native,
+                        self.manual_tool)
+
+            missing = _manual_report("linux_first_run", "linux-amd64", candidate, native,
+                                     "", status="not_run")
+            for case in missing["cases"]:
+                case.update(status="not_run", elapsed_seconds=None)
+            missing.pop("reference")
+            missing_path = root / "missing-reference.json"
+            missing_path.write_text(json.dumps(missing), encoding="utf-8")
+            checked = subprocess.run(command + ["--report", str(missing_path)],
+                                     capture_output=True, text=True, timeout=10)
+            self.assertEqual(checked.returncode, 1, checked.stdout + checked.stderr)
+            missing_output = root / "missing-reference-intake"
+            intake = subprocess.run(
+                [str(self.manual_tool), "intake", "--candidate", str(candidate_path),
+                 "--python", sys.executable,
+                 "--readiness", str(pathlib.Path(__file__).with_name("readiness.py")),
+                 "--report", str(missing_path), "--output", str(missing_output)],
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(intake.returncode, 1)
+            missing_result = json.loads((missing_output / "intake.json").read_text(encoding="utf-8"))
+            self.assertEqual(missing_result["counts"]["failed"], 1)
+
     def test_manual_intake_sanitizes_real_reports_and_blocks_failures_or_mismatches(self):
         with tempfile.TemporaryDirectory() as temp:
             summary, native = _summary_fixture(pathlib.Path(temp))
             cases = [{"case": name, "status": "not_run", "elapsed_seconds": None,
-                      "observation": "private note should not survive"} for name in manual_evidence.CASES]
+                      "observation": "private note should not survive"} for name in MANUAL_CASES]
             report = {"kind": "windows_first_run", "evidence_type": "manual", "status": "incomplete",
                       "candidate_sha": summary["candidate_sha"],
                       "candidate_version": summary["candidate_version"], "target": "windows-amd64",
@@ -909,7 +1230,7 @@ class BetaEvidenceTests(unittest.TestCase):
                       "observer": "synthetic observer", "notes": "synthetic private prose", "cases": cases}
             windows_path = pathlib.Path(temp) / "windows.json"
             windows_path.write_text(json.dumps(report), encoding="utf-8")
-            prepared = evidence._prepare_manual_inputs(windows_path, None, summary, native)
+            prepared = evidence._prepare_manual_inputs(windows_path, None, summary, _candidate_bytes(summary), native, self.manual_tool)
             self.assertEqual(prepared["windows_outcome"], "incomplete")
             self.assertNotIn("private prose", json.dumps(prepared))
             self.assertNotIn("private note", json.dumps(prepared))
@@ -918,12 +1239,12 @@ class BetaEvidenceTests(unittest.TestCase):
             failed["status"] = "failed"
             windows_path.write_text(json.dumps(failed), encoding="utf-8")
             with self.assertRaisesRegex(evidence.EvidenceError, "manual_report_failed"):
-                evidence._prepare_manual_inputs(windows_path, None, summary, native)
+                evidence._prepare_manual_inputs(windows_path, None, summary, _candidate_bytes(summary), native, self.manual_tool)
             mismatch = copy.deepcopy(report)
             mismatch["candidate_sha"] = "0" * 40
             windows_path.write_text(json.dumps(mismatch), encoding="utf-8")
             with self.assertRaises(evidence.EvidenceError):
-                evidence._prepare_manual_inputs(windows_path, None, summary, native)
+                evidence._prepare_manual_inputs(windows_path, None, summary, _candidate_bytes(summary), native, self.manual_tool)
 
     def test_linux_observations_are_sanitized_separate_and_not_a_readiness_gate(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -934,12 +1255,12 @@ class BetaEvidenceTests(unittest.TestCase):
                       "archive_sha256": native["linux-amd64"]["archive"]["sha256"],
                       "reference": "", "notes": "do not retain this text",
                       "cases": [{"case": case, "status": "not_run", "elapsed_seconds": None,
-                                 "observation": "private observation"} for case in manual_evidence.CASES]}
+                                 "observation": "private observation"} for case in MANUAL_CASES]}
             path = pathlib.Path(temp) / "linux.json"
             path.write_text(json.dumps(report), encoding="utf-8")
-            prepared = evidence._prepare_manual_inputs(None, path, summary, native)
+            prepared = evidence._prepare_manual_inputs(None, path, summary, _candidate_bytes(summary), native, self.manual_tool)
             sanitized = prepared["linux"]
-            evidence._validate_linux_observations(sanitized, summary, native)
+            evidence._validate_linux_observations(sanitized, summary, _candidate_bytes(summary), native, self.manual_tool)
             self.assertNotIn("do not retain", json.dumps(sanitized))
             before = readiness.classify(summary, [_recovery(summary, native),
                                                    _scale_record(summary, "scale_10k"),
@@ -953,15 +1274,15 @@ class BetaEvidenceTests(unittest.TestCase):
             inconsistent["observations"][0]["reference"] = "https://github.com/Lephiziel/findrail/issues/213"
             inconsistent["observations"][0]["cases"] = [
                 {"case": case, "status": "failed" if index == 0 else "passed",
-                 "elapsed_seconds": 1} for index, case in enumerate(manual_evidence.CASES)]
+                 "elapsed_seconds": 1} for index, case in enumerate(MANUAL_CASES)]
             with self.assertRaisesRegex(evidence.EvidenceError, "linux_observations_invalid"):
-                evidence._validate_linux_observations(inconsistent, summary, native)
+                evidence._validate_linux_observations(inconsistent, summary, _candidate_bytes(summary), native, self.manual_tool)
             failed = copy.deepcopy(report)
             failed["status"] = "failed"
             failed["reference"] = "https://github.com/Lephiziel/findrail/issues/212"
             path.write_text(json.dumps(failed), encoding="utf-8")
             with self.assertRaisesRegex(evidence.EvidenceError, "manual_report_failed"):
-                evidence._prepare_manual_inputs(None, path, summary, native)
+                evidence._prepare_manual_inputs(None, path, summary, _candidate_bytes(summary), native, self.manual_tool)
 
     def test_matching_windows_pass_changes_only_windows_readiness(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -972,10 +1293,10 @@ class BetaEvidenceTests(unittest.TestCase):
                       "archive_sha256": native["windows-amd64"]["archive"]["sha256"],
                       "reference": "https://github.com/Lephiziel/findrail/issues/211",
                       "cases": [{"case": case, "status": "passed", "elapsed_seconds": 1}
-                                for case in manual_evidence.CASES]}
+                                for case in MANUAL_CASES]}
             path = pathlib.Path(temp) / "windows.json"
             path.write_text(json.dumps(report), encoding="utf-8")
-            manual = evidence._prepare_manual_inputs(path, None, summary, native)
+            manual = evidence._prepare_manual_inputs(path, None, summary, _candidate_bytes(summary), native, self.manual_tool)
             result = readiness.classify(summary, [_recovery(summary, native),
                                                    _scale_record(summary, "scale_10k"),
                                                    _scale_record(summary, "scale_100k"),
@@ -1057,7 +1378,9 @@ class BetaEvidenceTests(unittest.TestCase):
         self.assertIn("retention-days: 30", workflow)
         self.assertIn("if: always()", workflow)
         self.assertNotIn("contents: write", workflow)
-        self.assertNotIn("go build", workflow)
+        self.assertIn("actions/setup-go@", workflow)
+        self.assertIn("Build the manual evidence validator once", workflow)
+        self.assertEqual(workflow.count("go build -o"), 1)
         self.assertNotIn("go run", workflow)
         self.assertNotIn("gh release create", workflow)
         self.assertNotIn("VERSION=", workflow)

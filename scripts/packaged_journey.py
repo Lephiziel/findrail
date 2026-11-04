@@ -21,6 +21,19 @@ from candidate_record import CaseRecorder, digest, run_identity, require_transfe
 from upgrade_smoke import directory_digest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+SMOKE_COMMANDS = {"search_smoke.py": "search-smoke", "diagnostics_smoke.py": "diagnostics-smoke"}
+
+
+def require_smoke_tool(path):
+    if path is None:
+        raise ValueError("packaged journey requires an explicit --smoke-tool")
+    try:
+        tool = pathlib.Path(path).resolve(strict=True)
+    except OSError as error:
+        raise ValueError("--smoke-tool does not exist") from error
+    if not tool.is_file() or not os.access(tool, os.X_OK):
+        raise ValueError("--smoke-tool must name an executable helper")
+    return tool
 
 
 def stop_process_tree(process):
@@ -284,6 +297,7 @@ def execute(args):
     cases = CaseReport(report, args.report)
     started = time.monotonic()
     try:
+        smoke_tool = require_smoke_tool(args.smoke_tool)
         def identity():
             binary = args.binary.resolve(strict=True)
             if not binary.is_file() or not os.access(binary, os.X_OK):
@@ -301,10 +315,8 @@ def execute(args):
             cases.run("evaluate", lambda: evaluate(binary, scratch))
             cases.run("doctor_integrity_stopped_directory", lambda: doctor_integrity(binary, scratch))
             for smoke in ("search_smoke.py", "mcp_smoke.py", "portable_smoke.py", "diagnostics_smoke.py", "ignore_policy_smoke.py"):
-                smoke_tool = getattr(args, "smoke_tool", None)
-                if smoke_tool and smoke in ("search_smoke.py", "diagnostics_smoke.py"):
-                    smoke_args = [str(smoke_tool.resolve(strict=True)),
-                                  smoke.removesuffix(".py").replace("_", "-"), str(binary)]
+                if smoke in SMOKE_COMMANDS:
+                    smoke_args = [str(smoke_tool), SMOKE_COMMANDS[smoke], str(binary)]
                 else:
                     smoke_args = [sys.executable, str(ROOT / "scripts" / smoke), str(binary)]
                 cases.run(smoke, lambda smoke_args=smoke_args: command(smoke_args, timeout=300))
@@ -386,8 +398,8 @@ def main():
     parser.add_argument("--report", type=pathlib.Path, help="write per-case JSON report, also on failure")
     parser.add_argument("--evidence-fixture", type=pathlib.Path,
                         help="explicit prebuilt offline fixture writer; required for full browser acceptance")
-    parser.add_argument("--smoke-tool", type=pathlib.Path,
-                        help="compiled development smoke helper for search and diagnostics cases")
+    parser.add_argument("--smoke-tool", type=pathlib.Path, required=True,
+                        help="executable development smoke helper for search and diagnostics cases")
     parser.add_argument("--skip-browser", action="store_true", help="record browser cases as skipped; not full acceptance")
     args = parser.parse_args()
     if args.candidate_version == "0.1.0-beta.1" and args.alpha5_binary is None:

@@ -6,14 +6,10 @@ Findrail v1.0 nor a compatibility promise. Successful full inventory authorizes
 host pruning. Failed pages, cancellation, callback errors, malformed or
 incomplete responses must fail; earlier callbacks are provisional.
 
-From a clean clone (Go 1.26+):
+From a clean clone (Go 1.26+), build and run the private developer check:
 
 ```sh
-python3 scripts/connector_kit_check.py
-cd examples/connectors/catalog
-GOWORK=off go test ./...
-GOWORK=off go run ./cmd/catalog-demo
-GOWORK=off go run ./cmd/catalog-scan -h
+go run ./cmd/findrail-connector-check --repo-root .
 ```
 
 External adapters import `github.com/Lephiziel/findrail/pkg/connector` and
@@ -82,11 +78,20 @@ path-derived rename policy. For path-derived identity, a rename is expected as
 delete plus create; a stable remote resource ID may keep identity across a
 title/path change.
 
+The Go runner tests/vets/race-checks public conformance and the catalog's
+separate module (`GOWORK=off`), verifies root modules, and checks their dependency
+boundaries. It builds a temporary external consumer that imports only the public
+connector/conformance packages and runs Observe plus callback-error propagation.
+That consumer is distinct from cross-compilation: six catalog command builds
+prove Linux/Windows/Darwin amd64 compilation with CGO disabled, while native
+`go run` executes the demo and scan help. Finally, a temporary workspace is used
+only for the tagged SQLite host lifecycle journey. These checks do not execute
+the packaged application.
+
 The catalogue module shows fixed-origin opaque-cursor paging, explicit bounded
 configuration, no constructor/source network I/O, and failure-safe scans. Its
-synthetic fixture needs no account or network. `python3
-scripts/connector_kit_check.py` also runs the tagged real SQLite host journey in
-a temporary Go workspace. That repository-owned check uses internal ingestion
+synthetic fixture needs no account or network. The repository-owned Go check
+also runs the tagged real SQLite host journey in a temporary Go workspace. That check uses internal ingestion
 and SQLite; independent adapter authors need not read host internals.
 
 | Check | Demonstrates | Does not prove |
