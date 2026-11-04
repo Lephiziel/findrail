@@ -242,6 +242,7 @@ jobs:
             go build -o "$RUNNER_TEMP/findrail-resource-check" ./cmd/findrail-resource-check
             BINARY_SHA256=$(sha256sum "$BINARY" | cut -d ' ' -f1)
             "$RUNNER_TEMP/findrail-resource-check" portable-boundary --binary "$BINARY" > "$RUNNER_TEMP/snapshot-resource-boundary.json"
+            mkdir -p "$RUNNER_TEMP/recovery-work"
             "$RUNNER_TEMP/findrail-resource-check" sigkill --binary "$BINARY" --binary-sha256 "$BINARY_SHA256" \
               --revision "$CANDIDATE_SHA" --schema 8 \
               --work-dir "$RUNNER_TEMP/recovery-work" --report "$RUNNER_TEMP/recovery-candidate.json"

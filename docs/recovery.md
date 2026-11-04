@@ -57,12 +57,16 @@ never builds or locates the app binary itself:
 
 ```sh
 go build -o /tmp/findrail-resource-check ./cmd/findrail-resource-check
+mkdir -p /tmp/findrail-recovery-work
 /tmp/findrail-resource-check sigkill \
   --binary /path/to/extracted/findrail --binary-sha256 CANDIDATE_SHA256 \
   --revision CANDIDATE_REVISION --schema 8 \
   --work-dir /tmp/findrail-recovery-work \
   --report /tmp/findrail-recovery-report.json --deadline 45
 ```
+
+The `--work-dir` parent must already exist and be owned by the caller. The
+producer creates a unique private child directory beneath it.
 
 It verifies or computes the binary SHA-256, creates synthetic source and data
 directories, seeds the index with that exact executable, then interrupts a

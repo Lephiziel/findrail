@@ -22,7 +22,7 @@ func main() {
 		hash := f.String("binary-sha256", "", "expected SHA-256 (optional)")
 		revision := f.String("revision", "", "full application revision")
 		schema := f.Int("schema", 0, "application index schema")
-		work := f.String("work-dir", "", "owned parent directory for synthetic recovery data")
+		work := f.String("work-dir", "", "existing owned parent directory for synthetic recovery data")
 		report := f.String("report", "", "atomic JSON report path")
 		deadline := f.Float64("deadline", 45, "finite total deadline in seconds (1..120)")
 		_ = f.Parse(os.Args[2:])
