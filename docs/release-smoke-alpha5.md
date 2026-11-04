@@ -70,6 +70,7 @@ are 139.0.7258.66), run:
 python3 scripts/packaged_journey.py '/owned/install space 📦/findrail' \
   --candidate-sha <full-head-sha> --candidate-version 0.1.0-alpha.5 \
   --alpha3-binary /owned/alpha3/findrail --alpha4-binary /owned/alpha4/findrail \
+  --smoke-tool /owned/tools/findrail-smoke \
   --evidence-fixture /owned/tools/evidence-collection-fixture \
   --report /owned/reports/packaged-journey.json
 ```
@@ -89,6 +90,24 @@ Explicit `--skip-browser` lists every browser case as skipped and reports
 `incomplete`; it cannot satisfy full browser acceptance. A missing browser is a
 failure. Child smoke groups are drained after success, failure and timeout so
 servers/drivers cannot cross case boundaries.
+
+The compiled CLI/HTTP acceptance cases use the development-only `findrail-smoke`
+Go tool. Build it once from the checkout and run it against the already
+verified candidate; it is not included in native archives:
+
+```sh
+go build -o findrail-smoke ./cmd/findrail-smoke
+./findrail-smoke search-smoke /path/to/verified/findrail
+./findrail-smoke diagnostics-smoke /path/to/verified/findrail
+```
+
+On Windows, build and pass `findrail-smoke.exe` instead (for example,
+`go build -o findrail-smoke.exe ./cmd/findrail-smoke`). The documented packaged
+journey command above accepts the same helper through `--smoke-tool`.
+
+The packaged report retains the historical case IDs `search_smoke.py` and
+`diagnostics_smoke.py`; the caller maps them to the corresponding Go
+subcommands.
 
 The additional integrated transfer can also be run directly:
 
