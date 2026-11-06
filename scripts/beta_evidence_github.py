@@ -277,18 +277,103 @@ def _extract_zip(archive_path, destination):
     return root, uncompressed_total
 
 
+def _main_sha(api):
+    ref = api.json('/git/ref/heads/main')
+    obj = ref.get('object', {})
+    sha = obj.get('sha') if type(obj) is dict else None
+    require(obj.get('type') == 'commit' and beta_evidence.SHA_RE.fullmatch(str(sha or '')) is not None,
+            'main_ref_invalid')
+    return sha
+
+
+def promotion_metadata(candidate_sha, candidate_version, candidate_run_id,
+                       candidate_run_attempt, performance_run_id,
+                       performance_run_attempt, handoff_run_id,
+                       handoff_run_attempt, expected_handoff_artifact_digest,
+                       token=None, require_main_head=True):
+    """Re-read exact run/attempt/artifact identities for a beta promotion."""
+    require(candidate_version == beta_evidence.VERSION and
+            beta_evidence.SHA_RE.fullmatch(str(candidate_sha)) is not None,
+            'candidate_identity_mismatch')
+    run_values = (candidate_run_id, performance_run_id, handoff_run_id)
+    attempt_values = (candidate_run_attempt, performance_run_attempt, handoff_run_attempt)
+    require(all(RUN_ID_RE.fullmatch(str(value)) is not None for value in run_values) and
+            all(type(value) is int and value > 0 for value in attempt_values),
+            'run_attempt_invalid')
+    require(beta_evidence.ARTIFACT_DIGEST_RE.fullmatch(
+        str(expected_handoff_artifact_digest or '')) is not None,
+        'handoff_artifact_digest_invalid')
+    api = GitHubAPI(token if token is not None else os.environ.get('GITHUB_TOKEN', ''))
+    if require_main_head:
+        require(_main_sha(api) == candidate_sha, 'main_moved_after_candidate_freeze')
+    candidate = _normalize_run(api, str(candidate_run_id), 'candidate', candidate_sha)
+    performance = _normalize_run(api, str(performance_run_id), 'performance', candidate_sha)
+    handoff = _normalize_run(api, str(handoff_run_id), 'handoff', candidate_sha)
+    require(candidate['run_attempt'] == candidate_run_attempt and
+            performance['run_attempt'] == performance_run_attempt and
+            handoff['run_attempt'] == handoff_run_attempt,
+            'run_attempt_mismatch')
+    require(handoff['head_sha'] == candidate_sha,
+            'handoff_candidate_sha_mismatch')
+    assets_artifact = beta_evidence._artifact_by_name(
+        candidate, f'release-assets-{candidate_sha}')
+    handoff_name = f'beta-evidence-handoff-{handoff_run_id}-{handoff_run_attempt}'
+    handoff_artifact = beta_evidence._artifact_by_name(handoff, handoff_name)
+    require(handoff_artifact.get('digest') == expected_handoff_artifact_digest,
+            'handoff_artifact_digest_mismatch')
+    metadata = {
+        'metadata_version': 1, 'repository': REPOSITORY,
+        'candidate_sha': candidate_sha, 'candidate_version': candidate_version,
+        'candidate_run': candidate, 'performance_run': performance,
+        'candidate_delivery_url': assets_artifact['url'],
+        'promotion_handoff_run': handoff,
+        'promotion_handoff_artifact': handoff_artifact,
+    }
+    try:
+        beta_evidence.validate_trusted_metadata(metadata, candidate_sha, candidate_version)
+    except beta_evidence.EvidenceError as error:
+        raise PreflightError(error.code) from None
+    return metadata
+
+
 def preflight(candidate_sha, candidate_version, candidate_run_id,
               performance_run_id, download_dir, metadata_path, token=None,
-              previous_handoff_run_id=None):
+              previous_handoff_run_id=None, candidate_run_attempt=None,
+              performance_run_attempt=None, handoff_run_id=None,
+              handoff_run_attempt=None, expected_handoff_artifact_digest=None,
+              require_main_head=False):
     require(candidate_version == beta_evidence.VERSION and
             beta_evidence.SHA_RE.fullmatch(candidate_sha) is not None,
             "candidate_identity_mismatch")
     require(RUN_ID_RE.fullmatch(str(candidate_run_id)) is not None and
             RUN_ID_RE.fullmatch(str(performance_run_id)) is not None,
             "run_id_invalid")
-    api = GitHubAPI(token if token is not None else os.environ.get("GITHUB_TOKEN", ""))
-    candidate = _normalize_run(api, str(candidate_run_id), "candidate", candidate_sha)
-    performance = _normalize_run(api, str(performance_run_id), "performance", candidate_sha)
+    promotion = handoff_run_id is not None
+    require((handoff_run_attempt is not None and expected_handoff_artifact_digest is not None) == promotion,
+            'promotion_identity_incomplete')
+    require(not (promotion and previous_handoff_run_id is not None),
+            'promotion_handoff_mode_ambiguous')
+    if promotion:
+        require(type(candidate_run_attempt) is int and type(performance_run_attempt) is int,
+                'run_attempt_invalid')
+        metadata = promotion_metadata(
+            candidate_sha, candidate_version, candidate_run_id, candidate_run_attempt,
+            performance_run_id, performance_run_attempt, handoff_run_id,
+            handoff_run_attempt, expected_handoff_artifact_digest, token,
+            require_main_head=require_main_head)
+        candidate = metadata['candidate_run']
+        performance = metadata['performance_run']
+        handoff = metadata['promotion_handoff_run']
+        handoff_artifact = metadata['promotion_handoff_artifact']
+        api = GitHubAPI(token if token is not None else os.environ.get('GITHUB_TOKEN', ''))
+    else:
+        api = GitHubAPI(token if token is not None else os.environ.get("GITHUB_TOKEN", ""))
+        candidate = _normalize_run(api, str(candidate_run_id), "candidate", candidate_sha)
+        performance = _normalize_run(api, str(performance_run_id), "performance", candidate_sha)
+        if candidate_run_attempt is not None:
+            require(candidate['run_attempt'] == candidate_run_attempt, 'candidate_run_attempt_mismatch')
+        if performance_run_attempt is not None:
+            require(performance['run_attempt'] == performance_run_attempt, 'performance_run_attempt_mismatch')
     previous_handoff = previous_artifact = None
     if previous_handoff_run_id is not None:
         require(RUN_ID_RE.fullmatch(str(previous_handoff_run_id)) is not None,
@@ -306,7 +391,10 @@ def preflight(candidate_sha, candidate_version, candidate_run_id,
         "candidate_run": candidate, "performance_run": performance,
         "candidate_delivery_url": assets_artifact["url"],
     }
-    if previous_handoff is not None:
+    if promotion:
+        metadata["promotion_handoff_run"] = handoff
+        metadata["promotion_handoff_artifact"] = handoff_artifact
+    elif previous_handoff is not None:
         metadata["previous_handoff_run"] = previous_handoff
         metadata["previous_handoff_artifact"] = previous_artifact
     try:
@@ -329,6 +417,8 @@ def preflight(candidate_sha, candidate_version, candidate_run_id,
     )
     if previous_handoff is not None:
         selected += ((previous_handoff, previous_artifact["name"], "previous-handoff"),)
+    if promotion:
+        selected += ((handoff, handoff_artifact['name'], 'handoff-bundle'),)
     downloaded_total = 0
     extracted_total = 0
     try:
@@ -355,25 +445,41 @@ def preflight(candidate_sha, candidate_version, candidate_run_id,
         raise
     return {"status": "preflight_passed", "candidate_run_id": str(candidate_run_id),
             "performance_run_id": str(performance_run_id),
+            **({'handoff_run_id': str(handoff_run_id),
+                'handoff_artifact_id': handoff_artifact['id']} if promotion else {}),
             "artifacts_downloaded": len(selected)}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("preflight", choices=("preflight",))
+    parser.add_argument("command", choices=("preflight",))
     parser.add_argument("--candidate-sha", required=True)
     parser.add_argument("--candidate-version", required=True)
     parser.add_argument("--candidate-run-id", required=True)
+    parser.add_argument("--candidate-run-attempt", type=int)
     parser.add_argument("--performance-run-id", required=True)
+    parser.add_argument("--performance-run-attempt", type=int)
     parser.add_argument("--previous-handoff-run-id")
-    parser.add_argument("--download-dir", required=True, type=pathlib.Path)
+    parser.add_argument("--handoff-run-id")
+    parser.add_argument("--handoff-run-attempt", type=int)
+    parser.add_argument("--expected-handoff-artifact-digest")
+    parser.add_argument("--require-main-head", action="store_true")
+    parser.add_argument("--download-dir", type=pathlib.Path)
     parser.add_argument("--metadata", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
     try:
+        if args.download_dir is None:
+            raise PreflightError('download_dir_missing')
         result = preflight(args.candidate_sha, args.candidate_version,
                            args.candidate_run_id, args.performance_run_id,
                            args.download_dir, args.metadata,
-                           previous_handoff_run_id=args.previous_handoff_run_id)
+                           previous_handoff_run_id=args.previous_handoff_run_id,
+                           candidate_run_attempt=args.candidate_run_attempt,
+                           performance_run_attempt=args.performance_run_attempt,
+                           handoff_run_id=args.handoff_run_id,
+                           handoff_run_attempt=args.handoff_run_attempt,
+                           expected_handoff_artifact_digest=args.expected_handoff_artifact_digest,
+                           require_main_head=args.require_main_head)
         print(json.dumps(result, sort_keys=True))
         return 0
     except PreflightError as error:

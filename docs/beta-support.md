@@ -1,11 +1,12 @@
 # Beta.1 platform support and release policy
 
-This page is the canonical platform and readiness policy for the prospective
-`0.1.0-beta.1` limited desktop beta. It describes preparation, not a published
-product. Until a separately authorized publication is complete, the current
-download remains [alpha.5](release-alpha5-verification.md). The candidate
-contract remains schema 8, Client API 1 and VSIX 0.1.0; this policy does not
-change `VERSION`, the publisher, or any release assets.
+This page is the canonical platform and readiness policy for the
+`0.1.0-beta.1` limited desktop beta. The
+[published release](https://github.com/Lephiziel/findrail/releases/tag/v0.1.0-beta.1)
+is bound to `4c0c94e1663804344b1ae1cbcdc3a346208e688a`. Later source commits
+and CI artifacts do not replace its immutable assets. Publication does not
+complete pending human evidence or establish stable/v1 readiness. The contract
+remains schema 8, Client API 1 and VSIX 0.1.0.
 
 ## Platform promises
 
@@ -19,7 +20,7 @@ pending.
 |---|---|---|
 | `linux-amd64` | Primary beta path. | Any manual outcome applies only to the candidate/archive actually checked. It does not promise every Linux distribution, desktop environment, browser, or installation method. A historical alpha report is not beta evidence. |
 | `linux-arm64` | Experimental. Its matching candidate must pass the native CI gate; lack of an independent tester does not block preparation. | No manual result is implied by an `amd64` report. |
-| `windows-amd64` | Primary target. The owner plans the manual first-run in a Windows VM at 35/C; manual evidence stays pending until a matching passed report is validated. | A matching passed report supports only its named scenarios in its recorded VM and Windows build. A failed/invalid report blocks; it does not certify physical devices or other Windows builds. |
+| `windows-amd64` | Primary target. A matching first-run report was received but remains incomplete; manual evidence stays pending until a matching passed report is validated. | A matching passed report supports only its named scenarios in its recorded environment and Windows build. A failed/invalid report blocks; it does not certify physical devices or other Windows builds. |
 | `darwin-arm64` | Experimental. Its matching candidate must pass the native CI gate. | Finder/Gatekeeper manual results are not claimed until a matching report exists. |
 | `darwin-amd64` | Experimental. Its matching candidate must pass the native CI gate. | No manual result is claimed until a matching report exists. |
 
@@ -93,15 +94,15 @@ Apple Silicon, or voluntary-use evidence.
 
 ## Preparation, freeze, decision, and publication
 
-1. **Prepare the policy and tooling.** TASK 31–34 are pre-beta work. TASK 34
-   must be integrated before TASK 35/A changes `VERSION`. At this revision,
-   [`alpha-release.yml`](../.github/workflows/alpha-release.yml) sets `PUBLISH` for a main push; a version mismatch is the
-   current guard that skips publication. Once `VERSION` matches the beta
-   candidate, that guard no longer protects the push. TASK 34 must remove this
-   automatic-publication path before any version bump. Do not change `VERSION`
-   as part of this policy task.
-2. **Freeze one candidate.** After the required pre-beta work and TASK 34 are
-   merged, TASK 35/A may prepare the version change and finalize
+1. **Prepare the policy and tooling.** TASK 31–34 are pre-beta work and are
+   integrated. TASK 35/A sets `VERSION` to beta.1 after those guards are in
+   place. The candidate workflow leaves publication disabled for every PR,
+   fork, main push, and ordinary dispatch; a matching candidate and `VERSION`
+   never select a publisher. Only the explicit owner-only canonical-main beta
+   promotion path can write, and only after it revalidates the exact accepted
+   handoff. This policy does not itself authorize publication.
+2. **Freeze one candidate.** With the required pre-beta work and TASK 34
+   integrated, TASK 35/A sets the candidate version and finalizes
    [`release-notes-beta1.md`](release-notes-beta1.md). Freeze the resulting
    exact main SHA. TASK 35/B runs the full canonical candidate workflow and the
    final heavy measurements once against that SHA, then creates the verified
@@ -116,11 +117,12 @@ Apple Silicon, or voluntary-use evidence.
    and outer handoff material, then produces a new handoff digest for the owner.
    A changed digest requires a fresh review; it does not trigger another scale,
    series, or soak run.
-4. **Make a separate owner decision.** Show the owner the exact candidate SHA,
-   all eight asset bytes, evidence fingerprints, pending categories, known
-   limitations, and exact release-note body/hash. Keep the filled decision
-   record outside the product repository. No workflow JSON, generated card, or
-   policy statement is itself the owner's authorization.
+ 4. **Make a separate owner decision.** Show the owner the exact candidate SHA,
+    accepted root handoff artifact digest, all eight asset names/sizes/SHA-256
+    values, pending categories, known limitations, and exact release-note
+    body/hash. Keep the filled decision record outside the product repository.
+    No workflow JSON, generated card, or policy statement is itself the owner's
+    authorization.
 5. **Publish only through the explicit publisher.** Only after that decision
    may TASK 34's explicit path publish the approved candidate. Before that
    point, beta.1 is prospective preparation; no beta tag, release, download

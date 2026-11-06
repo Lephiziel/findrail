@@ -91,6 +91,14 @@ jobs:
             [[ "$MODE" == refresh ]]
             [[ "$REFRESH_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
           fi
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Build the manual evidence validator once
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o "$RUNNER_TEMP/findrail-manual" ./cmd/findrail-manual
       - name: Confirm checked-out source is the exact candidate
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Preflight GitHub run metadata and download exact artifact IDs
@@ -138,9 +146,10 @@ jobs:
         timeout-minutes: 35
         run: |
           set -euo pipefail
+          # --queries counts warm samples per family: 5 common + 5 rare.
           python3 scripts/search_resource_check.py \
             --binary "$CANDIDATE_BINARY" --documents 10000 \
-            --seed 42 --queries 10 --source-cycle-boundaries \
+            --seed 42 --queries 5 --source-cycle-boundaries \
             --report "$WORK_ROOT/scale-10k.json"
       - name: Measure extracted beta.1 Linux binary at 100,000 documents
         if: inputs.mode == 'initial'
@@ -150,7 +159,7 @@ jobs:
           set -euo pipefail
           python3 scripts/search_resource_check.py \
             --binary "$CANDIDATE_BINARY" --documents 100000 \
-            --seed 42 --queries 10 --source-cycle-boundaries --allow-large \
+            --seed 42 --queries 5 --source-cycle-boundaries --allow-large \
             --report "$WORK_ROOT/scale-100k.json"
       - name: Prepare exact-candidate Windows, Linux, and Apple Silicon kits
         if: inputs.mode == 'initial'
@@ -197,6 +206,7 @@ jobs:
             --output-dir "$OUTPUT_ROOT/handoff" \
             --reports-zip "$OUTPUT_ROOT/beta-evidence-reports.zip" \
             --diagnostics "$OUTPUT_ROOT/diagnostics.json" \
+            --manual-tool "$RUNNER_TEMP/findrail-manual" \
             "${args[@]}" > "$OUTPUT_ROOT/result.json"
           python3 scripts/beta_evidence.py verify \
             --candidate-sha "$CANDIDATE_SHA" \
@@ -204,6 +214,7 @@ jobs:
             --assets-dir "$WORK_ROOT/downloads/assets" \
             --handoff-dir "$OUTPUT_ROOT/handoff" \
             --reports-zip "$OUTPUT_ROOT/beta-evidence-reports.zip" \
+            --manual-tool "$RUNNER_TEMP/findrail-manual" \
             > "$WORK_ROOT/verify-result.json"
           python3 - "$OUTPUT_ROOT/result.json" "$WORK_ROOT/verify-result.json" <<'PY'
           import json, pathlib, sys
@@ -234,6 +245,7 @@ jobs:
             --output-dir "$OUTPUT_ROOT/handoff" \
             --reports-zip "$OUTPUT_ROOT/beta-evidence-reports.zip" \
             --diagnostics "$OUTPUT_ROOT/diagnostics.json" \
+            --manual-tool "$RUNNER_TEMP/findrail-manual" \
             "${args[@]}" > "$OUTPUT_ROOT/result.json"
           python3 scripts/beta_evidence.py verify \
             --candidate-sha "$CANDIDATE_SHA" \
@@ -241,6 +253,7 @@ jobs:
             --assets-dir "$WORK_ROOT/downloads/assets" \
             --handoff-dir "$OUTPUT_ROOT/handoff" \
             --reports-zip "$OUTPUT_ROOT/beta-evidence-reports.zip" \
+            --manual-tool "$RUNNER_TEMP/findrail-manual" \
             > "$WORK_ROOT/refresh-verify-result.json"
           python3 - "$OUTPUT_ROOT/result.json" "$WORK_ROOT/refresh-verify-result.json" <<'PY'
           import json, pathlib, sys

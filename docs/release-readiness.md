@@ -24,7 +24,7 @@ a new local-v1 SDK-contributor gate.
 | Strict software candidate | Exact SHA/version; required root/transfer/common browser cases; five native targets, installed VSIX and exact asset verification | Existing strict `candidate_record.py summary`, after the mandatory candidate jobs |
 | Native install lifecycle | Five real targets, eight fixed installer cases each, matching archive and desktop/CLI hashes | Validated native records from that summary |
 | Freshness and first run | Two additional fixed freshness browser cases; passage-window smoke also executes the keyboard first-run journey | Existing packaged browser reports on the supplied extracted candidate |
-| Crash/recovery | Actual Linux SIGKILL, reopened integrity checks, complete old-or-new state | `recovery_candidate.py` on the same extracted production binary; a required technical outcome for this handoff |
+| Crash/recovery | Actual Linux SIGKILL, reopened integrity checks, complete old-or-new state | `findrail-resource-check sigkill` on the same extracted production binary; a required technical outcome for this handoff |
 | Final 10k / 100k | Complete fixture-v2/seed-42 runs on the final candidate, paging 20/50/100 and refresh/cancellation | Required on the final frozen beta candidate; old TASK17/alpha runs do not certify it |
 | Manual Windows first run | Matching human report on the exact `windows-amd64` archive | Existing `windows_first_run`; the planned Windows VM run remains pending until a matching passed report is validated; failed/invalid reports block |
 | Manual Apple Silicon first run | Matching human report on the exact `darwin-arm64` archive | Existing `apple_silicon_first_run`; native CI is not Finder/Gatekeeper evidence |
@@ -114,19 +114,20 @@ runs are historical, not beta evidence.
 
 ## Freeze and next decision
 
-Finish TASK 34's explicit-publisher protection before TASK 35/A changes
-`VERSION`: today a main push sets `PUBLISH`, and the current version mismatch
-only happens to skip publication. After the version bump that guard would no
-longer protect the push. Freeze one exact main SHA, run required candidate CI
-and final technical evidence on it, then present the handoff, remaining human
-pending categories, asset hashes, limitations, and release-note body/hash to the
-owner. If matching human reports arrive later, refresh intake/readiness and the
-outer handoff fingerprint without repeating measurements; show the changed
-fingerprint again.
+TASK 34's explicit-publisher protection is integrated. After TASK 35/A,
+`VERSION` is beta.1 for candidate builds. A main push stays read-only even when
+the candidate and `VERSION` match; publication requires a separate owner-only
+canonical-main dispatch with the exact accepted handoff, run attempts, and the
+accepted root artifact digest. Freeze one exact main SHA, run required
+candidate CI and final technical evidence on it, then present the handoff,
+remaining human pending categories, all eight asset hashes, limitations, and
+release-note body/hash to the owner. If matching human reports arrive later,
+refresh intake/readiness and the root handoff artifact digest without repeating
+measurements; show the changed digest and refreshed owner packet.
 
 Only a separate explicit owner decision followed by the guarded publisher can
 change the public download. Alpha.5 remains current until beta.1 is actually
 published and its public bytes are independently verified. This process is not
 a broad/stable/v1 release path. A completed code PR may merge while release
-evidence remains pending; this policy leaves VERSION, tags, and historical
-releases unchanged.
+evidence remains pending; the version change alone does not create a tag, modify
+historical releases, or authorize publication.

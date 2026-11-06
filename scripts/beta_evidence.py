@@ -13,10 +13,13 @@ import os
 import pathlib
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import zipfile
 from datetime import datetime, timezone
 
@@ -24,7 +27,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import acceptance_fixture
 import acceptance_kit
 import candidate_record
-import manual_evidence
 import package
 import readiness
 import release_assets
@@ -46,6 +48,7 @@ RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
 # outputs while keeping untrusted JSON and archives finite.
 MAX_JSON = 16 << 20
 MAX_MANUAL_JSON = 8 << 10
+MAX_MANUAL_PARSER_JSON = 1 << 20
 MAX_LINUX_OBSERVATIONS = 1 << 20
 MAX_INPUT_FILES = 256
 MAX_INPUT_TREE = 512 << 20
@@ -65,7 +68,7 @@ CANDIDATE_TARGET_RUNNERS = {
     "linux-amd64": "ubuntu-latest",
     "linux-arm64": "ubuntu-24.04-arm",
     "darwin-amd64": "macos-15-intel",
-    "darwin-arm64": "macos-14",
+    "darwin-arm64": "macos-15",
     "windows-amd64": "windows-latest",
 }
 CANDIDATE_JOB_NAMES = {
@@ -80,9 +83,22 @@ CANDIDATE_JOB_NAMES = {
     "aggregate-and-verify",
     "reusable-final-verification / verify-assets",
     "release-state",
-    "publish",
+    "promotion-preflight",
+    "promotion-publish",
     *(f"native-packages ({target}, {runner})" for target, runner in CANDIDATE_TARGET_RUNNERS.items()),
 }
+CANDIDATE_REQUIRED_JOB_NAMES = CANDIDATE_JOB_NAMES - {
+    "promotion-preflight", "promotion-publish",
+}
+# Preserve the exact pre-retirement graph for frozen beta.1 handoffs. Accept
+# complete known graphs, never a mixture or an extra native job.
+CANDIDATE_MACOS14_JOB_NAMES = {
+    name.replace("(darwin-arm64, macos-15)", "(darwin-arm64, macos-14)")
+    for name in CANDIDATE_JOB_NAMES
+}
+CANDIDATE_LEGACY_JOB_NAMES = (CANDIDATE_MACOS14_JOB_NAMES - {
+    "promotion-preflight", "promotion-publish",
+}) | {"publish"}
 PERFORMANCE_JOB_NAMES = {"series", "soak"}
 
 
@@ -371,6 +387,22 @@ def validate_trusted_metadata(metadata, candidate_sha, candidate_version):
                 previous_artifact.get("name") == expected_name and
                 previous_artifact == _artifact_by_name(previous_run, expected_name),
                 "previous_handoff_metadata_invalid")
+    promotion_run = metadata.get("promotion_handoff_run")
+    promotion_artifact = metadata.get("promotion_handoff_artifact")
+    require((promotion_run is None) == (promotion_artifact is None),
+            "promotion_handoff_metadata_invalid")
+    if promotion_run is not None:
+        _validate_normalized_run(promotion_run, "handoff", candidate_sha)
+        expected_name = (f"beta-evidence-handoff-{promotion_run['run_id']}-"
+                         f"{promotion_run['run_attempt']}")
+        _validate_artifacts(promotion_run, {expected_name})
+        require(promotion_run["workflow_path"] == ".github/workflows/beta-evidence.yml" and
+                promotion_run["event"] == "workflow_dispatch" and
+                promotion_run["head_sha"] == candidate_sha and
+                type(promotion_artifact) is dict and
+                promotion_artifact.get("name") == expected_name and
+                promotion_artifact == _artifact_by_name(promotion_run, expected_name),
+                "promotion_handoff_metadata_invalid")
     return metadata
 
 
@@ -400,11 +432,24 @@ def _validate_normalized_run(run, kind, candidate_sha):
         by_name[job["name"]] = job
         require(job.get("run_attempt") == run["run_attempt"] and
                 job.get("status") == "completed", f"{kind}_attempt_mismatch")
-        if kind == "candidate" and job["name"] == "publish":
-            require(job.get("conclusion") in ("success", "skipped"), "candidate_job_failed")
+    if kind == "candidate":
+        names = set(by_name)
+        require(names in (CANDIDATE_JOB_NAMES, CANDIDATE_MACOS14_JOB_NAMES,
+                          CANDIDATE_LEGACY_JOB_NAMES),
+                "candidate_jobs_incomplete")
+        if names in (CANDIDATE_JOB_NAMES, CANDIDATE_MACOS14_JOB_NAMES):
+            for name in ("promotion-preflight", "promotion-publish"):
+                require(by_name[name].get("conclusion") == "skipped",
+                        "candidate_write_job_unexpectedly_ran")
         else:
+            require(by_name["publish"].get("conclusion") in ("success", "skipped"),
+                    "candidate_job_failed")
+        for name in names - {"promotion-preflight", "promotion-publish", "publish"}:
+            require(by_name[name].get("conclusion") == "success", "candidate_job_failed")
+    else:
+        require(set(by_name) == required_jobs, f"{kind}_jobs_incomplete")
+        for job in by_name.values():
             require(job.get("conclusion") == "success", f"{kind}_job_failed")
-    require(set(by_name) == required_jobs, f"{kind}_jobs_incomplete")
     artifacts = run.get("artifacts")
     require(type(artifacts) is list, f"{kind}_artifacts_invalid")
 
@@ -920,19 +965,150 @@ def _validate_soak(soak_path, candidate_sha, candidate_version, binary_sha):
     return report, environment
 
 
-def _manual_record(path, expected_kind, candidate, native):
-    raw_file = _regular_file(path, MAX_MANUAL_JSON)
-    report, raw = manual_evidence.parse(raw_file)
-    require(len(raw) <= MAX_MANUAL_JSON, "manual_report_too_large")
-    require(report.get("kind") == expected_kind, "manual_report_kind_mismatch")
+def _stop_manual_process_tree(process):
+    # A leader can exit while a descendant still owns the pipe handles.
     try:
-        outcome = manual_evidence.validate(report, candidate, native)
-    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
-        raise EvidenceError("manual_report_invalid_or_mismatched") from None
-    if outcome == "failed":
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        elif os.name == "nt":
+            subprocess.run(["taskkill.exe", "/T", "/F", "/PID", str(process.pid)],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=5, check=False)
+        else:
+            process.kill()
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def _manual_record(path, expected_kind, candidate, candidate_bytes, native, manual_tool, *,
+                   max_bytes=MAX_MANUAL_PARSER_JSON, timeout=30, output_limit=2 << 20):
+    raw_file = _regular_file(path, max_bytes)
+    with tempfile.TemporaryDirectory(prefix="findrail-manual-context-") as directory:
+        candidate_path = pathlib.Path(directory) / "candidate.json"
+        candidate_path.write_bytes(candidate_bytes)
+        command = [str(manual_tool), "validate", "--candidate", str(candidate_path),
+                   "--report", str(raw_file), "--python", sys.executable,
+                   "--readiness", str(pathlib.Path(__file__).with_name("readiness.py")),
+                   "--max-json", str(max_bytes)]
+        try:
+            process = subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, start_new_session=os.name == "posix",
+                creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0))
+        except OSError:
+            raise EvidenceError("manual_validator_unavailable") from None
+
+        output = bytearray()
+        overflow = threading.Event()
+        reader_error = []
+
+        def capture_stdout():
+            try:
+                while True:
+                    chunk = os.read(process.stdout.fileno(), 64 << 10)
+                    if not chunk:
+                        return
+                    if len(output) + len(chunk) > output_limit:
+                        overflow.set()
+                        _stop_manual_process_tree(process)
+                        return
+                    output.extend(chunk)
+            except OSError as error:
+                reader_error.append(error)
+
+        reader = threading.Thread(target=capture_stdout, name="manual-validator-stdout",
+                                  daemon=True)
+        reader.start()
+        deadline = time.monotonic() + timeout
+        timed_out = False
+        try:
+            while process.poll() is None:
+                if overflow.is_set():
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                time.sleep(min(0.02, remaining))
+        except BaseException:
+            _stop_manual_process_tree(process)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            reader.join(timeout=5)
+            raise
+        if timed_out or overflow.is_set():
+            _stop_manual_process_tree(process)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _stop_manual_process_tree(process)
+            process.wait(timeout=5)
+        reader.join(timeout=max(0, deadline - time.monotonic()))
+        handles_open = reader.is_alive()
+        if handles_open:
+            _stop_manual_process_tree(process)
+            reader.join(timeout=2)
+        if process.stdout is not None:
+            process.stdout.close()
+        if reader.is_alive():
+            raise EvidenceError("manual_validator_cleanup_failed")
+        if timed_out:
+            raise EvidenceError("manual_validator_timeout")
+        if overflow.is_set():
+            raise EvidenceError("manual_validator_protocol_invalid")
+        if handles_open:
+            raise EvidenceError("manual_validator_handles_open")
+        if reader_error:
+            raise EvidenceError("manual_validator_protocol_invalid")
+        if process.returncode != 0:
+            raise EvidenceError("manual_report_invalid_or_mismatched")
+        try:
+            checked = json.loads(bytes(output))
+        except (ValueError, UnicodeDecodeError):
+            raise EvidenceError("manual_validator_protocol_invalid") from None
+    expected_fields = {"protocol_version", "outcome", "kind", "status", "reference",
+                       "evidence_type", "target", "archive_sha256", "candidate_sha",
+                       "candidate_version", "cases"}
+    expected_target = {"windows_first_run": "windows-amd64",
+                       "apple_silicon_first_run": "darwin-arm64",
+                       "linux_first_run": "linux-amd64"}.get(expected_kind)
+    if (expected_target is None or not isinstance(checked, dict) or
+            set(checked) != expected_fields or
+            type(checked.get("protocol_version")) is not int or
+            checked.get("protocol_version") != 1 or checked.get("kind") != expected_kind or
+            checked.get("outcome") not in ("complete", "incomplete", "failed") or
+            checked.get("status") not in ("passed", "failed", "not_run", "incomplete") or
+            checked.get("target") != expected_target or
+            checked.get("archive_sha256") != native[expected_target]["archive"]["sha256"] or
+            checked.get("evidence_type") != "manual" or
+            checked.get("candidate_sha") != candidate.get("candidate_sha") or
+            checked.get("candidate_version") != candidate.get("candidate_version") or
+            not isinstance(checked.get("reference"), str) or
+            not isinstance(checked.get("cases"), list) or
+            len(checked["cases"]) != len(readiness.MANUAL_CASES)):
+        raise EvidenceError("manual_validator_protocol_invalid")
+    for expected_case, case in zip(readiness.MANUAL_CASES, checked["cases"]):
+        elapsed = case.get("elapsed_seconds") if type(case) is dict else None
+        if (type(case) is not dict or set(case) != {"case", "status", "elapsed_seconds"} or
+                case.get("case") != expected_case or
+                case.get("status") not in ("passed", "failed", "not_run") or
+                elapsed is not None and
+                (type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0)):
+            raise EvidenceError("manual_validator_protocol_invalid")
+    if checked["outcome"] == "failed":
         raise EvidenceError("manual_report_failed")
-    require(outcome in ("complete", "incomplete"), "manual_report_invalid")
-    return report, outcome
+    return checked, checked["outcome"]
+
+
+def _safe_manual_cases(report):
+    return [{"case": case["case"], "status": case["status"],
+             "elapsed_seconds": case.get("elapsed_seconds")}
+            for case in report["cases"]]
 
 
 def _safe_windows_report(report, outcome, candidate, native):
@@ -943,7 +1119,7 @@ def _safe_windows_report(report, outcome, candidate, native):
               "candidate_version": candidate["candidate_version"],
               "archive_sha256": native[target]["archive"]["sha256"],
               "reference": report["reference"],
-              "cases": manual_evidence.safe_manual_cases(report)}
+              "cases": _safe_manual_cases(report)}
     if outcome == "complete":
         result["status"] = "passed"
     return result
@@ -957,16 +1133,18 @@ def _safe_linux_observations(report, outcome, candidate, native):
                               "target": "linux-amd64",
                               "archive_sha256": native["linux-amd64"]["archive"]["sha256"],
                               "reference": report["reference"],
-                              "cases": manual_evidence.safe_manual_cases(report)}]}
+                              "cases": _safe_manual_cases(report)}]}
 
 
-def _prepare_manual_inputs(windows_path, linux_path, candidate, native):
+def _prepare_manual_inputs(windows_path, linux_path, candidate, candidate_bytes, native, manual_tool=None):
     records, refs = {}, set()
+    if (windows_path is not None or linux_path is not None) and manual_tool is None:
+        raise EvidenceError("manual_validator_unavailable")
     for field, path, kind in (("windows", windows_path, "windows_first_run"),
                               ("linux", linux_path, "linux_first_run")):
         if path is None:
             continue
-        report, outcome = _manual_record(path, kind, candidate, native)
+        report, outcome = _manual_record(path, kind, candidate, candidate_bytes, native, manual_tool, max_bytes=MAX_MANUAL_JSON)
         reference = report.get("reference", "")
         if reference:
             require(reference not in refs, "manual_reference_duplicate")
@@ -997,11 +1175,13 @@ def _publication_notes(source_path, manual):
             "details and free-form observations were not independently verified or "
             "retained. This is not a release decision.")
         text = _replace_markdown_block(
-            text, "This base text does not assert matching beta.1 manual or voluntary-use outcomes.",
+            text, "At the time these notes were frozen, no matching independent beta.1",
             "\n\n## Product and operational limits",
             "The matching Windows first-run report is included as sanitized, candidate-bound "
             "evidence in this handoff. Apple Silicon first-run and voluntary-use evidence "
-            "remain pending. This supplement does not authorize publication.")
+            "remain pending. Historical alpha.5 Linux observations are not beta.1 evidence. "
+            "Automated candidate checks are not human first-run or voluntary-use reports. "
+            "This supplement does not authorize publication.")
     additions = []
     if manual.get("windows_outcome") == "incomplete":
         additions.append("- Windows amd64 first-run: a matching report was received but remains incomplete; readiness is pending.")
@@ -1343,7 +1523,8 @@ def assemble(args):
                                    args.candidate_version, binary_sha)
     soak_data = _validate_soak(args.performance_soak, args.candidate_sha,
                                args.candidate_version, binary_sha)
-    manual = _prepare_manual_inputs(args.windows_report, args.linux_report, summary, native)
+    manual = _prepare_manual_inputs(args.windows_report, args.linux_report, summary, summary_raw,
+                                    native, getattr(args, "manual_tool", None))
     # The generated kits must be tied to the verified asset inventory and exact
     # artifact URL. Their blank human reports never enter readiness.py.
     for target in ("linux-amd64", "windows-amd64", "darwin-arm64"):
@@ -1360,7 +1541,8 @@ def assemble(args):
             temporary, args, summary, native, manifest, metadata,
             summary_raw, recovery_raw, scale_data, series_data, soak_data, manual)
         _verify_handoff_directory(temporary, args.assets_dir, args.candidate_sha,
-                                  args.candidate_version, expected_manual=manual)
+                                  args.candidate_version, expected_manual=manual,
+                                  manual_tool=getattr(args, "manual_tool", None))
         zip_temp = reports_zip.parent / ("." + reports_zip.name + ".tmp-" + str(os.getpid()))
         zip_temp.unlink(missing_ok=True)
         _zip_reports(temporary, zip_temp)
@@ -1388,7 +1570,7 @@ def assemble(args):
         raise
 
 
-def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=None):
+def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=None, manual_tool=None):
     files = safe_tree(root, max_files=MAX_INPUT_FILES, max_total=MAX_HANDOFF_TREE,
                       max_file=MAX_FILE)
     paths = {name: path for name, path, _ in files}
@@ -1442,7 +1624,7 @@ def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=No
             index.get("candidate", {}).get("version") == version and
             index.get("final_release") is False, "evidence_index_invalid")
     _validate_refresh_provenance(index)
-    summary, _ = load_json(paths["main-verification/verification-summary.json"])
+    summary, summary_raw = load_json(paths["main-verification/verification-summary.json"])
     native, asset_manifest = _validate_summary(summary, assets_dir, sha, version)
     _validate_source_runs(index, summary, sha)
     binary_sha = native["linux-amd64"]["binary_sha256"]
@@ -1470,19 +1652,14 @@ def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=No
     windows_passed = windows_path is not None
     windows_outcome = "not_supplied"
     if windows_path:
-        window, _ = load_json(windows_path)
-        try:
-            windows_outcome = manual_evidence.validate(window, summary, native)
-        except (ValueError, KeyError, TypeError, AttributeError):
-            raise EvidenceError("windows_supplement_invalid") from None
+        window, windows_outcome = _manual_record(windows_path, "windows_first_run", summary,
+                                                 summary_raw, native, manual_tool)
         require(windows_outcome == "complete" and window.get("status") == "passed",
                 "windows_supplement_invalid")
     elif "manual-evidence/windows-first-run.json" in paths:
-        window, _ = load_json(paths["manual-evidence/windows-first-run.json"], MAX_MANUAL_JSON)
-        try:
-            windows_outcome = manual_evidence.validate(window, summary, native)
-        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
-            raise EvidenceError("windows_intake_invalid") from None
+        window, windows_outcome = _manual_record(paths["manual-evidence/windows-first-run.json"],
+                                                 "windows_first_run", summary, summary_raw, native,
+                                                 manual_tool, max_bytes=MAX_MANUAL_JSON)
         require(windows_outcome == "incomplete" and
                 window.get("status") in ("incomplete", "not_run"),
                 "windows_intake_invalid")
@@ -1490,7 +1667,8 @@ def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=No
     if "manual-evidence/linux-observations.json" in paths:
         observations, _ = load_json(paths["manual-evidence/linux-observations.json"],
                                     MAX_LINUX_OBSERVATIONS)
-        linux_outcome = _validate_linux_observations(observations, summary, native)
+        linux_outcome = _validate_linux_observations(observations, summary, summary_raw, native,
+                                                      manual_tool)
     readiness_path = paths.get("readiness-after-scale.json")
     require(readiness_path is not None, "readiness_missing")
     readiness_report, _ = load_json(readiness_path, 1 << 20)
@@ -1526,7 +1704,7 @@ def _verify_handoff_directory(root, assets_dir, sha, version, expected_manual=No
             "recovery_raw_sha256": sha256_bytes(recovery_raw)}
 
 
-def _validate_linux_observations(observations, candidate, native):
+def _validate_linux_observations(observations, candidate, candidate_bytes, native, manual_tool):
     require(type(observations) is dict and
             set(observations) == {"format_version", "kind", "candidate_sha",
                                   "candidate_version", "observations"} and
@@ -1537,44 +1715,30 @@ def _validate_linux_observations(observations, candidate, native):
     records = observations.get("observations")
     require(type(records) is list and 0 < len(records) <= 100, "linux_observations_invalid")
     refs = set()
-    expected_archive = native["linux-amd64"]["archive"]["sha256"]
     for record in records:
         require(type(record) is dict and record.get("status") in ("complete", "incomplete") and
-                record.get("target") == "linux-amd64" and
-                record.get("archive_sha256") == expected_archive and
                 set(record) == {"status", "target", "archive_sha256", "reference", "cases"},
                 "linux_observations_invalid")
         reference = record.get("reference")
         require(type(reference) is str and
-                (not reference and record["status"] == "incomplete" or
-                 readiness.REFERENCE.fullmatch(reference) is not None) and
                 (not reference or reference not in refs), "linux_observations_invalid")
         if reference:
             refs.add(reference)
-        cases = record.get("cases")
-        require(type(cases) is list and len(cases) == len(readiness.MANUAL_CASES) and
-                [item.get("case") for item in cases] == list(readiness.MANUAL_CASES),
-                "linux_observations_invalid")
-        for item in cases:
-            require(type(item) is dict and item.get("status") in ("passed", "failed", "not_run") and
-                    (item.get("elapsed_seconds") is None or
-                     (type(item["elapsed_seconds"]) in (int, float) and
-                      math.isfinite(item["elapsed_seconds"]) and item["elapsed_seconds"] >= 0)) and
-                    set(item) == {"case", "status", "elapsed_seconds"},
-                    "linux_observations_invalid")
-        manual_record = {
-            "kind": "linux_first_run", "evidence_type": "manual",
-            "status": "passed" if record["status"] == "complete" else "incomplete",
-            "candidate_sha": candidate["candidate_sha"],
-            "candidate_version": candidate["candidate_version"],
-            "target": "linux-amd64", "archive_sha256": expected_archive,
-            "reference": reference,
-            "cases": [{**item, "observation": ""} for item in cases],
-        }
-        try:
-            outcome = manual_evidence.validate(manual_record, candidate, native)
-        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
-            raise EvidenceError("linux_observations_invalid") from None
+        manual_record = {"kind": "linux_first_run", "evidence_type": "manual",
+                         "status": "passed" if record["status"] == "complete" else "incomplete",
+                         "candidate_sha": candidate["candidate_sha"],
+                         "candidate_version": candidate["candidate_version"],
+                         "target": record.get("target"),
+                         "archive_sha256": record.get("archive_sha256"),
+                         "reference": reference, "cases": record.get("cases")}
+        with tempfile.TemporaryDirectory(prefix="findrail-linux-observation-") as directory:
+            path = pathlib.Path(directory) / "report.json"
+            path.write_text(json.dumps(manual_record, allow_nan=False), encoding="utf-8")
+            try:
+                _, outcome = _manual_record(path, "linux_first_run", candidate, candidate_bytes, native,
+                                            manual_tool)
+            except EvidenceError:
+                raise EvidenceError("linux_observations_invalid") from None
         require(outcome == record["status"], "linux_observations_invalid")
     return "incomplete" if any(item["status"] == "incomplete" for item in records) else "complete"
 
@@ -1756,6 +1920,57 @@ def _verify_reports_zip(root, zip_path):
         raise EvidenceError("reports_zip_invalid") from None
 
 
+def _verify_promotion_handoff_artifact(artifact_dir, handoff_dir, reports_zip,
+                                       sha, version):
+    root = pathlib.Path(artifact_dir)
+    files = safe_tree(root, max_files=MAX_INPUT_FILES + 8,
+                      max_total=MAX_HANDOFF_TREE + MAX_REPORTS_ZIP + (1 << 20),
+                      max_file=MAX_REPORTS_ZIP)
+    paths = {name: path for name, path, _ in files}
+    expected = {"result.json", "diagnostics.json", "beta-evidence-reports.zip"}
+    expected.update("handoff/" + name for name, _, _ in safe_tree(
+        handoff_dir, max_files=MAX_INPUT_FILES, max_total=MAX_HANDOFF_TREE,
+        max_file=MAX_FILE))
+    require(set(paths) == expected, "promotion_handoff_artifact_layout_invalid")
+    result, _ = load_json(paths["result.json"], 1 << 20)
+    diagnostics, _ = load_json(paths["diagnostics.json"], 1 << 20)
+    reports_sha = file_digest(reports_zip, MAX_REPORTS_ZIP)
+    require(type(result) is dict and
+            set(result) == {"result_version", "status", "candidate_sha",
+                            "candidate_version", "report_zip_sha256"} and
+            (result.get("result_version"), result.get("status"),
+             result.get("candidate_sha"), result.get("candidate_version"),
+             result.get("report_zip_sha256")) == (1, "passed", sha, version, reports_sha),
+            "promotion_handoff_result_invalid")
+    require(type(diagnostics) is dict and
+            set(diagnostics) == {"diagnostic_version", "status", "error_code",
+                                 "candidate_sha", "candidate_version", "report_zip_sha256"} and
+            (diagnostics.get("diagnostic_version"), diagnostics.get("status"),
+             diagnostics.get("error_code"), diagnostics.get("candidate_sha"),
+             diagnostics.get("candidate_version"), diagnostics.get("report_zip_sha256")) ==
+            (1, "passed", "none", sha, version, reports_sha),
+            "promotion_handoff_diagnostics_invalid")
+
+
+def _verify_promotion_source_metadata(index, metadata, sha):
+    validate_trusted_metadata(metadata, sha, VERSION)
+    source_runs = index.get("source_runs", {})
+    candidate = metadata["candidate_run"]
+    performance = metadata["performance_run"]
+    _run_identity_matches(source_runs.get("candidate"), candidate)
+    _run_identity_matches(source_runs.get("performance"), performance)
+    _artifact_inventory_matches(
+        source_runs.get("candidate_artifacts"), candidate,
+        {f"release-assets-{sha}", f"release-verification-{sha}",
+         f"release-package-{sha}-linux-amd64"})
+    _artifact_inventory_matches(
+        source_runs.get("performance_artifacts"), performance,
+        {f"performance-series-{sha}-{performance['run_id']}",
+         f"performance-soak-{sha}-{performance['run_id']}"})
+    require(index.get("candidate", {}).get("candidate_delivery_url") ==
+            metadata.get("candidate_delivery_url"), "candidate_delivery_url_invalid")
+
+
 def _tree_digests(root, *, max_total=MAX_REPORT_TREE, max_file=MAX_FILE):
     files = safe_tree(root, max_files=MAX_INPUT_FILES, max_total=max_total,
                       max_file=max_file)
@@ -1780,7 +1995,7 @@ def _artifact_inventory_matches(index_artifacts, trusted_run, expected_names):
 
 
 def _verify_previous_handoff(bundle_dir, assets_dir, source_artifacts_dir,
-                              metadata, sha, version):
+                              metadata, sha, version, manual_tool=None):
     bundle_dir = pathlib.Path(bundle_dir)
     files = safe_tree(bundle_dir, max_files=MAX_INPUT_FILES,
                       max_total=MAX_HANDOFF_TREE + MAX_REPORTS_ZIP,
@@ -1805,7 +2020,8 @@ def _verify_previous_handoff(bundle_dir, assets_dir, source_artifacts_dir,
              diagnostics.get("report_zip_sha256")) ==
             (1, "passed", sha, version, reports_sha), "previous_handoff_result_invalid")
     handoff = bundle_dir / "handoff"
-    _verify_handoff_directory(handoff, assets_dir, sha, version)
+    _verify_handoff_directory(handoff, assets_dir, sha, version,
+                              manual_tool=manual_tool)
     _verify_reports_zip(handoff, reports_zip)
     index, _ = load_json(handoff / "evidence-index.json", 4 << 20)
     source_runs = index.get("source_runs", {})
@@ -1840,23 +2056,17 @@ def _verify_previous_handoff(bundle_dir, assets_dir, source_artifacts_dir,
     return handoff, index
 
 
-def _existing_windows_intake(handoff, candidate, native):
+def _existing_windows_intake(handoff, candidate, candidate_bytes, native, manual_tool):
     passed_path = pathlib.Path(handoff) / "evidence/windows-first-run.json"
     incomplete_path = pathlib.Path(handoff) / "manual-evidence/windows-first-run.json"
     if passed_path.is_file():
-        record, _ = load_json(passed_path)
-        try:
-            outcome = manual_evidence.validate(record, candidate, native)
-        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
-            raise EvidenceError("previous_windows_intake_invalid") from None
+        record, outcome = _manual_record(passed_path, "windows_first_run", candidate, candidate_bytes, native,
+                                         manual_tool)
         require(outcome == "complete", "previous_windows_intake_invalid")
         return record, "complete"
     if incomplete_path.is_file():
-        record, _ = load_json(incomplete_path, MAX_MANUAL_JSON)
-        try:
-            outcome = manual_evidence.validate(record, candidate, native)
-        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
-            raise EvidenceError("previous_windows_intake_invalid") from None
+        record, outcome = _manual_record(incomplete_path, "windows_first_run", candidate, candidate_bytes,
+                                         native, manual_tool, max_bytes=MAX_MANUAL_JSON)
         require(outcome == "incomplete", "previous_windows_intake_invalid")
         return record, "incomplete"
     return None, "not_supplied"
@@ -1905,18 +2115,18 @@ def refresh(args):
     manifest = validate_assets(args.assets_dir, sha, version)
     previous, previous_index = _verify_previous_handoff(
         args.previous_bundle_dir, args.assets_dir, args.source_artifacts_dir,
-        metadata, sha, version)
+        metadata, sha, version, getattr(args, "manual_tool", None))
     old_technical = _refresh_technical_paths(previous)
     summary_path = previous / "main-verification/verification-summary.json"
-    summary, _ = load_json(summary_path)
+    summary, summary_raw = load_json(summary_path)
     native, _ = _validate_summary(summary, args.assets_dir, sha, version)
-    old_windows, old_windows_outcome = _existing_windows_intake(previous, summary, native)
+    old_windows, old_windows_outcome = _existing_windows_intake(previous, summary, summary_raw, native, getattr(args, "manual_tool", None))
     old_linux = None
     old_linux_outcome = "not_supplied"
     linux_path = previous / "manual-evidence/linux-observations.json"
     if linux_path.is_file():
         old_linux, _ = load_json(linux_path, MAX_LINUX_OBSERVATIONS)
-        _validate_linux_observations(old_linux, summary, native)
+        _validate_linux_observations(old_linux, summary, summary_raw, native, getattr(args, "manual_tool", None))
         statuses = [item["status"] for item in old_linux["observations"]]
         old_linux_outcome = "incomplete" if "incomplete" in statuses else "complete"
 
@@ -1932,7 +2142,7 @@ def refresh(args):
             "previous_publication_notes_invalid")
 
     new_manual = _prepare_manual_inputs(args.windows_report, args.linux_report,
-                                        summary, native)
+                                        summary, summary_raw, native, getattr(args, "manual_tool", None))
     windows_record, windows_outcome = old_windows, old_windows_outcome
     if "windows" in new_manual:
         incoming = new_manual["windows"]
@@ -1949,7 +2159,7 @@ def refresh(args):
             linux_observations = incoming
         else:
             linux_observations["observations"].extend(incoming["observations"])
-        _validate_linux_observations(linux_observations, summary, native)
+        _validate_linux_observations(linux_observations, summary, summary_raw, native, getattr(args, "manual_tool", None))
         outcomes = [item["status"] for item in linux_observations["observations"]]
         linux_outcome = "incomplete" if "incomplete" in outcomes else "complete"
     references = []
@@ -2033,7 +2243,8 @@ def refresh(args):
         write_json(index_path, index)
         write_json(stage / "PACKAGE-MANIFEST.json", {
             "manifest_version": 1, "files": _manifest_entries(stage)})
-        _verify_handoff_directory(stage, args.assets_dir, sha, version)
+        _verify_handoff_directory(stage, args.assets_dir, sha, version,
+                                  manual_tool=getattr(args, "manual_tool", None))
         require(_refresh_technical_paths(stage) == old_technical,
                 "refresh_changed_technical_evidence")
         zip_temp = reports_zip.parent / ("." + reports_zip.name + ".tmp-" + str(os.getpid()))
@@ -2065,9 +2276,20 @@ def verify(args):
     _require_disjoint(args.handoff_dir, args.reports_zip, (args.assets_dir,))
     assets = validate_assets(args.assets_dir, args.candidate_sha, args.candidate_version)
     _verify_handoff_directory(args.handoff_dir, args.assets_dir,
-                              args.candidate_sha, args.candidate_version)
+                              args.candidate_sha, args.candidate_version,
+                              manual_tool=getattr(args, "manual_tool", None))
     zip_path = _regular_file(args.reports_zip, MAX_REPORTS_ZIP)
     _verify_reports_zip(args.handoff_dir, zip_path)
+    metadata_path = getattr(args, "trusted_run_metadata", None)
+    if metadata_path is not None:
+        metadata, _ = load_json(metadata_path, 16 << 20)
+        index, _ = load_json(pathlib.Path(args.handoff_dir) / "evidence-index.json", 4 << 20)
+        _verify_promotion_source_metadata(index, metadata, args.candidate_sha)
+    artifact_dir = getattr(args, "handoff_artifact_dir", None)
+    if artifact_dir is not None:
+        _verify_promotion_handoff_artifact(artifact_dir, args.handoff_dir,
+                                           args.reports_zip, args.candidate_sha,
+                                           args.candidate_version)
     return {"result_version": 1, "status": "passed",
             "candidate_sha": args.candidate_sha,
             "candidate_version": args.candidate_version,
@@ -2107,7 +2329,8 @@ def _write_manual_inputs(args):
             continue
         encoded = raw.encode("utf-8")
         require(len(encoded) <= MAX_MANUAL_JSON, "manual_report_too_large")
-        _safe_json_bytes(encoded, MAX_MANUAL_JSON)
+        # Keep the nested report byte-for-byte; the Go validator owns its JSON
+        # semantics and must see duplicate keys and exact numeric tokens.
         path = destination / f"{field}-report.json"
         require(not path.exists(), "manual_input_exists")
         path.write_bytes(encoded)
@@ -2162,6 +2385,7 @@ def main(argv=None):
         assemble_parser.add_argument("--" + name, required=True, type=pathlib.Path)
     assemble_parser.add_argument("--windows-report", type=pathlib.Path)
     assemble_parser.add_argument("--linux-report", type=pathlib.Path)
+    assemble_parser.add_argument("--manual-tool", required=True, type=pathlib.Path)
     assemble_parser.add_argument("--diagnostics", type=pathlib.Path)
     refresh_parser = sub.add_parser("refresh")
     for name in ("candidate-sha", "candidate-version"):
@@ -2171,6 +2395,7 @@ def main(argv=None):
         refresh_parser.add_argument("--" + name, required=True, type=pathlib.Path)
     refresh_parser.add_argument("--windows-report", type=pathlib.Path)
     refresh_parser.add_argument("--linux-report", type=pathlib.Path)
+    refresh_parser.add_argument("--manual-tool", required=True, type=pathlib.Path)
     refresh_parser.add_argument("--diagnostics", type=pathlib.Path)
     verify_parser = sub.add_parser("verify")
     verify_parser.add_argument("--candidate-sha", required=True)
@@ -2178,6 +2403,9 @@ def main(argv=None):
     verify_parser.add_argument("--assets-dir", required=True, type=pathlib.Path)
     verify_parser.add_argument("--handoff-dir", required=True, type=pathlib.Path)
     verify_parser.add_argument("--reports-zip", required=True, type=pathlib.Path)
+    verify_parser.add_argument("--trusted-run-metadata", type=pathlib.Path)
+    verify_parser.add_argument("--manual-tool", required=True, type=pathlib.Path)
+    verify_parser.add_argument("--handoff-artifact-dir", type=pathlib.Path)
     result_parser = sub.add_parser("mark-diagnostics")
     result_parser.add_argument("--output", required=True, type=pathlib.Path)
     result_parser.add_argument("--status", choices=("failed", "incomplete"), default="failed")

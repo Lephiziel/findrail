@@ -91,7 +91,8 @@ paths, account names and document details before sharing.
 Run the focused tests with:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.test_acceptance_kit scripts.test_manual_evidence scripts.test_readiness
+go test ./internal/devtools/manualevidence ./cmd/findrail-manual
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.test_acceptance_kit scripts.test_readiness scripts.test_beta_evidence
 ```
 
 Generated archives can be inspected with standard ZIP tools. Linux DOCX/PDF

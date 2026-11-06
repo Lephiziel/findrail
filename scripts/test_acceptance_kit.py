@@ -254,6 +254,9 @@ class AcceptanceKitTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'manifest does not match assets'):
             release_assets.verify(assets, '0.1.0-beta.1', revision)
         verified_synthetic_bundle(assets)
+        # Regenerated gzip archives may have a different header timestamp.
+        verified = release_assets.verify(assets, '0.1.0-beta.1', revision)
+        linux = next(item for item in verified['assets'] if item.get('target') == 'linux-amd64')
         sums_path = assets / 'SHA256SUMS.txt'
         sums = sums_path.read_text()
         sums_path.write_text(sums.replace(linux['sha256'], '0' * 64, 1))

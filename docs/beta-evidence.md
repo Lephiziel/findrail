@@ -80,6 +80,9 @@ option names. Paths are explicit; the helper does not discover or build an
 application binary and does not fetch trusted metadata. For example:
 
 ```sh
+go build -o /abs/tools/findrail-manual ./cmd/findrail-manual
+MANUAL_TOOL=/abs/tools/findrail-manual
+
 python3 scripts/beta_evidence.py assemble \
   --candidate-sha "$CANDIDATE_SHA" \
   --candidate-version 0.1.0-beta.1 \
@@ -93,14 +96,16 @@ python3 scripts/beta_evidence.py assemble \
   --run-metadata /abs/evidence/trusted-run-metadata.json \
   --kits-dir /abs/evidence/kits \
   --output-dir /abs/evidence/handoff \
-  --reports-zip /abs/evidence/beta-evidence-reports.zip
+  --reports-zip /abs/evidence/beta-evidence-reports.zip \
+  --manual-tool "$MANUAL_TOOL"
 
 python3 scripts/beta_evidence.py verify \
   --candidate-sha "$CANDIDATE_SHA" \
   --candidate-version 0.1.0-beta.1 \
   --assets-dir /abs/evidence/release-assets \
   --handoff-dir /abs/evidence/handoff \
-  --reports-zip /abs/evidence/beta-evidence-reports.zip
+  --reports-zip /abs/evidence/beta-evidence-reports.zip \
+  --manual-tool "$MANUAL_TOOL"
 
 python3 scripts/beta_evidence.py refresh \
   --candidate-sha "$CANDIDATE_SHA" --candidate-version 0.1.0-beta.1 \
@@ -110,7 +115,8 @@ python3 scripts/beta_evidence.py refresh \
   --run-metadata /abs/evidence/trusted-refresh-run-metadata.json \
   --windows-report /abs/evidence/windows-report.json \
   --output-dir /abs/evidence/refreshed-handoff \
-  --reports-zip /abs/evidence/refreshed-beta-evidence-reports.zip
+  --reports-zip /abs/evidence/refreshed-beta-evidence-reports.zip \
+  --manual-tool "$MANUAL_TOOL"
 ```
 
 `--run-metadata` is a bounded JSON file produced by the workflow after GitHub
@@ -203,8 +209,10 @@ assets and candidate. `linux-package/recovery-candidate.json` must be a passed
 Linux recovery record for that SHA/schema. Both scale files are the unchanged
 `search_resource_check.py` reports on the extracted candidate binary, fixture
 v2/seed 42, 10,000 and 100,000 documents, with source-cycle boundaries (and
-`--allow-large` for 100k). Verify all producer checks, not just the top-level
-status: corpus/counts, paging 20/50/100, refresh/cancellation/concurrent reads,
+`--allow-large` for 100k). Pass `--queries 5`: this counts five warm requests per
+family (`common` and `rare`), ten measured requests in total. The first warmup
+request for each family is excluded. Verify all producer checks, not just the
+top-level status: corpus/counts, paging 20/50/100, refresh/cancellation/concurrent reads,
 evidence boundaries, and exact binary hash.
 
 The performance-series artifact must retain the full TASK 21 series (10k and
@@ -264,9 +272,12 @@ report JSON inputs after real observations. Its input names are
 `--windows-report FILE` and `--linux-report FILE`. Each is capped at 8 KiB
 before parsing and rejects duplicate JSON keys, non-finite values, and unknown
 or unsafe content. The Windows report uses the existing `windows_first_run`
-kind and readiness/manual-evidence validator. The Linux report is the separate
-TASK 32 observation kind and does not become a new readiness gate or substitute
-for a current human category. No measurement is repeated when a report is
+kind and the prebuilt `findrail-manual validate` tool, which delegates only
+strict candidate context to `readiness.py`. The tool, Python executable, and
+readiness script are passed explicitly; no build occurs in the acceptance path.
+All raw report bytes go to the Go validator without Python decoding and
+re-encoding. The Linux report is the separate TASK 32 observation kind and does
+not become a new readiness gate or substitute for a current human category. No measurement is repeated when a report is
 accepted.
 
 Workflow-dispatch inputs are visible to repository maintainers in the run
