@@ -168,3 +168,25 @@ func TestBundleWrapperRejectsUnpairedSurrogates(t *testing.T) {
 		}
 	}
 }
+
+func TestJSONObjectsUniqueRejectsDuplicateKeysRecursively(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "unique", raw: `{"bundle":{"name":"one","items":[{"id":1},{"id":2}]}}`, want: true},
+		{name: "duplicate at root", raw: `{"name":1,"name":2}`},
+		{name: "duplicate nested", raw: `{"bundle":{"name":1,"name":2}}`},
+		{name: "escaped-equivalent key", raw: `{"name":1,"na\u006de":2}`},
+		{name: "duplicate array values are allowed", raw: `[1,1,{"name":1}]`, want: true},
+		{name: "trailing JSON value", raw: `{} {}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := jsonObjectsUnique([]byte(tt.raw)); got != tt.want {
+				t.Fatalf("jsonObjectsUnique(%s) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
