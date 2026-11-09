@@ -60,6 +60,17 @@ func TestStartupDialogPolicyExcludesMachineInvocationsAndAutomation(t *testing.T
 	}
 }
 
+func TestStartupDialogPolicyAllowsExplicitFalseAutomationValues(t *testing.T) {
+	for _, value := range []string{"0", "false", "FALSE"} {
+		for _, name := range []string{"CI", "GITHUB_ACTIONS", "FINDRAIL_NO_GUI_ERRORS"} {
+			lookup := func(key string) (string, bool) { return value, key == name }
+			if !StartupDialogAllowed(nil, true, false, lookup) {
+				t.Errorf("%s=%q suppressed an interactive desktop dialog", name, value)
+			}
+		}
+	}
+}
+
 func TestStartupFailureDoesNotNotifyOnCancellationOrSuccess(t *testing.T) {
 	var stderr bytes.Buffer
 	calls := 0
