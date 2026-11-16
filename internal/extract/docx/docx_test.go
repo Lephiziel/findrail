@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func FuzzExtract(f *testing.F) {
@@ -18,6 +19,44 @@ func FuzzExtract(f *testing.F) {
 			t.Skip()
 		}
 		_, _ = Extract(context.Background(), bytes.NewReader(input), int64(len(input)), 1<<20)
+	})
+}
+
+// FuzzDocumentXML exercises the XML parser inside a valid synthetic package.
+// Issue #51 validation requires Go 1.27.3 and a 30-second run:
+// go test ./internal/extract/docx -run='^$' -fuzz='^FuzzDocumentXML$' -fuzztime=30s
+func FuzzDocumentXML(f *testing.F) {
+	const start = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`
+	const end = `</w:body></w:document>`
+	for _, document := range []string{
+		start + `<w:p><w:r><w:t>seed</w:t></w:r></w:p>` + end,
+		start + `<w:p><w:r><w:t>Привет 世界 café</w:t><w:tab/><w:t>tab</w:t><w:br/><w:t>break</w:t></w:r></w:p>` + end,
+		start + `<w:tbl><w:tr><w:tc><w:p><w:r><w:t>outer</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>inner</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>` + end,
+		`<document xmlns="urn:synthetic:spoof"><body><p><t>spoof</t></p></body></document>`,
+		`<!DOCTYPE x>` + start + `<w:p><w:r><w:t>safe</w:t></w:r></w:p>` + end,
+		`<!DOCTYPE x [<!ENTITY a "synthetic">]>` + start + `<w:p><w:r><w:t>&a;</w:t></w:r></w:p>` + end,
+		start + `<w:p><w:r><w:t>partial</w:t></w:r></w:p><w:p>`,
+	} {
+		f.Add([]byte(document))
+	}
+	f.Fuzz(func(t *testing.T, input []byte) {
+		if len(input) > 64<<10 {
+			t.Skip()
+		}
+		data := packageBytes(string(input))
+		got, err := Extract(context.Background(), bytes.NewReader(data), int64(len(data)), DefaultMaxInput)
+		if err != nil {
+			if got != "" {
+				t.Fatalf("extraction returned %d bytes of partial text with error: %v", len(got), err)
+			}
+			return
+		}
+		if !utf8.ValidString(got) {
+			t.Fatal("successful extraction returned invalid UTF-8")
+		}
+		if len(got) > int(MaxText) {
+			t.Fatalf("successful extraction returned %d bytes, exceeding MaxText %d", len(got), MaxText)
+		}
 	})
 }
 
