@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   ui:
-    name: ${{ github.event_name == 'pull_request' && 'pull_request / ui' || 'ui' }}
+    name: ${{ !inputs.candidate_sha && github.event_name == 'pull_request' && 'pull_request / ui' || 'ui' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,7 +43,7 @@ jobs:
           FINDRAIL_MANUAL_TOOL: ${{ runner.temp }}/findrail-manual
         run: python3 -m unittest scripts/test_resource_series.py scripts/test_search_resource_check.py scripts/test_mixed_load_soak.py scripts/test_acceptance_kit.py scripts/test_beta_evidence.py scripts/test_alpha5_media.py
   check:
-    name: ${{ github.event_name == 'pull_request' && format('pull_request / check ({0})', matrix.os) || format('check ({0})', matrix.os) }}
+    name: ${{ !inputs.candidate_sha && github.event_name == 'pull_request' && format('pull_request / check ({0})', matrix.os) || format('check ({0})', matrix.os) }}
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +105,7 @@ jobs:
         if: runner.os == 'Windows'
         run: .\findrail-smoke.exe diagnostics-smoke .\findrail.exe
   race:
-    name: ${{ github.event_name == 'pull_request' && 'pull_request / race' || 'race' }}
+    name: ${{ !inputs.candidate_sha && github.event_name == 'pull_request' && 'pull_request / race' || 'race' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
