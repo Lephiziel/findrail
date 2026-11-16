@@ -22,6 +22,7 @@ jobs:
       - run: go build -o findrail ./cmd/findrail
       - run: python3 scripts/ignore_policy_smoke.py ./findrail
   race:
+    name: ignore-policy-race
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
